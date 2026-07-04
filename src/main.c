@@ -43,8 +43,13 @@ static int is_dirty(void) {
 }
 
 static void set_current_path(const char *path) {
+    /* path darf mit g_current_path identisch sein (z.B. bei einem
+     * erneuten "Sichern" auf denselben Pfad) - deshalb erst die Kopie
+     * anlegen und danach erst den alten Speicher freigeben, sonst wuerde
+     * dup_string aus bereits freigegebenem Speicher lesen. */
+    char *copy = path ? dup_string(path) : NULL;
     free(g_current_path);
-    g_current_path = path ? dup_string(path) : NULL;
+    g_current_path = copy;
     btn_set_window_title(g_current_path ? basename_of(g_current_path) : "Unbenannt");
 }
 
