@@ -220,6 +220,9 @@ static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, 
 
     switch (phase) {
         case BTN_MOUSE_DOWN: {
+            if (y < BTN_FOOTER_HEIGHT) {
+                return;
+            }
             size_t offset = btn_hit_test(&g_editor, g_bounds, x, y);
             if (clickCount >= 3) {
                 editor_select_line_at(&g_editor, offset);

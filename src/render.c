@@ -85,13 +85,13 @@ static char *expand_tabs_for_display(const char *line, size_t line_len, size_t *
     return out;
 }
 
-static void draw_gutter(CGContextRef ctx, CGRect bounds, int line_count, CTFontRef font) {
+static void draw_gutter(CGContextRef ctx, double content_height, int line_count, CTFontRef font) {
     CGContextSetRGBFillColor(ctx, 0.92, 0.92, 0.92, 1.0);
-    CGContextFillRect(ctx, CGRectMake(0, 0, GUTTER_WIDTH, bounds.size.height));
+    CGContextFillRect(ctx, CGRectMake(0, BTN_FOOTER_HEIGHT, GUTTER_WIDTH, content_height));
 
     CGContextSetRGBStrokeColor(ctx, 0.8, 0.8, 0.8, 1.0);
     CGContextSetLineWidth(ctx, 1.0);
-    CGPoint divider[2] = { { GUTTER_WIDTH, 0 }, { GUTTER_WIDTH, bounds.size.height } };
+    CGPoint divider[2] = { { GUTTER_WIDTH, BTN_FOOTER_HEIGHT }, { GUTTER_WIDTH, BTN_FOOTER_HEIGHT + content_height } };
     CGContextStrokeLineSegments(ctx, divider, 2);
 
     CGColorRef gray = CGColorCreateGenericRGB(0.55, 0.55, 0.55, 1.0);
@@ -105,7 +105,7 @@ static void draw_gutter(CGContextRef ctx, CGRect bounds, int line_count, CTFontR
         CTLineRef line = CTLineCreateWithAttributedString(attrStr);
 
         double textWidth = CTLineGetTypographicBounds(line, NULL, NULL, NULL);
-        double y = bounds.size.height - TOP_PADDING - (i + 1) * LINE_HEIGHT + 4.0;
+        double y = content_height - TOP_PADDING - (i + 1) * LINE_HEIGHT + 4.0;
         CGContextSetTextPosition(ctx, GUTTER_WIDTH - 8.0 - textWidth, y);
         CTLineDraw(line, ctx);
 
@@ -113,6 +113,53 @@ static void draw_gutter(CGContextRef ctx, CGRect bounds, int line_count, CTFontR
         CFRelease(attrStr);
         CFRelease(numStr);
     }
+
+    CFRelease(attrs);
+    CGColorRelease(gray);
+}
+
+static void draw_footer(CGContextRef ctx, CGRect bounds, Editor *ed) {
+    CGContextSetRGBFillColor(ctx, 0.94, 0.94, 0.94, 1.0);
+    CGContextFillRect(ctx, CGRectMake(0, 0, bounds.size.width, BTN_FOOTER_HEIGHT));
+
+    CGContextSetRGBStrokeColor(ctx, 0.8, 0.8, 0.8, 1.0);
+    CGContextSetLineWidth(ctx, 1.0);
+    CGPoint divider[2] = { { 0, BTN_FOOTER_HEIGHT }, { bounds.size.width, BTN_FOOTER_HEIGHT } };
+    CGContextStrokeLineSegments(ctx, divider, 2);
+
+    CGColorRef gray = CGColorCreateGenericRGB(0.35, 0.35, 0.35, 1.0);
+    CFDictionaryRef attrs = make_attrs(get_font(), gray);
+
+    size_t cur_line = editor_offset_to_line(ed, ed->cursor);
+    size_t col = editor_visual_column(ed, ed->cursor);
+
+    char left[64];
+    snprintf(left, sizeof(left), "Zeile %zu, Spalte %zu", cur_line + 1, col + 1);
+
+    char right[160];
+    snprintf(right, sizeof(right), "%zu Zeilen | %zu Woerter | %zu Zeichen | UTF-8",
+             editor_line_count(ed), editor_word_count(ed), editor_length(ed));
+
+    double text_y = (BTN_FOOTER_HEIGHT - FONT_SIZE) / 2.0 + 3.0;
+
+    CFStringRef leftStr = CFStringCreateWithCString(NULL, left, kCFStringEncodingUTF8);
+    CFAttributedStringRef leftAttrStr = CFAttributedStringCreate(NULL, leftStr, attrs);
+    CTLineRef leftLine = CTLineCreateWithAttributedString(leftAttrStr);
+    CGContextSetTextPosition(ctx, LEFT_PADDING, text_y);
+    CTLineDraw(leftLine, ctx);
+    CFRelease(leftLine);
+    CFRelease(leftAttrStr);
+    CFRelease(leftStr);
+
+    CFStringRef rightStr = CFStringCreateWithCString(NULL, right, kCFStringEncodingUTF8);
+    CFAttributedStringRef rightAttrStr = CFAttributedStringCreate(NULL, rightStr, attrs);
+    CTLineRef rightLine = CTLineCreateWithAttributedString(rightAttrStr);
+    double rightWidth = CTLineGetTypographicBounds(rightLine, NULL, NULL, NULL);
+    CGContextSetTextPosition(ctx, bounds.size.width - LEFT_PADDING - rightWidth, text_y);
+    CTLineDraw(rightLine, ctx);
+    CFRelease(rightLine);
+    CFRelease(rightAttrStr);
+    CFRelease(rightStr);
 
     CFRelease(attrs);
     CGColorRelease(gray);
@@ -128,6 +175,8 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed) {
     CGColorRef black = CGColorCreateGenericRGB(0.1, 0.1, 0.1, 1.0);
     CFDictionaryRef attrs = make_attrs(font, black);
 
+    double content_height = bounds.size.height - BTN_FOOTER_HEIGHT;
+
     size_t total_len;
     char *text = editor_copy_all(ed, &total_len);
 
@@ -141,7 +190,7 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed) {
         if (i == total_len || text[i] == '\n') {
             size_t line_len = i - line_start;
             size_t line_end = line_start + line_len;
-            double top_y = bounds.size.height - TOP_PADDING - (line_index + 1) * LINE_HEIGHT;
+            double top_y = content_height - TOP_PADDING - (line_index + 1) * LINE_HEIGHT;
 
             if (has_sel) {
                 size_t hi_from = sel_start > line_start ? sel_start : line_start;
@@ -192,12 +241,13 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed) {
         size_t cur_line = editor_offset_to_line(ed, ed->cursor);
         size_t col = editor_visual_column(ed, ed->cursor);
         double cx = GUTTER_WIDTH + LEFT_PADDING + (double)col * char_width;
-        double cy = bounds.size.height - TOP_PADDING - (cur_line + 1) * LINE_HEIGHT;
+        double cy = content_height - TOP_PADDING - (cur_line + 1) * LINE_HEIGHT;
         CGContextSetRGBFillColor(ctx, 0.1, 0.1, 0.1, 1.0);
         CGContextFillRect(ctx, CGRectMake(cx, cy, 1.4, LINE_HEIGHT - 2));
     }
 
-    draw_gutter(ctx, bounds, (int)editor_line_count(ed), font);
+    draw_gutter(ctx, content_height, (int)editor_line_count(ed), font);
+    draw_footer(ctx, bounds, ed);
 
     CFRelease(attrs);
     CGColorRelease(black);
@@ -205,8 +255,9 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed) {
 
 size_t btn_hit_test(Editor *ed, CGRect bounds, double x, double y) {
     double char_width = get_char_width();
+    double content_height = bounds.size.height - BTN_FOOTER_HEIGHT;
 
-    double rel_y = bounds.size.height - TOP_PADDING - y;
+    double rel_y = content_height - TOP_PADDING - y;
     long line = (long)(rel_y / LINE_HEIGHT);
     if (line < 0) {
         line = 0;

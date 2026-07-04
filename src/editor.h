@@ -62,6 +62,7 @@ size_t editor_length(Editor *ed);
 size_t editor_line_count(Editor *ed);
 void editor_line_bounds(Editor *ed, size_t line_index, size_t *out_start, size_t *out_len);
 size_t editor_offset_to_line(Editor *ed, size_t offset);
+size_t editor_word_count(Editor *ed);
 
 /* Tab-bewusste visuelle Spalte eines Offsets innerhalb seiner Zeile, bzw.
  * der Zeichen-Offset einer visuellen Spalte in einer gegebenen Zeile

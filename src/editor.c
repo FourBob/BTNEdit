@@ -230,6 +230,20 @@ size_t editor_offset_to_line(Editor *ed, size_t offset) {
     return line;
 }
 
+size_t editor_word_count(Editor *ed) {
+    size_t len = editor_length(ed);
+    size_t count = 0;
+    int in_word = 0;
+    for (size_t i = 0; i < len; i++) {
+        int w = is_word_char(gb_char_at(&ed->buffer, i));
+        if (w && !in_word) {
+            count++;
+        }
+        in_word = w;
+    }
+    return count;
+}
+
 static size_t advance_tab_stop(size_t col) {
     return ((col / BTN_TAB_WIDTH) + 1) * BTN_TAB_WIDTH;
 }
