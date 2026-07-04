@@ -217,6 +217,36 @@ size_t editor_offset_to_line(Editor *ed, size_t offset) {
     return line;
 }
 
+static size_t advance_tab_stop(size_t col) {
+    return ((col / BTN_TAB_WIDTH) + 1) * BTN_TAB_WIDTH;
+}
+
+size_t editor_visual_column(Editor *ed, size_t offset) {
+    size_t line_start, line_len;
+    editor_line_bounds(ed, editor_offset_to_line(ed, offset), &line_start, &line_len);
+    (void)line_len;
+
+    size_t col = 0;
+    for (size_t i = line_start; i < offset; i++) {
+        col = (gb_char_at(&ed->buffer, i) == '\t') ? advance_tab_stop(col) : col + 1;
+    }
+    return col;
+}
+
+size_t editor_offset_for_column(Editor *ed, size_t line_index, size_t target_col) {
+    size_t line_start, line_len;
+    editor_line_bounds(ed, line_index, &line_start, &line_len);
+    size_t line_end = line_start + line_len;
+
+    size_t col = 0;
+    size_t i = line_start;
+    while (i < line_end && col < target_col) {
+        col = (gb_char_at(&ed->buffer, i) == '\t') ? advance_tab_stop(col) : col + 1;
+        i++;
+    }
+    return i;
+}
+
 int editor_has_selection(Editor *ed) {
     return ed->cursor != ed->anchor;
 }
@@ -348,10 +378,8 @@ void editor_move(Editor *ed, BtnMove move, int extend) {
         case BTN_MOVE_UP:
         case BTN_MOVE_DOWN: {
             size_t line = editor_offset_to_line(ed, ed->cursor);
-            size_t start, l;
-            editor_line_bounds(ed, line, &start, &l);
-            size_t col = (ed->desired_col != UNSET_COL) ? ed->desired_col : (ed->cursor - start);
             size_t line_count = editor_line_count(ed);
+            size_t col = (ed->desired_col != UNSET_COL) ? ed->desired_col : editor_visual_column(ed, ed->cursor);
 
             if (move == BTN_MOVE_UP && line == 0) {
                 new_pos = 0;
@@ -359,10 +387,7 @@ void editor_move(Editor *ed, BtnMove move, int extend) {
                 new_pos = len;
             } else {
                 size_t target_line = (move == BTN_MOVE_UP) ? line - 1 : line + 1;
-                size_t t_start, t_len;
-                editor_line_bounds(ed, target_line, &t_start, &t_len);
-                size_t target_col = col < t_len ? col : t_len;
-                new_pos = t_start + target_col;
+                new_pos = editor_offset_for_column(ed, target_line, col);
             }
             ed->desired_col = col;
             keep_desired_col = 1;

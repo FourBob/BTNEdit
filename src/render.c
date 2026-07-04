@@ -52,6 +52,39 @@ static double get_char_width(void) {
     return g_char_width;
 }
 
+/* CoreText hat eine eigene, von uns unabhaengige Tab-Stop-Logik - wuerden
+ * wir ein rohes '\t'-Byte durchreichen, wuerde die Zeichenposition nicht
+ * mehr zu unserer eigenen (tab-bewussten) Spaltenrechnung passen, die auch
+ * fuer Cursor/Selektion/Hit-Testing gilt. Deshalb wird pro Zeile eine reine
+ * Anzeige-Kopie erzeugt, in der Tabs bereits zu Leerzeichen expandiert sind. */
+static char *expand_tabs_for_display(const char *line, size_t line_len, size_t *out_len) {
+    size_t cap = line_len + 1;
+    char *out = malloc(cap);
+    size_t n = 0;
+    size_t col = 0;
+
+    for (size_t i = 0; i < line_len; i++) {
+        char c = line[i];
+        size_t needed = (c == '\t') ? (((col / BTN_TAB_WIDTH) + 1) * BTN_TAB_WIDTH - col) : 1;
+        if (n + needed > cap) {
+            cap = (n + needed) * 2;
+            out = realloc(out, cap);
+        }
+        if (c == '\t') {
+            for (size_t s = 0; s < needed; s++) {
+                out[n++] = ' ';
+            }
+            col += needed;
+        } else {
+            out[n++] = c;
+            col++;
+        }
+    }
+
+    *out_len = n;
+    return out;
+}
+
 static void draw_gutter(CGContextRef ctx, CGRect bounds, int line_count, CTFontRef font) {
     CGContextSetRGBFillColor(ctx, 0.92, 0.92, 0.92, 1.0);
     CGContextFillRect(ctx, CGRectMake(0, 0, GUTTER_WIDTH, bounds.size.height));
@@ -118,8 +151,10 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed) {
                     if (hi_to < hi_from) {
                         hi_to = hi_from;
                     }
-                    double hx = GUTTER_WIDTH + LEFT_PADDING + (double)(hi_from - line_start) * char_width;
-                    double hw = (double)(hi_to - hi_from) * char_width;
+                    size_t col_from = editor_visual_column(ed, hi_from);
+                    size_t col_to = editor_visual_column(ed, hi_to);
+                    double hx = GUTTER_WIDTH + LEFT_PADDING + (double)col_from * char_width;
+                    double hw = (double)(col_to - col_from) * char_width;
                     if (extends_past_line) {
                         hw += char_width * 0.5;
                     }
@@ -132,8 +167,10 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed) {
             }
 
             if (line_len > 0) {
-                CFStringRef lineStr = CFStringCreateWithBytes(NULL, (const UInt8 *)(text + line_start),
-                                                               (CFIndex)line_len, kCFStringEncodingUTF8, false);
+                size_t disp_len;
+                char *disp = expand_tabs_for_display(text + line_start, line_len, &disp_len);
+                CFStringRef lineStr = CFStringCreateWithBytes(NULL, (const UInt8 *)disp,
+                                                               (CFIndex)disp_len, kCFStringEncodingUTF8, false);
                 CFAttributedStringRef attrStr = CFAttributedStringCreate(NULL, lineStr, attrs);
                 CTLineRef ctLine = CTLineCreateWithAttributedString(attrStr);
                 CGContextSetTextPosition(ctx, GUTTER_WIDTH + LEFT_PADDING, top_y + 4.0);
@@ -141,6 +178,7 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed) {
                 CFRelease(ctLine);
                 CFRelease(attrStr);
                 CFRelease(lineStr);
+                free(disp);
             }
 
             line_index++;
@@ -152,9 +190,7 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed) {
 
     if (!has_sel) {
         size_t cur_line = editor_offset_to_line(ed, ed->cursor);
-        size_t cstart, clen;
-        editor_line_bounds(ed, cur_line, &cstart, &clen);
-        size_t col = ed->cursor - cstart;
+        size_t col = editor_visual_column(ed, ed->cursor);
         double cx = GUTTER_WIDTH + LEFT_PADDING + (double)col * char_width;
         double cy = bounds.size.height - TOP_PADDING - (cur_line + 1) * LINE_HEIGHT;
         CGContextSetRGBFillColor(ctx, 0.1, 0.1, 0.1, 1.0);
@@ -180,17 +216,11 @@ size_t btn_hit_test(Editor *ed, CGRect bounds, double x, double y) {
         line = (long)line_count - 1;
     }
 
-    size_t start, len;
-    editor_line_bounds(ed, (size_t)line, &start, &len);
-
     double rel_x = x - (GUTTER_WIDTH + LEFT_PADDING);
     long col = (long)(rel_x / char_width + 0.5);
     if (col < 0) {
         col = 0;
     }
-    if ((size_t)col > len) {
-        col = (long)len;
-    }
 
-    return start + (size_t)col;
+    return editor_offset_for_column(ed, (size_t)line, (size_t)col);
 }
