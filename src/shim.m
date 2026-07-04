@@ -16,6 +16,7 @@ static btn_key_callback g_key_cb = NULL;
 static btn_resize_callback g_resize_cb = NULL;
 static btn_menu_callback g_menu_cb = NULL;
 static btn_mouse_callback g_mouse_cb = NULL;
+static btn_scroll_callback g_scroll_cb = NULL;
 
 static NSWindow *g_window = nil;
 
@@ -61,6 +62,12 @@ static NSWindow *g_window = nil;
     if (g_mouse_cb) {
         NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
         g_mouse_cb(BTN_MOUSE_UP, p.x, p.y, (int)[event clickCount], (unsigned long)[event modifierFlags]);
+    }
+}
+
+- (void)scrollWheel:(NSEvent *)event {
+    if (g_scroll_cb) {
+        g_scroll_cb([event scrollingDeltaY]);
     }
 }
 
@@ -137,6 +144,10 @@ void btn_app_set_menu_callback(btn_menu_callback cb) {
 
 void btn_app_set_mouse_callback(btn_mouse_callback cb) {
     g_mouse_cb = cb;
+}
+
+void btn_app_set_scroll_callback(btn_scroll_callback cb) {
+    g_scroll_cb = cb;
 }
 
 void btn_app_build_menu(void) {

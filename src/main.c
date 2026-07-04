@@ -23,6 +23,9 @@ static Editor g_editor;
 static CGRect g_bounds = { { 0, 0 }, { 900, 600 } };
 static int g_dragging = 0;
 
+static long g_scroll_line = 0;
+static double g_scroll_accum = 0.0;
+
 static char *g_current_path = NULL; /* NULL = unbenanntes, neues Dokument */
 static size_t g_saved_undo_pos = 0;
 
@@ -55,6 +58,40 @@ static void set_current_path(const char *path) {
 
 static void sync_window_state(void) {
     btn_app_set_document_edited(is_dirty());
+}
+
+static long visible_line_capacity(void) {
+    double content_height = g_bounds.size.height - BTN_FOOTER_HEIGHT;
+    long n = (long)(content_height / BTN_LINE_HEIGHT);
+    return n > 0 ? n : 1;
+}
+
+static void clamp_scroll(void) {
+    if (g_scroll_line < 0) {
+        g_scroll_line = 0;
+    }
+    long max_scroll = (long)editor_line_count(&g_editor) - visible_line_capacity();
+    if (max_scroll < 0) {
+        max_scroll = 0;
+    }
+    if (g_scroll_line > max_scroll) {
+        g_scroll_line = max_scroll;
+    }
+}
+
+/* Scrollt automatisch nach, damit der Cursor immer sichtbar bleibt -
+ * bei Tastatur-Navigation gibt es sonst keinen anderen Weg, ihn wieder
+ * ins Bild zu bekommen. */
+static void sync_scroll_to_cursor(void) {
+    long cur_line = (long)editor_offset_to_line(&g_editor, g_editor.cursor);
+    long capacity = visible_line_capacity();
+
+    if (cur_line < g_scroll_line) {
+        g_scroll_line = cur_line;
+    } else if (cur_line >= g_scroll_line + capacity) {
+        g_scroll_line = cur_line - capacity + 1;
+    }
+    clamp_scroll();
 }
 
 static char *read_file_contents(const char *path, size_t *out_len) {
@@ -139,7 +176,7 @@ static int confirm_discard_if_dirty(void) {
 
 static void on_draw(CGContextRef ctx, CGRect bounds) {
     g_bounds = bounds;
-    btn_render_frame(ctx, bounds, &g_editor);
+    btn_render_frame(ctx, bounds, &g_editor, g_scroll_line);
 }
 
 static void on_key(const char *characters, unsigned short keycode, unsigned long modifierFlags) {
@@ -150,36 +187,44 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
     switch (keycode) {
         case KEYCODE_LEFT:
             editor_move(&g_editor, command ? BTN_MOVE_LINE_START : (option ? BTN_MOVE_WORD_LEFT : BTN_MOVE_LEFT), shift);
+            sync_scroll_to_cursor();
             btn_app_request_redraw();
             return;
         case KEYCODE_RIGHT:
             editor_move(&g_editor, command ? BTN_MOVE_LINE_END : (option ? BTN_MOVE_WORD_RIGHT : BTN_MOVE_RIGHT), shift);
+            sync_scroll_to_cursor();
             btn_app_request_redraw();
             return;
         case KEYCODE_UP:
             editor_move(&g_editor, command ? BTN_MOVE_DOC_START : BTN_MOVE_UP, shift);
+            sync_scroll_to_cursor();
             btn_app_request_redraw();
             return;
         case KEYCODE_DOWN:
             editor_move(&g_editor, command ? BTN_MOVE_DOC_END : BTN_MOVE_DOWN, shift);
+            sync_scroll_to_cursor();
             btn_app_request_redraw();
             return;
         case KEYCODE_HOME:
             editor_move(&g_editor, BTN_MOVE_LINE_START, shift);
+            sync_scroll_to_cursor();
             btn_app_request_redraw();
             return;
         case KEYCODE_END:
             editor_move(&g_editor, BTN_MOVE_LINE_END, shift);
+            sync_scroll_to_cursor();
             btn_app_request_redraw();
             return;
         case KEYCODE_FORWARD_DELETE:
             editor_delete_forward(&g_editor);
             sync_window_state();
+            sync_scroll_to_cursor();
             btn_app_request_redraw();
             return;
         case KEYCODE_TAB:
             editor_insert_text(&g_editor, "\t", 1);
             sync_window_state();
+            sync_scroll_to_cursor();
             btn_app_request_redraw();
             return;
         default:
@@ -207,11 +252,13 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
     }
 
     sync_window_state();
+    sync_scroll_to_cursor();
     btn_app_request_redraw();
 }
 
 static void on_resize(CGSize size) {
     g_bounds = CGRectMake(0, 0, size.width, size.height);
+    clamp_scroll();
     btn_app_request_redraw();
 }
 
@@ -223,7 +270,7 @@ static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, 
             if (y < BTN_FOOTER_HEIGHT) {
                 return;
             }
-            size_t offset = btn_hit_test(&g_editor, g_bounds, x, y);
+            size_t offset = btn_hit_test(&g_editor, g_bounds, x, y, g_scroll_line);
             if (clickCount >= 3) {
                 editor_select_line_at(&g_editor, offset);
                 g_dragging = 0;
@@ -238,7 +285,7 @@ static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, 
         }
         case BTN_MOUSE_DRAGGED:
             if (g_dragging) {
-                size_t offset = btn_hit_test(&g_editor, g_bounds, x, y);
+                size_t offset = btn_hit_test(&g_editor, g_bounds, x, y, g_scroll_line);
                 editor_set_cursor(&g_editor, offset, 1);
             }
             break;
@@ -247,6 +294,19 @@ static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, 
             break;
     }
 
+    sync_scroll_to_cursor();
+    btn_app_request_redraw();
+}
+
+static void on_scroll(double delta_y) {
+    g_scroll_accum += delta_y;
+    long lines = (long)(g_scroll_accum / BTN_LINE_HEIGHT);
+    if (lines == 0) {
+        return;
+    }
+    g_scroll_accum -= (double)lines * BTN_LINE_HEIGHT;
+    g_scroll_line -= lines;
+    clamp_scroll();
     btn_app_request_redraw();
 }
 
@@ -323,6 +383,7 @@ static void on_menu(int tag) {
             break;
     }
     sync_window_state();
+    sync_scroll_to_cursor();
     btn_app_request_redraw();
 }
 
@@ -334,6 +395,7 @@ int main(void) {
     btn_app_set_key_callback(on_key);
     btn_app_set_resize_callback(on_resize);
     btn_app_set_mouse_callback(on_mouse);
+    btn_app_set_scroll_callback(on_scroll);
     btn_app_set_menu_callback(on_menu);
     btn_app_build_menu();
     btn_app_run();

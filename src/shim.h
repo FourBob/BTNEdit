@@ -41,6 +41,9 @@ typedef void (*btn_key_callback)(const char *characters, unsigned short keycode,
 typedef void (*btn_resize_callback)(CGSize newSize);
 typedef void (*btn_menu_callback)(int tag);
 typedef void (*btn_mouse_callback)(btn_mouse_phase phase, double x, double y, int clickCount, unsigned long modifierFlags);
+/* delta_y in Punkten, positiv = nach oben scrollen (Trackpad-"natural
+ * scrolling" ist bereits vom System eingerechnet). */
+typedef void (*btn_scroll_callback)(double delta_y);
 
 void btn_app_init(void);
 void btn_app_set_draw_callback(btn_draw_callback cb);
@@ -48,6 +51,7 @@ void btn_app_set_key_callback(btn_key_callback cb);
 void btn_app_set_resize_callback(btn_resize_callback cb);
 void btn_app_set_menu_callback(btn_menu_callback cb);
 void btn_app_set_mouse_callback(btn_mouse_callback cb);
+void btn_app_set_scroll_callback(btn_scroll_callback cb);
 void btn_app_build_menu(void);
 void btn_app_request_redraw(void);
 void btn_app_run(void);

@@ -1,7 +1,7 @@
 /*
  * Reines Rendering ueber Core Graphics/Core Text - kein AppKit-Widget
- * beteiligt. Fester Zeilenabstand, Monospace-Schrift (Menlo); kein
- * Word-Wrap/Scrolling (folgt in einem spaeteren Meilenstein).
+ * beteiligt. Fester Zeilenabstand, Monospace-Schrift (Menlo); vertikales
+ * Scrollen via scroll_line (zeilenweise, kein Word-Wrap - folgt spaeter).
  *
  * Da die Schrift monospaced ist, kann "Spalte" ueberall als Zeichenanzahl
  * statt als Pixelposition behandelt werden - das vereinfacht sowohl das
@@ -15,7 +15,7 @@
 #include <stdlib.h>
 
 #define GUTTER_WIDTH 44.0
-#define LINE_HEIGHT 18.0
+#define LINE_HEIGHT BTN_LINE_HEIGHT
 #define FONT_SIZE 13.0
 #define LEFT_PADDING 8.0
 #define TOP_PADDING 8.0
@@ -85,7 +85,7 @@ static char *expand_tabs_for_display(const char *line, size_t line_len, size_t *
     return out;
 }
 
-static void draw_gutter(CGContextRef ctx, CGRect bounds, int line_count, CTFontRef font) {
+static void draw_gutter(CGContextRef ctx, CGRect bounds, int line_count, long scroll_line, CTFontRef font) {
     CGContextSetRGBFillColor(ctx, 0.92, 0.92, 0.92, 1.0);
     CGContextFillRect(ctx, CGRectMake(0, BTN_FOOTER_HEIGHT, GUTTER_WIDTH, bounds.size.height - BTN_FOOTER_HEIGHT));
 
@@ -97,7 +97,12 @@ static void draw_gutter(CGContextRef ctx, CGRect bounds, int line_count, CTFontR
     CGColorRef gray = CGColorCreateGenericRGB(0.55, 0.55, 0.55, 1.0);
     CFDictionaryRef attrs = make_attrs(font, gray);
 
-    for (int i = 0; i < line_count; i++) {
+    for (int i = (int)scroll_line; i < line_count; i++) {
+        double y = bounds.size.height - TOP_PADDING - (i - scroll_line + 1) * LINE_HEIGHT + 4.0;
+        if (y < BTN_FOOTER_HEIGHT) {
+            break;
+        }
+
         char num[16];
         snprintf(num, sizeof(num), "%d", i + 1);
         CFStringRef numStr = CFStringCreateWithCString(NULL, num, kCFStringEncodingUTF8);
@@ -105,7 +110,6 @@ static void draw_gutter(CGContextRef ctx, CGRect bounds, int line_count, CTFontR
         CTLineRef line = CTLineCreateWithAttributedString(attrStr);
 
         double textWidth = CTLineGetTypographicBounds(line, NULL, NULL, NULL);
-        double y = bounds.size.height - TOP_PADDING - (i + 1) * LINE_HEIGHT + 4.0;
         CGContextSetTextPosition(ctx, GUTTER_WIDTH - 8.0 - textWidth, y);
         CTLineDraw(line, ctx);
 
@@ -165,7 +169,7 @@ static void draw_footer(CGContextRef ctx, CGRect bounds, Editor *ed) {
     CGColorRelease(gray);
 }
 
-void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed) {
+void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_line) {
     CGContextSetRGBFillColor(ctx, 1.0, 1.0, 1.0, 1.0);
     CGContextFillRect(ctx, bounds);
 
@@ -188,7 +192,17 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed) {
         if (i == total_len || text[i] == '\n') {
             size_t line_len = i - line_start;
             size_t line_end = line_start + line_len;
-            double top_y = bounds.size.height - TOP_PADDING - (line_index + 1) * LINE_HEIGHT;
+
+            if (line_index < (size_t)scroll_line) {
+                line_index++;
+                line_start = i + 1;
+                continue;
+            }
+
+            double top_y = bounds.size.height - TOP_PADDING - (line_index - (size_t)scroll_line + 1) * LINE_HEIGHT;
+            if (top_y + LINE_HEIGHT < BTN_FOOTER_HEIGHT) {
+                break;
+            }
 
             if (has_sel) {
                 size_t hi_from = sel_start > line_start ? sel_start : line_start;
@@ -236,26 +250,28 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed) {
     free(text);
 
     if (!has_sel) {
-        size_t cur_line = editor_offset_to_line(ed, ed->cursor);
-        size_t col = editor_visual_column(ed, ed->cursor);
-        double cx = GUTTER_WIDTH + LEFT_PADDING + (double)col * char_width;
-        double cy = bounds.size.height - TOP_PADDING - (cur_line + 1) * LINE_HEIGHT;
-        CGContextSetRGBFillColor(ctx, 0.1, 0.1, 0.1, 1.0);
-        CGContextFillRect(ctx, CGRectMake(cx, cy, 1.4, LINE_HEIGHT - 2));
+        long cur_line = (long)editor_offset_to_line(ed, ed->cursor);
+        if (cur_line >= scroll_line) {
+            size_t col = editor_visual_column(ed, ed->cursor);
+            double cx = GUTTER_WIDTH + LEFT_PADDING + (double)col * char_width;
+            double cy = bounds.size.height - TOP_PADDING - (cur_line - scroll_line + 1) * LINE_HEIGHT;
+            CGContextSetRGBFillColor(ctx, 0.1, 0.1, 0.1, 1.0);
+            CGContextFillRect(ctx, CGRectMake(cx, cy, 1.4, LINE_HEIGHT - 2));
+        }
     }
 
-    draw_gutter(ctx, bounds, (int)editor_line_count(ed), font);
+    draw_gutter(ctx, bounds, (int)editor_line_count(ed), scroll_line, font);
     draw_footer(ctx, bounds, ed);
 
     CFRelease(attrs);
     CGColorRelease(black);
 }
 
-size_t btn_hit_test(Editor *ed, CGRect bounds, double x, double y) {
+size_t btn_hit_test(Editor *ed, CGRect bounds, double x, double y, long scroll_line) {
     double char_width = get_char_width();
 
     double rel_y = bounds.size.height - TOP_PADDING - y;
-    long line = (long)(rel_y / LINE_HEIGHT);
+    long line = scroll_line + (long)(rel_y / LINE_HEIGHT);
     if (line < 0) {
         line = 0;
     }
