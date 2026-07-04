@@ -2,14 +2,19 @@
 #define BTN_RENDER_H
 
 #include <CoreGraphics/CoreGraphics.h>
+#include "editor.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Zeichnet einen Frame: Hintergrund, Zeilennummern-Gutter und den Text.
- * text ist ein NUL-terminierter UTF-8-String mit '\n' als Zeilentrenner. */
-void btn_render_frame(CGContextRef ctx, CGRect bounds, const char *text);
+/* Zeichnet einen Frame: Hintergrund, Selektion, Text, Cursor und
+ * Zeilennummern-Gutter. */
+void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed);
+
+/* Bildet einen View-Punkt (Ursprung unten links, wie bei einer
+ * nicht geflippten NSView) auf einen logischen Buffer-Offset ab. */
+size_t btn_hit_test(Editor *ed, CGRect bounds, double x, double y);
 
 #ifdef __cplusplus
 }

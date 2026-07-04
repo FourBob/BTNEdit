@@ -1,18 +1,21 @@
 /*
- * Duenner ObjC-Shim: nur Fenster, Menue und Event-Weiterleitung.
- * Kein NSTextView, kein NSButton, kein NSTabView - der eigentliche
- * Editor-Inhalt wird komplett in C ueber Core Graphics/Core Text gezeichnet
- * (siehe render.c). Kompiliert ohne ARC (-fno-objc-arc), manuelles
- * Retain/Release nur dort noetig, wo Objekte nicht ohnehin von einem
- * AppKit-Container (NSMenu, NSWindow) gehalten werden.
+ * Duenner ObjC-Shim: nur Fenster, Menue, Event-Weiterleitung und die
+ * Systemzwischenablage (NSPasteboard ist wie NSWindow/NSMenu ein reiner
+ * Systemdienst, kein Content-Widget). Kein NSTextView, kein NSButton, kein
+ * NSTabView - der eigentliche Editor-Inhalt wird komplett in C ueber Core
+ * Graphics/Core Text gezeichnet (siehe render.c). Kompiliert ohne ARC
+ * (-fno-objc-arc).
  */
 #import <Cocoa/Cocoa.h>
 #include "shim.h"
+#include <stdlib.h>
+#include <string.h>
 
 static btn_draw_callback g_draw_cb = NULL;
 static btn_key_callback g_key_cb = NULL;
 static btn_resize_callback g_resize_cb = NULL;
 static btn_menu_callback g_menu_cb = NULL;
+static btn_mouse_callback g_mouse_cb = NULL;
 
 static NSWindow *g_window = nil;
 
@@ -37,6 +40,27 @@ static NSWindow *g_window = nil;
     if (g_key_cb) {
         const char *chars = [[event characters] UTF8String];
         g_key_cb(chars, [event keyCode], (unsigned long)[event modifierFlags]);
+    }
+}
+
+- (void)mouseDown:(NSEvent *)event {
+    if (g_mouse_cb) {
+        NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
+        g_mouse_cb(BTN_MOUSE_DOWN, p.x, p.y, (int)[event clickCount], (unsigned long)[event modifierFlags]);
+    }
+}
+
+- (void)mouseDragged:(NSEvent *)event {
+    if (g_mouse_cb) {
+        NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
+        g_mouse_cb(BTN_MOUSE_DRAGGED, p.x, p.y, (int)[event clickCount], (unsigned long)[event modifierFlags]);
+    }
+}
+
+- (void)mouseUp:(NSEvent *)event {
+    if (g_mouse_cb) {
+        NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
+        g_mouse_cb(BTN_MOUSE_UP, p.x, p.y, (int)[event clickCount], (unsigned long)[event modifierFlags]);
     }
 }
 
@@ -111,6 +135,10 @@ void btn_app_set_menu_callback(btn_menu_callback cb) {
     g_menu_cb = cb;
 }
 
+void btn_app_set_mouse_callback(btn_mouse_callback cb) {
+    g_mouse_cb = cb;
+}
+
 void btn_app_build_menu(void) {
     @autoreleasepool {
         NSMenu *menubar = [NSMenu new];
@@ -144,6 +172,14 @@ void btn_app_build_menu(void) {
         NSMenuItem *editMenuItem = [NSMenuItem new];
         [menubar addItem:editMenuItem];
         NSMenu *editMenu = [[NSMenu alloc] initWithTitle:@"Bearbeiten"];
+        add_item(editMenu, @"Widerrufen", @"z", BTN_MENU_UNDO);
+        add_item(editMenu, @"Wiederholen", @"Z", BTN_MENU_REDO);
+        [editMenu addItem:[NSMenuItem separatorItem]];
+        add_item(editMenu, @"Ausschneiden", @"x", BTN_MENU_CUT);
+        add_item(editMenu, @"Kopieren", @"c", BTN_MENU_COPY);
+        add_item(editMenu, @"Einfuegen", @"v", BTN_MENU_PASTE);
+        add_item(editMenu, @"Alles auswaehlen", @"a", BTN_MENU_SELECT_ALL);
+        [editMenu addItem:[NSMenuItem separatorItem]];
         add_item(editMenu, @"Suchen...", @"f", BTN_MENU_FIND);
         [editMenuItem setSubmenu:editMenu];
     }
@@ -175,5 +211,26 @@ void btn_app_run(void) {
         [g_window makeKeyAndOrderFront:nil];
         [NSApp activateIgnoringOtherApps:YES];
         [NSApp run];
+    }
+}
+
+void btn_pasteboard_set_string(const char *utf8) {
+    @autoreleasepool {
+        NSString *s = [NSString stringWithUTF8String:utf8 ? utf8 : ""];
+        NSPasteboard *pb = [NSPasteboard generalPasteboard];
+        [pb clearContents];
+        [pb setString:s forType:NSPasteboardTypeString];
+    }
+}
+
+char *btn_pasteboard_copy_string(void) {
+    @autoreleasepool {
+        NSPasteboard *pb = [NSPasteboard generalPasteboard];
+        NSString *s = [pb stringForType:NSPasteboardTypeString];
+        const char *utf8 = s ? [s UTF8String] : "";
+        size_t len = strlen(utf8);
+        char *out = malloc(len + 1);
+        memcpy(out, utf8, len + 1);
+        return out;
     }
 }

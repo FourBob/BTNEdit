@@ -1,89 +1,166 @@
 /*
- * Reines C: Applikationslogik, Platzhalter-Buffer und Verdrahtung der
- * Callbacks aus dem ObjC-Shim (shim.m). Der Buffer hier ist bewusst simpel
- * (nur Anhaengen/Backspace am Ende) - er dient nur dazu, das Fenster in
- * Meilenstein 1 testbar zu machen. Die eigentliche Text-Engine (Cursor an
- * beliebiger Position, Selektion, Undo/Redo) folgt in Meilenstein 2.
+ * Reines C: Applikationslogik und Verdrahtung der Callbacks aus dem
+ * ObjC-Shim (shim.m) mit der Editor-Engine (editor.c/gapbuffer.c).
  */
 #include "shim.h"
 #include "render.h"
+#include "editor.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define INITIAL_CAP 4096
+#define KEYCODE_LEFT           123
+#define KEYCODE_RIGHT          124
+#define KEYCODE_DOWN           125
+#define KEYCODE_UP             126
+#define KEYCODE_HOME           115
+#define KEYCODE_END            119
+#define KEYCODE_FORWARD_DELETE 117
+#define KEYCODE_TAB            48
 
-static char *g_buf = NULL;
-static size_t g_len = 0;
-static size_t g_cap = 0;
-
-static void ensure_cap(size_t extra) {
-    if (g_len + extra + 1 > g_cap) {
-        size_t new_cap = g_cap == 0 ? INITIAL_CAP : g_cap * 2;
-        while (new_cap < g_len + extra + 1) {
-            new_cap *= 2;
-        }
-        g_buf = realloc(g_buf, new_cap);
-        g_cap = new_cap;
-    }
-}
-
-static void buffer_append(const char *s) {
-    size_t n = strlen(s);
-    ensure_cap(n);
-    memcpy(g_buf + g_len, s, n);
-    g_len += n;
-    g_buf[g_len] = '\0';
-}
-
-static void buffer_backspace(void) {
-    if (g_len > 0) {
-        g_len--;
-        g_buf[g_len] = '\0';
-    }
-}
-
-static void buffer_clear(void) {
-    g_len = 0;
-    if (g_buf) {
-        g_buf[0] = '\0';
-    }
-}
+static Editor g_editor;
+static CGRect g_bounds = { { 0, 0 }, { 900, 600 } };
+static int g_dragging = 0;
 
 static void on_draw(CGContextRef ctx, CGRect bounds) {
-    btn_render_frame(ctx, bounds, g_buf ? g_buf : "");
+    g_bounds = bounds;
+    btn_render_frame(ctx, bounds, &g_editor);
 }
 
 static void on_key(const char *characters, unsigned short keycode, unsigned long modifierFlags) {
-    (void)keycode;
-    (void)modifierFlags;
+    int shift = (modifierFlags & BTN_MOD_SHIFT) != 0;
+    int option = (modifierFlags & BTN_MOD_OPTION) != 0;
+    int command = (modifierFlags & BTN_MOD_COMMAND) != 0;
+
+    switch (keycode) {
+        case KEYCODE_LEFT:
+            editor_move(&g_editor, command ? BTN_MOVE_LINE_START : (option ? BTN_MOVE_WORD_LEFT : BTN_MOVE_LEFT), shift);
+            btn_app_request_redraw();
+            return;
+        case KEYCODE_RIGHT:
+            editor_move(&g_editor, command ? BTN_MOVE_LINE_END : (option ? BTN_MOVE_WORD_RIGHT : BTN_MOVE_RIGHT), shift);
+            btn_app_request_redraw();
+            return;
+        case KEYCODE_UP:
+            editor_move(&g_editor, command ? BTN_MOVE_DOC_START : BTN_MOVE_UP, shift);
+            btn_app_request_redraw();
+            return;
+        case KEYCODE_DOWN:
+            editor_move(&g_editor, command ? BTN_MOVE_DOC_END : BTN_MOVE_DOWN, shift);
+            btn_app_request_redraw();
+            return;
+        case KEYCODE_HOME:
+            editor_move(&g_editor, BTN_MOVE_LINE_START, shift);
+            btn_app_request_redraw();
+            return;
+        case KEYCODE_END:
+            editor_move(&g_editor, BTN_MOVE_LINE_END, shift);
+            btn_app_request_redraw();
+            return;
+        case KEYCODE_FORWARD_DELETE:
+            editor_delete_forward(&g_editor);
+            btn_app_request_redraw();
+            return;
+        case KEYCODE_TAB:
+            editor_insert_text(&g_editor, "\t", 1);
+            btn_app_request_redraw();
+            return;
+        default:
+            break;
+    }
+
+    if (command) {
+        /* Sonstige Cmd-Kombinationen laufen ueber Menu-Items (siehe on_menu). */
+        return;
+    }
+
     if (!characters) {
         return;
     }
 
     unsigned char c = (unsigned char)characters[0];
     if (c == '\r') {
-        buffer_append("\n");
+        editor_insert_text(&g_editor, "\n", 1);
     } else if (c == 0x7F) {
-        buffer_backspace();
+        editor_delete_backward(&g_editor);
     } else if (c >= 0x20) {
-        buffer_append(characters);
+        editor_insert_text(&g_editor, characters, strlen(characters));
+    } else {
+        return;
     }
 
     btn_app_request_redraw();
 }
 
 static void on_resize(CGSize size) {
-    (void)size;
+    g_bounds = CGRectMake(0, 0, size.width, size.height);
+    btn_app_request_redraw();
+}
+
+static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, unsigned long modifierFlags) {
+    int shift = (modifierFlags & BTN_MOD_SHIFT) != 0;
+
+    switch (phase) {
+        case BTN_MOUSE_DOWN: {
+            size_t offset = btn_hit_test(&g_editor, g_bounds, x, y);
+            if (clickCount >= 3) {
+                editor_select_line_at(&g_editor, offset);
+                g_dragging = 0;
+            } else if (clickCount == 2) {
+                editor_select_word_at(&g_editor, offset);
+                g_dragging = 0;
+            } else {
+                editor_set_cursor(&g_editor, offset, shift);
+                g_dragging = 1;
+            }
+            break;
+        }
+        case BTN_MOUSE_DRAGGED:
+            if (g_dragging) {
+                size_t offset = btn_hit_test(&g_editor, g_bounds, x, y);
+                editor_set_cursor(&g_editor, offset, 1);
+            }
+            break;
+        case BTN_MOUSE_UP:
+            g_dragging = 0;
+            break;
+    }
+
     btn_app_request_redraw();
 }
 
 static void on_menu(int tag) {
+    char *clip;
     switch (tag) {
         case BTN_MENU_NEW:
-            buffer_clear();
-            btn_app_request_redraw();
+            editor_free(&g_editor);
+            editor_init(&g_editor);
+            break;
+        case BTN_MENU_UNDO:
+            editor_undo(&g_editor);
+            break;
+        case BTN_MENU_REDO:
+            editor_redo(&g_editor);
+            break;
+        case BTN_MENU_CUT:
+            clip = editor_get_selection_text(&g_editor);
+            btn_pasteboard_set_string(clip);
+            free(clip);
+            editor_delete_selection(&g_editor);
+            break;
+        case BTN_MENU_COPY:
+            clip = editor_get_selection_text(&g_editor);
+            btn_pasteboard_set_string(clip);
+            free(clip);
+            break;
+        case BTN_MENU_PASTE:
+            clip = btn_pasteboard_copy_string();
+            editor_insert_text(&g_editor, clip, strlen(clip));
+            free(clip);
+            break;
+        case BTN_MENU_SELECT_ALL:
+            editor_select_all(&g_editor);
             break;
         case BTN_MENU_OPEN:
         case BTN_MENU_SAVE:
@@ -96,20 +173,21 @@ static void on_menu(int tag) {
         default:
             break;
     }
+    btn_app_request_redraw();
 }
 
 int main(void) {
-    ensure_cap(0);
-    g_buf[0] = '\0';
+    editor_init(&g_editor);
 
     btn_app_init();
     btn_app_set_draw_callback(on_draw);
     btn_app_set_key_callback(on_key);
     btn_app_set_resize_callback(on_resize);
+    btn_app_set_mouse_callback(on_mouse);
     btn_app_set_menu_callback(on_menu);
     btn_app_build_menu();
     btn_app_run();
 
-    free(g_buf);
+    editor_free(&g_editor);
     return 0;
 }
