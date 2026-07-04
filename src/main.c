@@ -23,7 +23,7 @@ static Editor g_editor;
 static CGRect g_bounds = { { 0, 0 }, { 900, 600 } };
 static int g_dragging = 0;
 
-static long g_scroll_line = 0;
+static long g_scroll_row = 0;
 static double g_scroll_accum = 0.0;
 
 static char *g_current_path = NULL; /* NULL = unbenanntes, neues Dokument */
@@ -66,16 +66,29 @@ static long visible_line_capacity(void) {
     return n > 0 ? n : 1;
 }
 
+/* Baut das aktuelle Zeilenumbruch-Layout fuer die momentane Fensterbreite;
+ * caller muss btn_layout_free(*out_rows) aufrufen. */
+static size_t build_current_rows(BtnRow **out_rows) {
+    double width = btn_layout_text_width(g_bounds);
+    size_t row_count;
+    *out_rows = btn_layout_build(&g_editor, width, &row_count);
+    return row_count;
+}
+
 static void clamp_scroll(void) {
-    if (g_scroll_line < 0) {
-        g_scroll_line = 0;
+    if (g_scroll_row < 0) {
+        g_scroll_row = 0;
     }
-    long max_scroll = (long)editor_line_count(&g_editor) - visible_line_capacity();
+    BtnRow *rows;
+    long row_count = (long)build_current_rows(&rows);
+    btn_layout_free(rows);
+
+    long max_scroll = row_count - visible_line_capacity();
     if (max_scroll < 0) {
         max_scroll = 0;
     }
-    if (g_scroll_line > max_scroll) {
-        g_scroll_line = max_scroll;
+    if (g_scroll_row > max_scroll) {
+        g_scroll_row = max_scroll;
     }
 }
 
@@ -83,15 +96,80 @@ static void clamp_scroll(void) {
  * bei Tastatur-Navigation gibt es sonst keinen anderen Weg, ihn wieder
  * ins Bild zu bekommen. */
 static void sync_scroll_to_cursor(void) {
-    long cur_line = (long)editor_offset_to_line(&g_editor, g_editor.cursor);
-    long capacity = visible_line_capacity();
+    BtnRow *rows;
+    size_t row_count = build_current_rows(&rows);
+    long cur_row = (long)btn_layout_row_for_offset(rows, row_count, g_editor.cursor);
+    btn_layout_free(rows);
 
-    if (cur_line < g_scroll_line) {
-        g_scroll_line = cur_line;
-    } else if (cur_line >= g_scroll_line + capacity) {
-        g_scroll_line = cur_line - capacity + 1;
+    long capacity = visible_line_capacity();
+    if (cur_row < g_scroll_row) {
+        g_scroll_row = cur_row;
+    } else if (cur_row >= g_scroll_row + capacity) {
+        g_scroll_row = cur_row - capacity + 1;
     }
     clamp_scroll();
+}
+
+/* Wortumbruch-bewusste vertikale Bewegung (Auf/Ab bewegen sich um eine
+ * visuelle Zeile, nicht um eine logische) - editor_move kennt das nicht,
+ * weil der Umbruch von der Fensterbreite abhaengt. Nutzt ed->desired_col
+ * genau wie editor.c es fuer die (jetzt entfernte) logische Variante tat. */
+static void move_visual_row(int direction, int extend) {
+    BtnRow *rows;
+    size_t row_count = build_current_rows(&rows);
+    size_t cur_row = btn_layout_row_for_offset(rows, row_count, g_editor.cursor);
+
+    size_t col = (g_editor.desired_col != (size_t)-1)
+                     ? g_editor.desired_col
+                     : editor_visual_column_in_range(&g_editor, rows[cur_row].start, g_editor.cursor);
+
+    size_t new_offset;
+    if (direction < 0 && cur_row == 0) {
+        new_offset = 0;
+    } else if (direction > 0 && cur_row + 1 >= row_count) {
+        new_offset = editor_length(&g_editor);
+    } else {
+        size_t target_row = (direction < 0) ? cur_row - 1 : cur_row + 1;
+        new_offset = editor_offset_for_column_in_range(&g_editor, rows[target_row].start, rows[target_row].len, col);
+    }
+    btn_layout_free(rows);
+
+    g_editor.cursor = new_offset;
+    if (!extend) {
+        g_editor.anchor = new_offset;
+    }
+    g_editor.desired_col = col;
+}
+
+/* Pos1/Ende und Cmd+Links/Rechts springen an Anfang/Ende der aktuellen
+ * visuellen Zeile (nach Umbruch) - das entspricht dem nativen macOS-
+ * Verhalten (nicht der logischen, evtl. umgebrochenen Zeile). */
+static void move_row_start(int extend) {
+    BtnRow *rows;
+    size_t row_count = build_current_rows(&rows);
+    size_t cur_row = btn_layout_row_for_offset(rows, row_count, g_editor.cursor);
+    size_t new_offset = rows[cur_row].start;
+    btn_layout_free(rows);
+
+    g_editor.cursor = new_offset;
+    if (!extend) {
+        g_editor.anchor = new_offset;
+    }
+    g_editor.desired_col = (size_t)-1;
+}
+
+static void move_row_end(int extend) {
+    BtnRow *rows;
+    size_t row_count = build_current_rows(&rows);
+    size_t cur_row = btn_layout_row_for_offset(rows, row_count, g_editor.cursor);
+    size_t new_offset = rows[cur_row].start + rows[cur_row].len;
+    btn_layout_free(rows);
+
+    g_editor.cursor = new_offset;
+    if (!extend) {
+        g_editor.anchor = new_offset;
+    }
+    g_editor.desired_col = (size_t)-1;
 }
 
 static char *read_file_contents(const char *path, size_t *out_len) {
@@ -176,7 +254,7 @@ static int confirm_discard_if_dirty(void) {
 
 static void on_draw(CGContextRef ctx, CGRect bounds) {
     g_bounds = bounds;
-    btn_render_frame(ctx, bounds, &g_editor, g_scroll_line);
+    btn_render_frame(ctx, bounds, &g_editor, g_scroll_row);
 }
 
 static void on_key(const char *characters, unsigned short keycode, unsigned long modifierFlags) {
@@ -186,32 +264,48 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
 
     switch (keycode) {
         case KEYCODE_LEFT:
-            editor_move(&g_editor, command ? BTN_MOVE_LINE_START : (option ? BTN_MOVE_WORD_LEFT : BTN_MOVE_LEFT), shift);
+            if (command) {
+                move_row_start(shift);
+            } else {
+                editor_move(&g_editor, option ? BTN_MOVE_WORD_LEFT : BTN_MOVE_LEFT, shift);
+            }
             sync_scroll_to_cursor();
             btn_app_request_redraw();
             return;
         case KEYCODE_RIGHT:
-            editor_move(&g_editor, command ? BTN_MOVE_LINE_END : (option ? BTN_MOVE_WORD_RIGHT : BTN_MOVE_RIGHT), shift);
+            if (command) {
+                move_row_end(shift);
+            } else {
+                editor_move(&g_editor, option ? BTN_MOVE_WORD_RIGHT : BTN_MOVE_RIGHT, shift);
+            }
             sync_scroll_to_cursor();
             btn_app_request_redraw();
             return;
         case KEYCODE_UP:
-            editor_move(&g_editor, command ? BTN_MOVE_DOC_START : BTN_MOVE_UP, shift);
+            if (command) {
+                editor_move(&g_editor, BTN_MOVE_DOC_START, shift);
+            } else {
+                move_visual_row(-1, shift);
+            }
             sync_scroll_to_cursor();
             btn_app_request_redraw();
             return;
         case KEYCODE_DOWN:
-            editor_move(&g_editor, command ? BTN_MOVE_DOC_END : BTN_MOVE_DOWN, shift);
+            if (command) {
+                editor_move(&g_editor, BTN_MOVE_DOC_END, shift);
+            } else {
+                move_visual_row(1, shift);
+            }
             sync_scroll_to_cursor();
             btn_app_request_redraw();
             return;
         case KEYCODE_HOME:
-            editor_move(&g_editor, BTN_MOVE_LINE_START, shift);
+            move_row_start(shift);
             sync_scroll_to_cursor();
             btn_app_request_redraw();
             return;
         case KEYCODE_END:
-            editor_move(&g_editor, BTN_MOVE_LINE_END, shift);
+            move_row_end(shift);
             sync_scroll_to_cursor();
             btn_app_request_redraw();
             return;
@@ -270,7 +364,7 @@ static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, 
             if (y < BTN_FOOTER_HEIGHT) {
                 return;
             }
-            size_t offset = btn_hit_test(&g_editor, g_bounds, x, y, g_scroll_line);
+            size_t offset = btn_hit_test(&g_editor, g_bounds, x, y, g_scroll_row);
             if (clickCount >= 3) {
                 editor_select_line_at(&g_editor, offset);
                 g_dragging = 0;
@@ -285,7 +379,7 @@ static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, 
         }
         case BTN_MOUSE_DRAGGED:
             if (g_dragging) {
-                size_t offset = btn_hit_test(&g_editor, g_bounds, x, y, g_scroll_line);
+                size_t offset = btn_hit_test(&g_editor, g_bounds, x, y, g_scroll_row);
                 editor_set_cursor(&g_editor, offset, 1);
             }
             break;
@@ -305,7 +399,7 @@ static void on_scroll(double delta_y) {
         return;
     }
     g_scroll_accum -= (double)lines * BTN_LINE_HEIGHT;
-    g_scroll_line -= lines;
+    g_scroll_row -= lines;
     clamp_scroll();
     btn_app_request_redraw();
 }

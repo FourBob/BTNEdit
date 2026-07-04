@@ -248,30 +248,40 @@ static size_t advance_tab_stop(size_t col) {
     return ((col / BTN_TAB_WIDTH) + 1) * BTN_TAB_WIDTH;
 }
 
-size_t editor_visual_column(Editor *ed, size_t offset) {
-    size_t line_start, line_len;
-    editor_line_bounds(ed, editor_offset_to_line(ed, offset), &line_start, &line_len);
-    (void)line_len;
+size_t editor_tab_advance(size_t col) {
+    return advance_tab_stop(col);
+}
 
+size_t editor_visual_column_in_range(Editor *ed, size_t range_start, size_t offset) {
     size_t col = 0;
-    for (size_t i = line_start; i < offset; i++) {
+    for (size_t i = range_start; i < offset; i++) {
         col = (gb_char_at(&ed->buffer, i) == '\t') ? advance_tab_stop(col) : col + 1;
     }
     return col;
 }
 
-size_t editor_offset_for_column(Editor *ed, size_t line_index, size_t target_col) {
-    size_t line_start, line_len;
-    editor_line_bounds(ed, line_index, &line_start, &line_len);
-    size_t line_end = line_start + line_len;
-
+size_t editor_offset_for_column_in_range(Editor *ed, size_t range_start, size_t range_len, size_t target_col) {
+    size_t range_end = range_start + range_len;
     size_t col = 0;
-    size_t i = line_start;
-    while (i < line_end && col < target_col) {
+    size_t i = range_start;
+    while (i < range_end && col < target_col) {
         col = (gb_char_at(&ed->buffer, i) == '\t') ? advance_tab_stop(col) : col + 1;
         i++;
     }
     return i;
+}
+
+size_t editor_visual_column(Editor *ed, size_t offset) {
+    size_t line_start, line_len;
+    editor_line_bounds(ed, editor_offset_to_line(ed, offset), &line_start, &line_len);
+    (void)line_len;
+    return editor_visual_column_in_range(ed, line_start, offset);
+}
+
+size_t editor_offset_for_column(Editor *ed, size_t line_index, size_t target_col) {
+    size_t line_start, line_len;
+    editor_line_bounds(ed, line_index, &line_start, &line_len);
+    return editor_offset_for_column_in_range(ed, line_start, line_len, target_col);
 }
 
 int editor_has_selection(Editor *ed) {
@@ -361,7 +371,6 @@ void editor_delete_forward(Editor *ed) {
 void editor_move(Editor *ed, BtnMove move, int extend) {
     size_t len = editor_length(ed);
     size_t new_pos = ed->cursor;
-    int keep_desired_col = 0;
 
     switch (move) {
         case BTN_MOVE_LEFT:
@@ -384,48 +393,15 @@ void editor_move(Editor *ed, BtnMove move, int extend) {
         case BTN_MOVE_WORD_RIGHT:
             new_pos = word_right(ed, ed->cursor);
             break;
-        case BTN_MOVE_LINE_START: {
-            size_t start, l;
-            editor_line_bounds(ed, editor_offset_to_line(ed, ed->cursor), &start, &l);
-            new_pos = start;
-            break;
-        }
-        case BTN_MOVE_LINE_END: {
-            size_t start, l;
-            editor_line_bounds(ed, editor_offset_to_line(ed, ed->cursor), &start, &l);
-            new_pos = start + l;
-            break;
-        }
         case BTN_MOVE_DOC_START:
             new_pos = 0;
             break;
         case BTN_MOVE_DOC_END:
             new_pos = len;
             break;
-        case BTN_MOVE_UP:
-        case BTN_MOVE_DOWN: {
-            size_t line = editor_offset_to_line(ed, ed->cursor);
-            size_t line_count = editor_line_count(ed);
-            size_t col = (ed->desired_col != UNSET_COL) ? ed->desired_col : editor_visual_column(ed, ed->cursor);
-
-            if (move == BTN_MOVE_UP && line == 0) {
-                new_pos = 0;
-            } else if (move == BTN_MOVE_DOWN && line + 1 >= line_count) {
-                new_pos = len;
-            } else {
-                size_t target_line = (move == BTN_MOVE_UP) ? line - 1 : line + 1;
-                new_pos = editor_offset_for_column(ed, target_line, col);
-            }
-            ed->desired_col = col;
-            keep_desired_col = 1;
-            break;
-        }
     }
 
-    if (!keep_desired_col) {
-        ed->desired_col = UNSET_COL;
-    }
-
+    ed->desired_col = UNSET_COL;
     ed->cursor = new_pos;
     if (!extend) {
         ed->anchor = new_pos;

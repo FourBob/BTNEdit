@@ -38,13 +38,13 @@ typedef struct {
     UndoStack undo;
 } Editor;
 
+/* Auf/Ab, Pos1/Ende und Cmd+Links/Rechts fehlen hier bewusst: die haengen
+ * mit Wortumbruch von der Fensterbreite ab (visuelle statt logische Zeile)
+ * und leben deshalb zusammen mit dem Zeilenumbruch-Layout in render.c/
+ * main.c statt hier in der reinen, praesentationsunabhaengigen Logik. */
 typedef enum {
     BTN_MOVE_LEFT,
     BTN_MOVE_RIGHT,
-    BTN_MOVE_UP,
-    BTN_MOVE_DOWN,
-    BTN_MOVE_LINE_START,
-    BTN_MOVE_LINE_END,
     BTN_MOVE_WORD_LEFT,
     BTN_MOVE_WORD_RIGHT,
     BTN_MOVE_DOC_START,
@@ -69,6 +69,16 @@ size_t editor_word_count(Editor *ed);
  * (auf Zeilenende geklemmt). Reine Inhaltslogik, keine Font-Metrik. */
 size_t editor_visual_column(Editor *ed, size_t offset);
 size_t editor_offset_for_column(Editor *ed, size_t line_index, size_t target_col);
+
+/* Wie oben, aber auf einen beliebigen Bereich [range_start, range_start+
+ * range_len) bezogen statt auf eine logische Zeile - das ist, was render.c
+ * fuer umgebrochene visuelle Zeilen (Rows) braucht, ohne dass editor.c
+ * selbst etwas vom Wortumbruch wissen muss. */
+size_t editor_visual_column_in_range(Editor *ed, size_t range_start, size_t offset);
+size_t editor_offset_for_column_in_range(Editor *ed, size_t range_start, size_t range_len, size_t target_col);
+
+/* Naechster Tabstopp ab der gegebenen Spalte. */
+size_t editor_tab_advance(size_t col);
 
 int editor_has_selection(Editor *ed);
 size_t editor_selection_start(Editor *ed);
