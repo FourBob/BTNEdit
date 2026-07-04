@@ -168,6 +168,19 @@ void editor_free(Editor *ed) {
     undo_stack_free(&ed->undo);
 }
 
+void editor_set_text(Editor *ed, const char *text, size_t len) {
+    gb_free(&ed->buffer);
+    gb_init(&ed->buffer, len + 64);
+    gb_insert(&ed->buffer, 0, text, len);
+
+    ed->cursor = 0;
+    ed->anchor = 0;
+    ed->desired_col = UNSET_COL;
+
+    undo_stack_free(&ed->undo);
+    undo_stack_init(&ed->undo);
+}
+
 /* ---- Abfragen ---- */
 
 size_t editor_length(Editor *ed) {

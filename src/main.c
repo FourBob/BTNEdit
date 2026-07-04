@@ -23,6 +23,115 @@ static Editor g_editor;
 static CGRect g_bounds = { { 0, 0 }, { 900, 600 } };
 static int g_dragging = 0;
 
+static char *g_current_path = NULL; /* NULL = unbenanntes, neues Dokument */
+static size_t g_saved_undo_pos = 0;
+
+static char *dup_string(const char *s) {
+    size_t len = strlen(s) + 1;
+    char *copy = malloc(len);
+    memcpy(copy, s, len);
+    return copy;
+}
+
+static const char *basename_of(const char *path) {
+    const char *slash = strrchr(path, '/');
+    return slash ? slash + 1 : path;
+}
+
+static int is_dirty(void) {
+    return g_editor.undo.pos != g_saved_undo_pos;
+}
+
+static void set_current_path(const char *path) {
+    free(g_current_path);
+    g_current_path = path ? dup_string(path) : NULL;
+    btn_set_window_title(g_current_path ? basename_of(g_current_path) : "Unbenannt");
+}
+
+static void sync_window_state(void) {
+    btn_app_set_document_edited(is_dirty());
+}
+
+static char *read_file_contents(const char *path, size_t *out_len) {
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        return NULL;
+    }
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    if (size < 0) {
+        fclose(f);
+        return NULL;
+    }
+    fseek(f, 0, SEEK_SET);
+
+    char *buf = malloc((size_t)size + 1);
+    size_t read_n = fread(buf, 1, (size_t)size, f);
+    fclose(f);
+    buf[read_n] = '\0';
+    *out_len = read_n;
+    return buf;
+}
+
+static int write_file_contents(const char *path, const char *data, size_t len) {
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        return 0;
+    }
+    size_t written = fwrite(data, 1, len, f);
+    fclose(f);
+    return written == len;
+}
+
+/* force_save_as: immer den Sichern-Dialog zeigen, auch wenn schon ein Pfad
+ * bekannt ist. Rueckgabe: 1 = gesichert, 0 = abgebrochen/fehlgeschlagen. */
+static int perform_save(int force_save_as) {
+    char *path = NULL;
+    int must_free_path = 0;
+
+    if (force_save_as || !g_current_path) {
+        path = btn_show_save_panel(g_current_path);
+        if (!path) {
+            return 0;
+        }
+        must_free_path = 1;
+    } else {
+        path = g_current_path;
+    }
+
+    size_t len;
+    char *contents = editor_copy_all(&g_editor, &len);
+    int ok = write_file_contents(path, contents, len);
+    free(contents);
+
+    if (ok) {
+        set_current_path(path);
+        g_saved_undo_pos = g_editor.undo.pos;
+    } else {
+        fprintf(stderr, "BTNEdit: Datei konnte nicht geschrieben werden: %s\n", path);
+    }
+
+    if (must_free_path) {
+        free(path);
+    }
+    return ok;
+}
+
+/* Rueckgabe: 1 = Aktion darf fortgesetzt werden, 0 = Abbrechen. */
+static int confirm_discard_if_dirty(void) {
+    if (!is_dirty()) {
+        return 1;
+    }
+    int choice = btn_show_unsaved_changes_alert(g_current_path ? basename_of(g_current_path) : "Unbenannt");
+    if (choice == 0) {
+        return 0;
+    }
+    if (choice == 1) {
+        return perform_save(0);
+    }
+    return 1;
+}
+
 static void on_draw(CGContextRef ctx, CGRect bounds) {
     g_bounds = bounds;
     btn_render_frame(ctx, bounds, &g_editor);
@@ -60,10 +169,12 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
             return;
         case KEYCODE_FORWARD_DELETE:
             editor_delete_forward(&g_editor);
+            sync_window_state();
             btn_app_request_redraw();
             return;
         case KEYCODE_TAB:
             editor_insert_text(&g_editor, "\t", 1);
+            sync_window_state();
             btn_app_request_redraw();
             return;
         default:
@@ -90,6 +201,7 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
         return;
     }
 
+    sync_window_state();
     btn_app_request_redraw();
 }
 
@@ -134,8 +246,41 @@ static void on_menu(int tag) {
     char *clip;
     switch (tag) {
         case BTN_MENU_NEW:
-            editor_free(&g_editor);
-            editor_init(&g_editor);
+            if (confirm_discard_if_dirty()) {
+                editor_free(&g_editor);
+                editor_init(&g_editor);
+                set_current_path(NULL);
+                g_saved_undo_pos = g_editor.undo.pos;
+            }
+            break;
+        case BTN_MENU_OPEN:
+            if (confirm_discard_if_dirty()) {
+                char *path = btn_show_open_panel();
+                if (path) {
+                    size_t len;
+                    char *contents = read_file_contents(path, &len);
+                    if (contents) {
+                        editor_set_text(&g_editor, contents, len);
+                        free(contents);
+                        set_current_path(path);
+                        g_saved_undo_pos = g_editor.undo.pos;
+                    } else {
+                        fprintf(stderr, "BTNEdit: Datei konnte nicht gelesen werden: %s\n", path);
+                    }
+                    free(path);
+                }
+            }
+            break;
+        case BTN_MENU_SAVE:
+            perform_save(0);
+            break;
+        case BTN_MENU_SAVE_AS:
+            perform_save(1);
+            break;
+        case BTN_MENU_CLOSE:
+            if (confirm_discard_if_dirty()) {
+                btn_app_close_window();
+            }
             break;
         case BTN_MENU_UNDO:
             editor_undo(&g_editor);
@@ -162,10 +307,6 @@ static void on_menu(int tag) {
         case BTN_MENU_SELECT_ALL:
             editor_select_all(&g_editor);
             break;
-        case BTN_MENU_OPEN:
-        case BTN_MENU_SAVE:
-        case BTN_MENU_SAVE_AS:
-        case BTN_MENU_CLOSE:
         case BTN_MENU_PRINT:
         case BTN_MENU_FIND:
             fprintf(stderr, "BTNEdit: Menu-Aktion %d noch nicht implementiert\n", tag);
@@ -173,6 +314,7 @@ static void on_menu(int tag) {
         default:
             break;
     }
+    sync_window_state();
     btn_app_request_redraw();
 }
 

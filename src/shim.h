@@ -57,6 +57,20 @@ void btn_app_run(void);
 void btn_pasteboard_set_string(const char *utf8);
 char *btn_pasteboard_copy_string(void);
 
+/* Systemdialoge (NSOpenPanel/NSSavePanel/NSAlert) - wie NSWindow/NSMenu
+ * reine Chrome/Systemdienste, kein Content-Widget. Die *_panel-Funktionen
+ * geben einen neu allokierten Pfad zurueck (caller muss free() aufrufen)
+ * oder NULL, wenn der Dialog abgebrochen wurde. */
+char *btn_show_open_panel(void);
+char *btn_show_save_panel(const char *suggested_path);
+
+/* Rueckgabe: 0 = Abbrechen, 1 = Sichern, 2 = Nicht sichern. */
+int btn_show_unsaved_changes_alert(const char *display_name);
+
+void btn_set_window_title(const char *title);
+void btn_app_set_document_edited(int edited);
+void btn_app_close_window(void);
+
 #ifdef __cplusplus
 }
 #endif

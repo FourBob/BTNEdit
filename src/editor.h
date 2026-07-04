@@ -54,6 +54,10 @@ typedef enum {
 void editor_init(Editor *ed);
 void editor_free(Editor *ed);
 
+/* Ersetzt den gesamten Inhalt (z.B. beim Laden einer Datei), setzt Cursor
+ * und Undo-Verlauf zurueck - das Laden selbst ist nicht rueckgaengig machbar. */
+void editor_set_text(Editor *ed, const char *text, size_t len);
+
 size_t editor_length(Editor *ed);
 size_t editor_line_count(Editor *ed);
 void editor_line_bounds(Editor *ed, size_t line_index, size_t *out_start, size_t *out_len);

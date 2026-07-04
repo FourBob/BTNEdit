@@ -198,7 +198,7 @@ void btn_app_run(void) {
                                                 styleMask:style
                                                   backing:NSBackingStoreBuffered
                                                     defer:NO];
-        [g_window setTitle:@"BTNEdit"];
+        [g_window setTitle:@"Unbenannt"];
         [g_window setMinSize:NSMakeSize(400, 300)];
 
         g_view = [[BTNContentView alloc] initWithFrame:frame];
@@ -233,4 +233,76 @@ char *btn_pasteboard_copy_string(void) {
         memcpy(out, utf8, len + 1);
         return out;
     }
+}
+
+static char *copy_cstring(const char *utf8) {
+    size_t len = strlen(utf8);
+    char *out = malloc(len + 1);
+    memcpy(out, utf8, len + 1);
+    return out;
+}
+
+char *btn_show_open_panel(void) {
+    @autoreleasepool {
+        NSOpenPanel *panel = [NSOpenPanel openPanel];
+        [panel setCanChooseFiles:YES];
+        [panel setCanChooseDirectories:NO];
+        [panel setAllowsMultipleSelection:NO];
+        if ([panel runModal] == NSModalResponseOK) {
+            NSURL *url = [[panel URLs] firstObject];
+            return copy_cstring([[url path] UTF8String]);
+        }
+        return NULL;
+    }
+}
+
+char *btn_show_save_panel(const char *suggested_path) {
+    @autoreleasepool {
+        NSSavePanel *panel = [NSSavePanel savePanel];
+        if (suggested_path) {
+            NSString *s = [NSString stringWithUTF8String:suggested_path];
+            [panel setDirectoryURL:[[NSURL fileURLWithPath:s] URLByDeletingLastPathComponent]];
+            [panel setNameFieldStringValue:[s lastPathComponent]];
+        } else {
+            [panel setNameFieldStringValue:@"Unbenannt.txt"];
+        }
+        if ([panel runModal] == NSModalResponseOK) {
+            return copy_cstring([[[panel URL] path] UTF8String]);
+        }
+        return NULL;
+    }
+}
+
+int btn_show_unsaved_changes_alert(const char *display_name) {
+    @autoreleasepool {
+        NSString *name = [NSString stringWithUTF8String:display_name ? display_name : "Unbenannt"];
+        NSAlert *alert = [[NSAlert alloc] init];
+        [alert setMessageText:[NSString stringWithFormat:@"Moechtest du die Aenderungen an „%@“ sichern?", name]];
+        [alert setInformativeText:@"Deine Aenderungen gehen verloren, wenn du sie nicht sicherst."];
+        [alert addButtonWithTitle:@"Sichern"];
+        [alert addButtonWithTitle:@"Nicht sichern"];
+        [alert addButtonWithTitle:@"Abbrechen"];
+        NSModalResponse resp = [alert runModal];
+        if (resp == NSAlertFirstButtonReturn) {
+            return 1;
+        }
+        if (resp == NSAlertSecondButtonReturn) {
+            return 2;
+        }
+        return 0;
+    }
+}
+
+void btn_set_window_title(const char *title) {
+    @autoreleasepool {
+        [g_window setTitle:[NSString stringWithUTF8String:title ? title : "Unbenannt"]];
+    }
+}
+
+void btn_app_set_document_edited(int edited) {
+    [g_window setDocumentEdited:edited ? YES : NO];
+}
+
+void btn_app_close_window(void) {
+    [g_window close];
 }
