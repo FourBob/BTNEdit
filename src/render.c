@@ -19,9 +19,37 @@
 #define FONT_SIZE 13.0
 #define LEFT_PADDING 8.0
 #define TOP_PADDING 8.0
+#define BTN_MAX_TOKENS_PER_LINE 512
 
 static CTFontRef g_font = NULL;
 static double g_char_width = 0.0;
+static CGColorRef g_token_colors[6] = { NULL, NULL, NULL, NULL, NULL, NULL };
+
+static CGColorRef get_token_color(BtnTokenKind kind) {
+    if (!g_token_colors[kind]) {
+        switch (kind) {
+            case BTN_TOK_KEYWORD:
+                g_token_colors[kind] = CGColorCreateGenericRGB(0.64, 0.11, 0.57, 1.0);
+                break;
+            case BTN_TOK_STRING:
+                g_token_colors[kind] = CGColorCreateGenericRGB(0.77, 0.10, 0.09, 1.0);
+                break;
+            case BTN_TOK_COMMENT:
+                g_token_colors[kind] = CGColorCreateGenericRGB(0.24, 0.50, 0.26, 1.0);
+                break;
+            case BTN_TOK_NUMBER:
+                g_token_colors[kind] = CGColorCreateGenericRGB(0.11, 0.0, 0.87, 1.0);
+                break;
+            case BTN_TOK_PREPROCESSOR:
+                g_token_colors[kind] = CGColorCreateGenericRGB(0.50, 0.28, 0.09, 1.0);
+                break;
+            default:
+                g_token_colors[kind] = CGColorCreateGenericRGB(0.1, 0.1, 0.1, 1.0);
+                break;
+        }
+    }
+    return g_token_colors[kind];
+}
 
 static CTFontRef get_font(void) {
     if (!g_font) {
@@ -257,7 +285,25 @@ static void draw_footer(CGContextRef ctx, CGRect bounds, Editor *ed) {
     CGColorRelease(gray);
 }
 
-void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_row) {
+/* Kommentar-Zustand direkt vor logical_line, indem alle vorherigen Zeilen
+ * einmal (nur fuers Zustands-Tracking, max_tokens=0) tokenisiert werden -
+ * noetig, damit mehrzeilige Blockkommentare beim Scrollen mitten ins
+ * Dokument korrekt erkannt werden. */
+static int comment_state_before_line(Editor *ed, const BtnLangSpec *lang, size_t logical_line) {
+    int state = 0;
+    for (size_t li = 0; li < logical_line; li++) {
+        size_t ls, ll;
+        editor_line_bounds(ed, li, &ls, &ll);
+        char *text = gb_copy_range(&ed->buffer, ls, ll);
+        int ends;
+        btn_highlight_tokenize(text, ll, lang, state, &ends, NULL, 0);
+        free(text);
+        state = ends;
+    }
+    return state;
+}
+
+void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_row, const BtnLangSpec *lang) {
     CGContextSetRGBFillColor(ctx, 1.0, 1.0, 1.0, 1.0);
     CGContextFillRect(ctx, bounds);
 
@@ -275,6 +321,20 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
     size_t sel_start = has_sel ? editor_selection_start(ed) : 0;
     size_t sel_end = has_sel ? editor_selection_end(ed) : 0;
 
+    /* Tokens werden nur einmal pro logischer Zeile berechnet und ueber alle
+     * ihre umgebrochenen Rows wiederverwendet (Zeilen sind in Dokument-
+     * reihenfolge, logical_line ist also innerhalb der sichtbaren Rows
+     * monoton steigend). */
+    size_t cached_line = (size_t)-1;
+    size_t cached_line_start = 0;
+    BtnToken tokens[BTN_MAX_TOKENS_PER_LINE];
+    size_t token_count = 0;
+    int comment_state = 0;
+    if (lang && row_count > 0) {
+        size_t first_row = (size_t)scroll_row < row_count ? (size_t)scroll_row : row_count - 1;
+        comment_state = comment_state_before_line(ed, lang, rows[first_row].logical_line);
+    }
+
     for (size_t r = (size_t)scroll_row; r < row_count; r++) {
         double top_y = bounds.size.height - TOP_PADDING - (double)(r - (size_t)scroll_row + 1) * LINE_HEIGHT;
         if (top_y + LINE_HEIGHT < BTN_FOOTER_HEIGHT) {
@@ -284,6 +344,25 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
         size_t row_start = rows[r].start;
         size_t row_len = rows[r].len;
         size_t row_end = row_start + row_len;
+
+        if (lang) {
+            size_t ll = rows[r].logical_line;
+            if (ll != cached_line) {
+                size_t ls, llen;
+                editor_line_bounds(ed, ll, &ls, &llen);
+                char *text = gb_copy_range(&ed->buffer, ls, llen);
+                int ends;
+                token_count = btn_highlight_tokenize(text, llen, lang, comment_state, &ends,
+                                                      tokens, BTN_MAX_TOKENS_PER_LINE);
+                if (token_count > BTN_MAX_TOKENS_PER_LINE) {
+                    token_count = BTN_MAX_TOKENS_PER_LINE;
+                }
+                free(text);
+                comment_state = ends;
+                cached_line = ll;
+                cached_line_start = ls;
+            }
+        }
 
         if (has_sel) {
             size_t hi_from = sel_start > row_start ? sel_start : row_start;
@@ -317,7 +396,33 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
 
             CFStringRef lineStr = CFStringCreateWithBytes(NULL, (const UInt8 *)disp,
                                                            (CFIndex)disp_len, kCFStringEncodingUTF8, false);
-            CFAttributedStringRef attrStr = CFAttributedStringCreate(NULL, lineStr, attrs);
+            CFMutableAttributedStringRef attrStr = CFAttributedStringCreateMutable(NULL, 0);
+            CFAttributedStringReplaceString(attrStr, CFRangeMake(0, 0), lineStr);
+            CFAttributedStringSetAttributes(attrStr, CFRangeMake(0, (CFIndex)disp_len), attrs, true);
+
+            for (size_t t = 0; t < token_count; t++) {
+                if (tokens[t].kind == BTN_TOK_NORMAL) {
+                    continue;
+                }
+                size_t tok_abs_start = cached_line_start + tokens[t].start;
+                size_t tok_abs_end = tok_abs_start + tokens[t].len;
+                size_t clip_start = tok_abs_start > row_start ? tok_abs_start : row_start;
+                size_t clip_end = tok_abs_end < row_end ? tok_abs_end : row_end;
+                if (clip_start >= clip_end) {
+                    continue;
+                }
+                size_t col_from = editor_visual_column_in_range(ed, row_start, clip_start);
+                size_t col_to = editor_visual_column_in_range(ed, row_start, clip_end);
+                if (col_to > disp_len) {
+                    col_to = disp_len;
+                }
+                if (col_from >= col_to) {
+                    continue;
+                }
+                CFAttributedStringSetAttribute(attrStr, CFRangeMake((CFIndex)col_from, (CFIndex)(col_to - col_from)),
+                                                kCTForegroundColorAttributeName, get_token_color(tokens[t].kind));
+            }
+
             CTLineRef ctLine = CTLineCreateWithAttributedString(attrStr);
             CGContextSetTextPosition(ctx, GUTTER_WIDTH + LEFT_PADDING, top_y + 4.0);
             CTLineDraw(ctLine, ctx);

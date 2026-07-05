@@ -254,7 +254,7 @@ static int confirm_discard_if_dirty(void) {
 
 static void on_draw(CGContextRef ctx, CGRect bounds) {
     g_bounds = bounds;
-    btn_render_frame(ctx, bounds, &g_editor, g_scroll_row);
+    btn_render_frame(ctx, bounds, &g_editor, g_scroll_row, btn_highlight_lang_for_path(g_current_path));
 }
 
 static void on_key(const char *characters, unsigned short keycode, unsigned long modifierFlags) {

@@ -9,7 +9,7 @@ CFLAGS   := -Wall -Wextra -std=c11 -O2 -Isrc
 OBJCFLAGS:= -Wall -Wextra -fno-objc-arc -O2 -Isrc
 FRAMEWORKS := -framework Cocoa -framework CoreText -framework CoreGraphics
 
-SRC_C := src/main.c src/render.c src/editor.c src/gapbuffer.c
+SRC_C := src/main.c src/render.c src/editor.c src/gapbuffer.c src/highlight.c
 SRC_M := src/shim.m
 
 OBJ := $(SRC_C:.c=.o) $(SRC_M:.m=.o)

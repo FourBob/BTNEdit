@@ -3,6 +3,7 @@
 
 #include <CoreGraphics/CoreGraphics.h>
 #include "editor.h"
+#include "highlight.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,10 +41,11 @@ void btn_layout_free(BtnRow *rows);
  * zugeschlagen, nicht dem Ende der vorherigen). */
 size_t btn_layout_row_for_offset(const BtnRow *rows, size_t row_count, size_t offset);
 
-/* Zeichnet einen Frame: Hintergrund, Selektion, Text, Cursor,
- * Zeilennummern-Gutter und die Statusleiste. scroll_row ist der
- * (0-basierte) oberste sichtbare Row-Index. */
-void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_row);
+/* Zeichnet einen Frame: Hintergrund, Selektion, Text (optional per lang
+ * syntax-hervorgehoben), Cursor, Zeilennummern-Gutter und die
+ * Statusleiste. scroll_row ist der (0-basierte) oberste sichtbare
+ * Row-Index; lang darf NULL sein (keine Hervorhebung). */
+void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_row, const BtnLangSpec *lang);
 
 /* Bildet einen View-Punkt (Ursprung unten links, wie bei einer
  * nicht geflippten NSView) auf einen logischen Buffer-Offset ab,
