@@ -336,9 +336,17 @@ static void draw_footer(CGContextRef ctx, CGRect bounds, Editor *ed) {
 /* Zeichnet text linksbuendig bei (x,y) mit den gegebenen Attributen -
  * kleiner gemeinsamer Helfer, um das CFString/CTLine-Boilerplate nicht
  * drei Mal (Tab-Label, Schliessen-Kreuz, "+"-Knopf) zu wiederholen. Gibt
- * die gemessene Textbreite zurueck, falls der Aufrufer zentrieren will. */
+ * die gemessene Textbreite zurueck, falls der Aufrufer zentrieren will.
+ * NULL-Check nach CFStringCreateWithCString: wie bei btn_render_frame's
+ * Zeilen-Zeichnung (dort mit ausfuehrlicherem Kommentar) ist text hier
+ * nicht garantiert gueltiges UTF-8 (siehe utf8_safe_cut() unten fuer den
+ * Fall, der diese Verteidigung noetig gemacht hat) - lieber nichts zeichnen
+ * als mit NULL weiterzurechnen. */
 static double draw_text_at(CGContextRef ctx, const char *text, double x, double y, CFDictionaryRef attrs) {
     CFStringRef str = CFStringCreateWithCString(NULL, text, kCFStringEncodingUTF8);
+    if (!str) {
+        return 0.0;
+    }
     CFAttributedStringRef attrStr = CFAttributedStringCreate(NULL, str, attrs);
     CTLineRef line = CTLineCreateWithAttributedString(attrStr);
     double width = CTLineGetTypographicBounds(line, NULL, NULL, NULL);
@@ -350,9 +358,42 @@ static double draw_text_at(CGContextRef ctx, const char *text, double x, double 
     return width;
 }
 
+/* Rueckt pos zurueck, bis es nicht mehr auf ein UTF-8-Fortsetzungsbyte
+ * (10xxxxxx) zeigt - dieselbe Idee wie editor_utf8_seq_start() in editor.c,
+ * aber fuer einen rohen C-String statt einen GapBuffer (render.c bekommt
+ * hier nur main.c's fertig formatierte Tab-Labels, keinen Editor). Genutzt
+ * beim Kuerzen von Labels, damit ein Schnitt nie mitten in einem
+ * mehrbytigen Zeichen landet. */
+static size_t utf8_safe_cut(const char *s, size_t pos) {
+    size_t steps = 0;
+    while (steps < 3 && pos > 0 && ((unsigned char)s[pos] & 0xC0) == 0x80) {
+        pos--;
+        steps++;
+    }
+    return pos;
+}
+
+/* Volle Tab-Breite, solange alle Tabs + der "+"-Knopf in window_width
+ * passen; sonst wird jeder Tab gleichmaessig schmaler (nie unter 40pt,
+ * sonst waere ein Tab nicht mehr bedienbar) - main.c's Hit-Testing ruft
+ * dieselbe Funktion auf, damit Zeichnen und Klick-Trefferpruefung nie
+ * auseinanderlaufen, egal wie viele Tabs gerade offen sind. */
+double btn_tab_width_for(int count, double window_width) {
+    if (count <= 0) {
+        return BTN_TAB_ITEM_WIDTH;
+    }
+    double total_needed = (double)count * BTN_TAB_ITEM_WIDTH + BTN_TAB_NEW_WIDTH;
+    if (total_needed <= window_width) {
+        return BTN_TAB_ITEM_WIDTH;
+    }
+    double shrunk = (window_width - BTN_TAB_NEW_WIDTH) / (double)count;
+    return shrunk < 40.0 ? 40.0 : shrunk;
+}
+
 void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labels, int count, int active) {
     double bar_top = bounds.size.height - BTN_TAB_BAR_HEIGHT;
     double text_y = bar_top + (BTN_TAB_BAR_HEIGHT - FONT_SIZE) / 2.0 + 3.0;
+    double tab_width = btn_tab_width_for(count, bounds.size.width);
 
     CGContextSetRGBFillColor(ctx, 0.80, 0.80, 0.80, 1.0);
     CGContextFillRect(ctx, CGRectMake(0, bar_top, bounds.size.width, BTN_TAB_BAR_HEIGHT));
@@ -364,12 +405,12 @@ void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labe
     CFDictionaryRef dimAttrs = make_attrs(font, dimColor);
 
     for (int i = 0; i < count; i++) {
-        double tab_x = (double)i * BTN_TAB_ITEM_WIDTH;
+        double tab_x = (double)i * tab_width;
         int is_active = (i == active);
 
         CGContextSetRGBFillColor(ctx, is_active ? 0.97 : 0.80, is_active ? 0.97 : 0.80,
                                   is_active ? 0.97 : 0.80, 1.0);
-        CGContextFillRect(ctx, CGRectMake(tab_x, bar_top, BTN_TAB_ITEM_WIDTH, BTN_TAB_BAR_HEIGHT));
+        CGContextFillRect(ctx, CGRectMake(tab_x, bar_top, tab_width, BTN_TAB_BAR_HEIGHT));
 
         CGContextSetRGBStrokeColor(ctx, 0.65, 0.65, 0.65, 1.0);
         CGContextSetLineWidth(ctx, 1.0);
@@ -380,9 +421,10 @@ void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labe
          * Monospace-Schrift -> Breite pro Byte ist konstant (get_char_width()),
          * eine einzige Kapazitaetsrechnung reicht statt iterativem Neumessen;
          * wie beim Rest der App (editor_visual_column_in_range) ist das eine
-         * Byte- statt Codepoint-Naeherung - fuer Dateinamen in der Praxis
-         * unauffaellig. */
-        double avail = BTN_TAB_ITEM_WIDTH - 2.0 * LEFT_PADDING - BTN_TAB_CLOSE_WIDTH;
+         * Byte- statt Codepoint-Naeherung, ABER utf8_safe_cut() stellt sicher,
+         * dass der Schnitt selbst nie mitten in einem mehrbytigen Zeichen
+         * landet (sonst wuerde draw_text_at() ungueltiges UTF-8 bekommen). */
+        double avail = tab_width - 2.0 * LEFT_PADDING - BTN_TAB_CLOSE_WIDTH;
         size_t max_bytes = (size_t)(avail / get_char_width());
         if (max_bytes < 1) {
             max_bytes = 1;
@@ -392,10 +434,11 @@ void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labe
         int truncated = 0;
         if (label_len > max_bytes) {
             label_len = max_bytes > 3 ? max_bytes - 3 : max_bytes;
+            label_len = utf8_safe_cut(labels[i], label_len);
             truncated = 1;
         }
         if (label_len >= sizeof(buf) - 4) {
-            label_len = sizeof(buf) - 4;
+            label_len = utf8_safe_cut(labels[i], sizeof(buf) - 4);
         }
         memcpy(buf, labels[i], label_len);
         buf[label_len] = '\0';
@@ -404,11 +447,11 @@ void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labe
         }
         draw_text_at(ctx, buf, tab_x + LEFT_PADDING, text_y, attrs);
 
-        double close_x = tab_x + BTN_TAB_ITEM_WIDTH - BTN_TAB_CLOSE_WIDTH / 2.0 - 4.0;
+        double close_x = tab_x + tab_width - BTN_TAB_CLOSE_WIDTH / 2.0 - 4.0;
         draw_text_at(ctx, "×", close_x, text_y, dimAttrs);
     }
 
-    double new_x = (double)count * BTN_TAB_ITEM_WIDTH;
+    double new_x = (double)count * tab_width;
     draw_text_at(ctx, "+", new_x + (BTN_TAB_NEW_WIDTH - get_char_width()) / 2.0, text_y, dimAttrs);
 
     CGContextSetRGBStrokeColor(ctx, 0.55, 0.55, 0.55, 1.0);

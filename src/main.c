@@ -394,6 +394,19 @@ static int compile_search_regex(regex_t *re) {
  * Rueckwaertssuche) und nimmt den letzten VOR from, oder bei wrap=1 den
  * letzten insgesamt (Wrap ans Ende). REG_STARTEND (BSD/Darwin-Erweiterung)
  * erlaubt Start/Ende direkt vorzugeben, ohne Teilstrings zu kopieren. */
+
+/* REG_STARTEND mit einem rm_so > 0 impliziert NICHT automatisch REG_NOTBOL -
+ * ohne REG_NOTBOL wuerde "^" in einer Regex an JEDER Suchstartposition
+ * matchen, egal ob davor wirklich ein Zeilenumbruch steht. Deshalb hier
+ * selbst pruefen: "^" darf nur matchen, wenn offset==0 ist oder das Byte
+ * direkt davor ein '\n' ist - alle anderen Faelle bekommen REG_NOTBOL. */
+static int regexec_flags_for(const char *text, size_t offset) {
+    if (offset > 0 && text[offset - 1] != '\n') {
+        return REG_STARTEND | REG_NOTBOL;
+    }
+    return REG_STARTEND;
+}
+
 static int find_match(const char *text, size_t text_len, size_t from, int forward, int wrap,
                        size_t *out_start, size_t *out_end) {
     if (g_search_query[0] == '\0') {
@@ -411,7 +424,7 @@ static int find_match(const char *text, size_t text_len, size_t from, int forwar
     if (forward) {
         m.rm_so = (regoff_t)from;
         m.rm_eo = (regoff_t)text_len;
-        if (regexec(&re, text, 1, &m, REG_STARTEND) == 0) {
+        if (regexec(&re, text, 1, &m, regexec_flags_for(text, from)) == 0) {
             found = 1;
             found_start = (size_t)m.rm_so;
             found_end = (size_t)m.rm_eo;
@@ -434,7 +447,7 @@ static int find_match(const char *text, size_t text_len, size_t from, int forwar
         while (scan <= text_len) {
             m.rm_so = (regoff_t)scan;
             m.rm_eo = (regoff_t)text_len;
-            if (regexec(&re, text, 1, &m, REG_STARTEND) != 0) {
+            if (regexec(&re, text, 1, &m, regexec_flags_for(text, scan)) != 0) {
                 break;
             }
             size_t ms = (size_t)m.rm_so, me = (size_t)m.rm_eo;
@@ -471,8 +484,11 @@ static int find_match(const char *text, size_t text_len, size_t from, int forwar
 /* Sucht den naechsten/vorigen Treffer ab der aktuellen Selektion (oder dem
  * Cursor, falls keine besteht) und selektiert ihn - editor_set_cursor()
  * zweimal (erst ohne, dann mit extend) baut die neue Selektion sauber auf,
- * genau wie es editor.c's eigene Selektionsfunktionen tun. */
-static void perform_find(int forward) {
+ * genau wie es editor.c's eigene Selektionsfunktionen tun. Gibt zurueck, ob
+ * ein Treffer gefunden wurde - editor_has_selection() waere hierfuer NICHT
+ * zuverlaessig, weil ein leerer Regex-Treffer (z.B. "a*" oder "^") cursor==
+ * anchor hinterlaesst, obwohl durchaus etwas gefunden wurde. */
+static int perform_find(int forward) {
     Document *d = active_doc();
     Editor *ed = &d->editor;
     size_t len;
@@ -492,6 +508,7 @@ static void perform_find(int forward) {
     }
     sync_scroll_to_cursor();
     btn_app_request_redraw();
+    return found;
 }
 
 /* Ersetzt die aktuelle Selektion durch text/len - anders als
@@ -512,8 +529,11 @@ static void replace_selection(Editor *ed, const char *text, size_t len) {
 static void perform_replace_current(void) {
     Editor *ed = &active_doc()->editor;
     if (!editor_has_selection(ed)) {
-        perform_find(1);
-        if (!editor_has_selection(ed)) {
+        /* Rueckgabewert von perform_find() statt erneut editor_has_selection()
+         * zu pruefen - ein gefundener, aber leerer Regex-Treffer (z.B. "a*")
+         * hinterlaesst cursor==anchor und wuerde von editor_has_selection()
+         * faelschlich als "nichts gefunden" gelesen. */
+        if (!perform_find(1)) {
             return;
         }
     }
@@ -683,11 +703,30 @@ static void open_file_path(Document *d, const char *path) {
     }
 }
 
+/* Ist path bereits in einem offenen Tab geladen? Rueckgabe: dessen Index,
+ * oder -1. Verhindert, dass dieselbe Datei in zwei unabhaengigen
+ * Document-Instanzen landet - sonst wuerde spaeteres Sichern in einem der
+ * beiden Tabs die Aenderungen des anderen unbemerkt ueberschreiben. */
+static int find_tab_for_path(const char *path) {
+    for (int i = 0; i < g_doc_count; i++) {
+        if (g_docs[i].path && strcmp(g_docs[i].path, path) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 /* Oeffnet path im aktiven Tab, falls der noch unbenutzt/leer ist, sonst in
  * einem neuen Tab - Open muss (anders als frueher ohne Tabs) nie mehr
  * ungesicherte Aenderungen verwerfen, weil es notfalls einfach daneben ein
- * weiteres Tab aufmacht. */
+ * weiteres Tab aufmacht. Ist die Datei schon in einem anderen Tab offen,
+ * wird dorthin gewechselt statt sie ein zweites Mal zu laden. */
 static void open_path_in_tab(const char *path) {
+    int existing = find_tab_for_path(path);
+    if (existing >= 0) {
+        switch_to_tab(existing);
+        return;
+    }
     if (!doc_is_blank(active_doc())) {
         int idx = add_tab();
         if (idx < 0) {
@@ -695,6 +734,13 @@ static void open_path_in_tab(const char *path) {
             return;
         }
         switch_to_tab(idx);
+    } else {
+        /* switch_to_tab() (oben) schliesst die Suchen-Leiste schon selbst -
+         * beim Wiederverwenden des aktiven leeren Tabs (dieser Zweig) findet
+         * kein Tab-Wechsel statt, also muss hier explizit dasselbe passieren:
+         * sonst bliebe eine offene Suche/Selektion auf Inhalt zeigen, der
+         * gleich durch die geladene Datei ersetzt wird. */
+        close_find_bar();
     }
     open_file_path(active_doc(), path);
 }
@@ -778,7 +824,20 @@ static void close_tab(int idx) {
         btn_app_close_window();
         return;
     }
+
+    int original_active = g_active_doc;
+    if (idx != original_active) {
+        /* Erst sichtbar machen, DANN fragen - sonst zeigt der Ungesichert-
+         * Dialog auf ein Dokument, das gerade gar nicht auf dem Bildschirm
+         * zu sehen ist (z.B. beim Klick auf das "x" eines Hintergrund-Tabs). */
+        switch_to_tab(idx);
+        btn_app_request_redraw();
+    }
     if (!confirm_discard_doc(&g_docs[idx])) {
+        if (idx != original_active) {
+            switch_to_tab(original_active);
+            btn_app_request_redraw();
+        }
         return;
     }
 
@@ -786,14 +845,22 @@ static void close_tab(int idx) {
     memmove(&g_docs[idx], &g_docs[idx + 1], (size_t)(g_doc_count - idx - 1) * sizeof(Document));
     g_doc_count--;
 
-    if (g_active_doc > idx) {
-        g_active_doc--;
-    } else if (g_active_doc == idx) {
-        if (g_active_doc >= g_doc_count) {
-            g_active_doc = g_doc_count - 1;
-        }
-        switch_to_tab(g_active_doc);
+    /* Nach dem Entfernen wieder zum urspruenglich aktiven Tab zurueck, statt
+     * bei einem Hintergrund-Tab-Schluss einfach dort zu bleiben, wo idx kurz
+     * zum Vorschau-Zweck aktiv war - der Nutzer arbeitete ja am urspruenglichen
+     * Tab weiter, nicht an dem gerade geschlossenen. War idx selbst der
+     * urspruenglich aktive Tab, kommt stattdessen der Tab dran, der an seine
+     * Stelle nachgerueckt ist (oder der letzte, falls idx der letzte war). */
+    int new_active;
+    if (original_active == idx) {
+        new_active = (idx < g_doc_count) ? idx : g_doc_count - 1;
+    } else if (original_active > idx) {
+        new_active = original_active - 1;
+    } else {
+        new_active = original_active;
     }
+    switch_to_tab(new_active);
+
     sync_window_state();
     btn_app_request_redraw();
 }
@@ -803,11 +870,47 @@ static void close_tab(int idx) {
  * - zentral hier statt separat pro Aufrufer, damit keiner dieser beiden
  * System-Wege den Ungesichert-Dialog umgehen kann. Prueft ALLE offenen Tabs,
  * nicht nur den aktiven - das Fenster/die App zu schliessen wuerde sonst
- * ungesicherte Aenderungen in Hintergrund-Tabs stillschweigend verwerfen. */
+ * ungesicherte Aenderungen in Hintergrund-Tabs stillschweigend verwerfen.
+ *
+ * Zwei Phasen statt confirm_discard_doc() direkt in einer Schleife
+ * aufzurufen: erst ALLE Dialoge einholen, OHNE etwas anzuwenden (Phase 1);
+ * erst wenn wirklich jeder Tab bestaetigt hat, die Entscheidungen ausfuehren
+ * (Phase 2). Sonst koennte "Sichern" fuer Tab 0 schon auf die Festplatte
+ * schreiben, bevor der Nutzer bei Tab 1 "Abbrechen" waehlt und den ganzen
+ * Vorgang abbricht - der bereits geschriebene Tab 0 liesse sich dann nicht
+ * mehr zurueckholen. */
 static int should_close(void) {
+    int original_active = g_active_doc;
+    int choices[MAX_TABS]; /* -1 = sauber, sonst der Alert-Rueckgabewert */
+
     for (int i = 0; i < g_doc_count; i++) {
-        if (!confirm_discard_doc(&g_docs[i])) {
+        if (!doc_is_dirty(&g_docs[i])) {
+            choices[i] = -1;
+            continue;
+        }
+        if (i != g_active_doc) {
+            /* Sichtbar machen, BEVOR der Dialog erscheint - sonst fragt er
+             * nach einem Dokument, das gerade gar nicht auf dem Bildschirm
+             * zu sehen ist. */
+            switch_to_tab(i);
+            btn_app_request_redraw();
+        }
+        int choice = btn_show_unsaved_changes_alert(doc_display_name(&g_docs[i]));
+        if (choice == 0) {
+            switch_to_tab(original_active);
             return 0;
+        }
+        choices[i] = choice;
+    }
+    switch_to_tab(original_active);
+
+    for (int i = 0; i < g_doc_count; i++) {
+        if (choices[i] == 1) {
+            if (!perform_save_doc(&g_docs[i], 0)) {
+                return 0;
+            }
+        } else if (choices[i] == 2) {
+            g_docs[i].saved_edit_seq = g_docs[i].editor.edit_seq;
         }
     }
     return 1;
@@ -844,18 +947,23 @@ static void on_draw(CGContextRef ctx, CGRect bounds) {
  * entweder den "+"-Knopf nach dem letzten Tab, das Schliessen-"x" eines
  * Tabs, oder den Tab-Koerper selbst (Tab wechseln). */
 static void handle_tab_bar_click(double x) {
-    double new_x = (double)g_doc_count * BTN_TAB_ITEM_WIDTH;
+    /* btn_tab_width_for() statt der festen BTN_TAB_ITEM_WIDTH: sobald so
+     * viele Tabs offen sind, dass sie nicht mehr in voller Breite ins
+     * Fenster passen, schrumpft render.c sie beim Zeichnen gleichmaessig -
+     * dieselbe Funktion hier haelt die Klick-Trefferpruefung synchron dazu. */
+    double tab_width = btn_tab_width_for(g_doc_count, g_bounds.size.width);
+    double new_x = (double)g_doc_count * tab_width;
     if (x >= new_x && x < new_x + BTN_TAB_NEW_WIDTH) {
         new_tab_or_reuse_blank();
         return;
     }
 
-    int index = (int)(x / BTN_TAB_ITEM_WIDTH);
+    int index = (int)(x / tab_width);
     if (index < 0 || index >= g_doc_count) {
         return;
     }
-    double tab_x = (double)index * BTN_TAB_ITEM_WIDTH;
-    int close_clicked = (x >= tab_x + BTN_TAB_ITEM_WIDTH - BTN_TAB_CLOSE_WIDTH);
+    double tab_x = (double)index * tab_width;
+    int close_clicked = (x >= tab_x + tab_width - BTN_TAB_CLOSE_WIDTH);
     if (close_clicked) {
         close_tab(index);
     } else if (index != g_active_doc) {
@@ -1209,7 +1317,12 @@ static void on_menu(int tag) {
         case BTN_MENU_PASTE: {
             size_t clip_len;
             clip = btn_pasteboard_copy_string(&clip_len);
-            editor_insert_text(&active_doc()->editor, clip, clip_len);
+            /* replace_selection() statt editor_insert_text() direkt: die
+             * Zwischenablage kann eine gueltige, aber leere Zeichenkette
+             * liefern (z.B. wenn sie kein Textformat enthaelt) - dann wuerde
+             * editor_insert_text()s len==0-Guard eine bestehende Selektion
+             * stehen lassen statt sie zu ersetzen. */
+            replace_selection(&active_doc()->editor, clip, clip_len);
             free(clip);
             break;
         }

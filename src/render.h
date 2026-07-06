@@ -61,6 +61,15 @@ void btn_layout_free(BtnRow *rows);
  * zugeschlagen, nicht dem Ende der vorherigen). */
 size_t btn_layout_row_for_offset(const BtnRow *rows, size_t row_count, size_t offset);
 
+/* Tatsaechliche Breite eines einzelnen Tabs bei gegebener Tab-Anzahl und
+ * Fensterbreite - volle BTN_TAB_ITEM_WIDTH, solange alles hineinpasst,
+ * sonst gleichmaessig geschrumpft (nie unter 40pt). main.c's Hit-Testing
+ * (handle_tab_bar_click) MUSS dieselbe Funktion aufrufen wie das Zeichnen
+ * hier, sonst laufen Klick-Trefferpruefung und Darstellung auseinander,
+ * sobald so viele Tabs offen sind, dass sie nicht mehr in voller Breite
+ * passen. */
+double btn_tab_width_for(int count, double window_width);
+
 /* Zeichnet die Tableiste in den obersten BTN_TAB_BAR_HEIGHT Punkten von
  * bounds - labels[i] ist der bereits fertig formatierte Titel des i-ten
  * Tabs (main.c setzt dort z.B. ein Punkt-Praefix bei ungesicherten
