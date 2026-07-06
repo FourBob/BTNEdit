@@ -13,7 +13,7 @@ struct BtnLangSpec {
     const char *const *keywords; /* NULL-terminiertes Array */
     int line_comment_slash;      /* // */
     int line_comment_hash;       /* # als Kommentar (Python/Shell) */
-    int block_comment;           /* /* ... *\/ */
+    int block_comment;           /* Blockkommentare wie in C */
     int preprocessor_hash;       /* # am Zeilenanfang = Praeprozessor (C) */
 };
 
