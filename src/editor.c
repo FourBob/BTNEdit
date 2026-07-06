@@ -281,6 +281,24 @@ size_t editor_word_count(Editor *ed) {
     return count;
 }
 
+size_t editor_utf8_seq_start(Editor *ed, size_t pos) {
+    size_t len = editor_length(ed);
+    if (pos >= len) {
+        return pos;
+    }
+    size_t start = pos;
+    size_t steps = 0;
+    while (steps < 3 && start > 0 && (((unsigned char)gb_char_at(&ed->buffer, start)) & 0xC0) == 0x80) {
+        start--;
+        steps++;
+    }
+    return start;
+}
+
+void editor_mark_cursor_moved(Editor *ed) {
+    ed->suppress_coalesce = 1;
+}
+
 static size_t advance_tab_stop(size_t col) {
     return ((col / BTN_TAB_WIDTH) + 1) * BTN_TAB_WIDTH;
 }
@@ -447,7 +465,7 @@ void editor_move(Editor *ed, BtnMove move, int extend) {
     }
 
     ed->desired_col = UNSET_COL;
-    ed->suppress_coalesce = 1;
+    editor_mark_cursor_moved(ed);
     ed->cursor = new_pos;
     if (!extend) {
         ed->anchor = new_pos;
@@ -464,7 +482,7 @@ void editor_set_cursor(Editor *ed, size_t offset, int extend) {
         ed->anchor = offset;
     }
     ed->desired_col = UNSET_COL;
-    ed->suppress_coalesce = 1;
+    editor_mark_cursor_moved(ed);
 }
 
 void editor_select_word_at(Editor *ed, size_t offset) {
@@ -507,7 +525,7 @@ void editor_select_word_at(Editor *ed, size_t offset) {
     ed->anchor = start;
     ed->cursor = end;
     ed->desired_col = UNSET_COL;
-    ed->suppress_coalesce = 1;
+    editor_mark_cursor_moved(ed);
 }
 
 void editor_select_line_at(Editor *ed, size_t offset) {
@@ -522,14 +540,14 @@ void editor_select_line_at(Editor *ed, size_t offset) {
     ed->anchor = start;
     ed->cursor = end;
     ed->desired_col = UNSET_COL;
-    ed->suppress_coalesce = 1;
+    editor_mark_cursor_moved(ed);
 }
 
 void editor_select_all(Editor *ed) {
     ed->anchor = 0;
     ed->cursor = editor_length(ed);
     ed->desired_col = UNSET_COL;
-    ed->suppress_coalesce = 1;
+    editor_mark_cursor_moved(ed);
 }
 
 /* ---- Kopieren ---- */
@@ -569,7 +587,7 @@ void editor_undo(Editor *ed) {
     }
     ed->anchor = ed->cursor;
     ed->desired_col = UNSET_COL;
-    ed->suppress_coalesce = 1;
+    editor_mark_cursor_moved(ed);
     ed->edit_seq++;
 }
 
@@ -589,6 +607,6 @@ void editor_redo(Editor *ed) {
     st->pos++;
     ed->anchor = ed->cursor;
     ed->desired_col = UNSET_COL;
-    ed->suppress_coalesce = 1;
+    editor_mark_cursor_moved(ed);
     ed->edit_seq++;
 }

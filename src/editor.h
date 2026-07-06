@@ -93,6 +93,19 @@ size_t editor_offset_for_column_in_range(Editor *ed, size_t range_start, size_t 
 /* Naechster Tabstopp ab der gegebenen Spalte. */
 size_t editor_tab_advance(size_t col);
 
+/* Anfang der UTF-8-Sequenz, die das Byte bei pos enthaelt (pos selbst,
+ * falls es schon ein Lead-/ASCII-Byte ist). Fuer render.c's Wortumbruch,
+ * damit ein erzwungener Umbruch (kein Leerzeichen gefunden) nie mitten in
+ * einem mehrbytigen Zeichen landet. */
+size_t editor_utf8_seq_start(Editor *ed, size_t pos);
+
+/* Setzt suppress_coalesce - von jeder Cursor-Neupositionierung ausserhalb
+ * von editor.c aufzurufen (z.B. main.c's wortumbruch-bewusste Zeilen-
+ * bewegung), damit Tippen danach nicht faelschlich mit einem alten
+ * Undo-Schritt zusammengefasst wird. editor.c's eigene Cursor-Funktionen
+ * rufen das intern bereits selbst auf. */
+void editor_mark_cursor_moved(Editor *ed);
+
 int editor_has_selection(Editor *ed);
 size_t editor_selection_start(Editor *ed);
 size_t editor_selection_end(Editor *ed);

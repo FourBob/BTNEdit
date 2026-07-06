@@ -125,7 +125,7 @@ static void commit_cursor(size_t new_offset, int extend, size_t desired_col) {
         g_editor.anchor = new_offset;
     }
     g_editor.desired_col = desired_col;
-    g_editor.suppress_coalesce = 1;
+    editor_mark_cursor_moved(&g_editor);
 }
 
 /* Wortumbruch-bewusste vertikale Bewegung (Auf/Ab bewegen sich um eine
@@ -142,16 +142,20 @@ static void move_visual_row(int direction, int extend) {
                      : editor_visual_column_in_range(&g_editor, rows[cur_row].start, g_editor.cursor);
 
     size_t new_offset;
+    size_t new_col;
     if (direction < 0 && cur_row == 0) {
         new_offset = 0;
+        new_col = 0;
     } else if (direction > 0 && cur_row + 1 >= row_count) {
         new_offset = editor_length(&g_editor);
+        new_col = editor_visual_column_in_range(&g_editor, rows[cur_row].start, new_offset);
     } else {
         size_t target_row = (direction < 0) ? cur_row - 1 : cur_row + 1;
         new_offset = editor_offset_for_column_in_range(&g_editor, rows[target_row].start, rows[target_row].len, col);
+        new_col = col;
     }
     btn_layout_free(rows);
-    commit_cursor(new_offset, extend, col);
+    commit_cursor(new_offset, extend, new_col);
 }
 
 /* Pos1/Ende und Cmd+Links/Rechts springen an Anfang/Ende der aktuellen
@@ -244,6 +248,12 @@ static int confirm_discard_if_dirty(void) {
     if (choice == 1) {
         return perform_save(0);
     }
+    /* choice == 2, "Nicht sichern" - g_saved_edit_seq trotzdem synchronisieren,
+     * sonst bliebe is_dirty() weiterhin wahr und der Dialog wuerde beim
+     * naechsten should_close()-Aufruf (z.B. windowShouldClose: gefolgt von
+     * applicationShouldTerminate: in derselben Schliessen-Kette) ueberraschend
+     * ein zweites Mal erscheinen. */
+    g_saved_edit_seq = g_editor.edit_seq;
     return 1;
 }
 

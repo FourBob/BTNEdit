@@ -192,7 +192,22 @@ BtnRow *btn_layout_build(Editor *ed, double text_width, size_t *out_row_count) {
         long new_col = (c == '\t') ? (long)editor_tab_advance((size_t)col) : col + 1;
 
         if (new_col > chars_per_row && i > row_start) {
-            size_t break_at = (last_break != (size_t)-1 && last_break > row_start) ? last_break : i;
+            size_t break_at;
+            if (last_break != (size_t)-1 && last_break > row_start) {
+                break_at = last_break;
+            } else {
+                /* Kein Leerzeichen zum Umbrechen gefunden - erzwungener
+                 * Umbruch bei i, aber i kann mitten in einer mehrbyte
+                 * UTF-8-Sequenz liegen (jedes Byte treibt col unabhaengig
+                 * voran). editor_utf8_seq_start() zieht den Bruch auf den
+                 * Sequenzanfang zurueck, damit CFStringCreateWithBytes()
+                 * nie ein halbes Zeichen sieht. Faellt seq_start auf oder
+                 * vor row_start (das Zeichen allein ist breiter als die
+                 * ganze Zeile), bleibt i als letzter Ausweg, um weiterhin
+                 * garantiert voranzukommen. */
+                size_t seq_start = editor_utf8_seq_start(ed, i);
+                break_at = (seq_start > row_start) ? seq_start : i;
+            }
             rows_push(&rows, &count, &cap, row_start, break_at - row_start, logical_line, row_start != line_start);
             row_start = break_at;
             col = (long)editor_visual_column_in_range(ed, row_start, i);
@@ -442,6 +457,14 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
 
             CFStringRef lineStr = CFStringCreateWithBytes(NULL, (const UInt8 *)disp,
                                                            (CFIndex)disp_len, kCFStringEncodingUTF8, false);
+            if (!lineStr) {
+                /* Verteidigung in der Tiefe: sollte disp trotz des
+                 * seq_start-Fixes in btn_layout_build() doch einmal keine
+                 * gueltige UTF-8-Sequenz sein, lieber diese Zeile ohne Text
+                 * ueberspringen als mit NULL weiterzurechnen (Absturz). */
+                free(disp);
+                continue;
+            }
             /* CFAttributedString-Ranges zaehlen in UTF-16-Einheiten, waehrend
              * disp_len/col_from/col_to UTF-8-BYTES zaehlen - fuer reinen
              * ASCII-Text ist das zufaellig identisch, aber jedes mehrbytige
