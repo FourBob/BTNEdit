@@ -14,6 +14,16 @@ extern "C" {
 #define BTN_LINE_HEIGHT 18.0
 #define BTN_FOOTER_HEIGHT 22.0
 
+/* Tableiste oben im Fenster (mehrere Dokumente) - main.c braucht diese
+ * Masse sowohl zum Reservieren der Content-Flaeche (bounds.size.height um
+ * BTN_TAB_BAR_HEIGHT verkleinern, siehe content_bounds() dort) als auch
+ * fuers eigene Hit-Testing von Tab-Klicks/Schliessen-Kreuz/"+"-Knopf -
+ * beides muss dieselben Masse verwenden wie das Zeichnen hier. */
+#define BTN_TAB_BAR_HEIGHT 32.0
+#define BTN_TAB_ITEM_WIDTH 160.0
+#define BTN_TAB_CLOSE_WIDTH 22.0
+#define BTN_TAB_NEW_WIDTH 32.0
+
 /* Eine visuelle Zeile (Row) nach Wortumbruch: [start, start+len) im
  * Puffer. logical_line ist die zugehoerige "echte" Zeile (fuer die
  * Gutter-Nummerierung); is_continuation markiert Folge-Rows einer per
@@ -40,6 +50,13 @@ void btn_layout_free(BtnRow *rows);
  * einem Zeilenumbruch werden dem Zeilenanfang der naechsten Row
  * zugeschlagen, nicht dem Ende der vorherigen). */
 size_t btn_layout_row_for_offset(const BtnRow *rows, size_t row_count, size_t offset);
+
+/* Zeichnet die Tableiste in den obersten BTN_TAB_BAR_HEIGHT Punkten von
+ * bounds - labels[i] ist der bereits fertig formatierte Titel des i-ten
+ * Tabs (main.c setzt dort z.B. ein Punkt-Praefix bei ungesicherten
+ * Aenderungen), active der Index des aktiven Tabs. Reserviert am Ende
+ * einen "+"-Knopf zum Anlegen eines neuen Tabs. */
+void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labels, int count, int active);
 
 /* Zeichnet einen Frame: Hintergrund, Selektion, Text (optional per lang
  * syntax-hervorgehoben), Cursor, Zeilennummern-Gutter und die

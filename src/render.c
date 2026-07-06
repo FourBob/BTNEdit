@@ -333,6 +333,95 @@ static void draw_footer(CGContextRef ctx, CGRect bounds, Editor *ed) {
     CGColorRelease(gray);
 }
 
+/* Zeichnet text linksbuendig bei (x,y) mit den gegebenen Attributen -
+ * kleiner gemeinsamer Helfer, um das CFString/CTLine-Boilerplate nicht
+ * drei Mal (Tab-Label, Schliessen-Kreuz, "+"-Knopf) zu wiederholen. Gibt
+ * die gemessene Textbreite zurueck, falls der Aufrufer zentrieren will. */
+static double draw_text_at(CGContextRef ctx, const char *text, double x, double y, CFDictionaryRef attrs) {
+    CFStringRef str = CFStringCreateWithCString(NULL, text, kCFStringEncodingUTF8);
+    CFAttributedStringRef attrStr = CFAttributedStringCreate(NULL, str, attrs);
+    CTLineRef line = CTLineCreateWithAttributedString(attrStr);
+    double width = CTLineGetTypographicBounds(line, NULL, NULL, NULL);
+    CGContextSetTextPosition(ctx, x, y);
+    CTLineDraw(line, ctx);
+    CFRelease(line);
+    CFRelease(attrStr);
+    CFRelease(str);
+    return width;
+}
+
+void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labels, int count, int active) {
+    double bar_top = bounds.size.height - BTN_TAB_BAR_HEIGHT;
+    double text_y = bar_top + (BTN_TAB_BAR_HEIGHT - FONT_SIZE) / 2.0 + 3.0;
+
+    CGContextSetRGBFillColor(ctx, 0.80, 0.80, 0.80, 1.0);
+    CGContextFillRect(ctx, CGRectMake(0, bar_top, bounds.size.width, BTN_TAB_BAR_HEIGHT));
+
+    CTFontRef font = get_font();
+    CGColorRef textColor = CGColorCreateGenericRGB(0.15, 0.15, 0.15, 1.0);
+    CGColorRef dimColor = CGColorCreateGenericRGB(0.45, 0.45, 0.45, 1.0);
+    CFDictionaryRef attrs = make_attrs(font, textColor);
+    CFDictionaryRef dimAttrs = make_attrs(font, dimColor);
+
+    for (int i = 0; i < count; i++) {
+        double tab_x = (double)i * BTN_TAB_ITEM_WIDTH;
+        int is_active = (i == active);
+
+        CGContextSetRGBFillColor(ctx, is_active ? 0.97 : 0.80, is_active ? 0.97 : 0.80,
+                                  is_active ? 0.97 : 0.80, 1.0);
+        CGContextFillRect(ctx, CGRectMake(tab_x, bar_top, BTN_TAB_ITEM_WIDTH, BTN_TAB_BAR_HEIGHT));
+
+        CGContextSetRGBStrokeColor(ctx, 0.65, 0.65, 0.65, 1.0);
+        CGContextSetLineWidth(ctx, 1.0);
+        CGPoint divider[2] = { { tab_x, bar_top }, { tab_x, bar_top + BTN_TAB_BAR_HEIGHT } };
+        CGContextStrokeLineSegments(ctx, divider, 2);
+
+        /* Label ggf. kuerzen ("...") bis es in die verfuegbare Breite passt.
+         * Monospace-Schrift -> Breite pro Byte ist konstant (get_char_width()),
+         * eine einzige Kapazitaetsrechnung reicht statt iterativem Neumessen;
+         * wie beim Rest der App (editor_visual_column_in_range) ist das eine
+         * Byte- statt Codepoint-Naeherung - fuer Dateinamen in der Praxis
+         * unauffaellig. */
+        double avail = BTN_TAB_ITEM_WIDTH - 2.0 * LEFT_PADDING - BTN_TAB_CLOSE_WIDTH;
+        size_t max_bytes = (size_t)(avail / get_char_width());
+        if (max_bytes < 1) {
+            max_bytes = 1;
+        }
+        char buf[256];
+        size_t label_len = strlen(labels[i]);
+        int truncated = 0;
+        if (label_len > max_bytes) {
+            label_len = max_bytes > 3 ? max_bytes - 3 : max_bytes;
+            truncated = 1;
+        }
+        if (label_len >= sizeof(buf) - 4) {
+            label_len = sizeof(buf) - 4;
+        }
+        memcpy(buf, labels[i], label_len);
+        buf[label_len] = '\0';
+        if (truncated) {
+            strcat(buf, "...");
+        }
+        draw_text_at(ctx, buf, tab_x + LEFT_PADDING, text_y, attrs);
+
+        double close_x = tab_x + BTN_TAB_ITEM_WIDTH - BTN_TAB_CLOSE_WIDTH / 2.0 - 4.0;
+        draw_text_at(ctx, "×", close_x, text_y, dimAttrs);
+    }
+
+    double new_x = (double)count * BTN_TAB_ITEM_WIDTH;
+    draw_text_at(ctx, "+", new_x + (BTN_TAB_NEW_WIDTH - get_char_width()) / 2.0, text_y, dimAttrs);
+
+    CGContextSetRGBStrokeColor(ctx, 0.55, 0.55, 0.55, 1.0);
+    CGContextSetLineWidth(ctx, 1.0);
+    CGPoint bottom_divider[2] = { { 0, bar_top }, { bounds.size.width, bar_top } };
+    CGContextStrokeLineSegments(ctx, bottom_divider, 2);
+
+    CFRelease(attrs);
+    CFRelease(dimAttrs);
+    CGColorRelease(textColor);
+    CGColorRelease(dimColor);
+}
+
 /* Kommentar-Zustand direkt vor logical_line, indem alle vorherigen Zeilen
  * einmal (nur fuers Zustands-Tracking, max_tokens=0) tokenisiert werden -
  * noetig, damit mehrzeilige Blockkommentare beim Scrollen mitten ins
