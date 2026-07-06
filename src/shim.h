@@ -120,6 +120,26 @@ void btn_set_window_title(const char *title);
 void btn_app_set_document_edited(int edited);
 void btn_app_close_window(void);
 
+/* Wird von btn_print_pages() einmal pro Seite aufgerufen. page_rect nutzt
+ * stets denselben (0,0)-basierten, nicht geflippten Koordinatenraum wie
+ * btn_draw_callback (siehe btn_app_set_draw_callback) - der Shim verschiebt
+ * die CTM intern pro Seite, damit main.c/render.c dieselbe Zeichenlogik wie
+ * beim Bildschirm wiederverwenden koennen, ohne die tatsaechliche Position
+ * auf dem langen Druck-View zu kennen. page_index ist 0-basiert. */
+typedef void (*btn_print_page_callback)(CGContextRef ctx, CGRect page_rect, int page_index);
+
+/* Bedruckbare Seitenflaeche (Papierformat minus Systemraender) der aktuellen
+ * Standard-Druckereinstellungen - main.c braucht das VOR dem Aufbau des
+ * Zeilenumbruch-Layouts fuers Drucken (btn_layout_build mit Seitenbreite),
+ * um die Rows korrekt auf Seiten aufzuteilen. */
+CGSize btn_print_page_size(void);
+
+/* Zeigt den System-Druckdialog (NSPrintOperation) und ruft cb fuer jede der
+ * page_count Seiten auf (page_size wie von btn_print_page_size() geliefert).
+ * Reine Chrome wie die anderen Systemdialoge - kennt weder Editor noch
+ * Zeilenumbruch, reicht nur CGContext/Seiten-Rect an main.c/render.c durch. */
+void btn_print_pages(int page_count, CGSize page_size, btn_print_page_callback cb);
+
 #ifdef __cplusplus
 }
 #endif

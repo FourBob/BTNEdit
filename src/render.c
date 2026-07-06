@@ -20,6 +20,7 @@
 #define LEFT_PADDING 8.0
 #define TOP_PADDING 8.0
 #define BTN_MAX_TOKENS_PER_LINE 512
+#define PRINT_MARGIN 24.0
 
 static CTFontRef g_font = NULL;
 static double g_char_width = 0.0;
@@ -557,6 +558,103 @@ static int comment_state_before_line(Editor *ed, const BtnLangSpec *lang, size_t
     return state;
 }
 
+/* Tokenisiert (falls lang != NULL, mit Zeilen-Cache ueber cached_line) und
+ * zeichnet genau eine Row als CTLine bei (x, top_y) - der Kern von
+ * btn_render_frame()s Zeilenschleife, ausgelagert, damit btn_render_print_page()
+ * (Druck) dieselbe Hervorhebungs-/Zeichenlogik nutzt statt sie zu duplizieren.
+ * Kennt bewusst keine Selektion/Cursor/Klammer-Hervorhebung - das bleibt
+ * Sache der jeweiligen Aufrufer (Bildschirm hat sie, Druck nicht). */
+static void draw_row_line(CGContextRef ctx, Editor *ed, const BtnLangSpec *lang,
+                           const BtnRow *rows, size_t r, double x, double top_y,
+                           CFDictionaryRef attrs, size_t *cached_line, size_t *cached_line_start,
+                           int *comment_state, BtnToken *tokens, size_t *token_count) {
+    size_t row_start = rows[r].start;
+    size_t row_len = rows[r].len;
+    size_t row_end = row_start + row_len;
+
+    if (lang) {
+        size_t ll = rows[r].logical_line;
+        if (ll != *cached_line) {
+            size_t ls, llen;
+            editor_line_bounds(ed, ll, &ls, &llen);
+            char *text = gb_copy_range(&ed->buffer, ls, llen);
+            int ends;
+            *token_count = btn_highlight_tokenize(text, llen, lang, *comment_state, &ends,
+                                                   tokens, BTN_MAX_TOKENS_PER_LINE);
+            if (*token_count > BTN_MAX_TOKENS_PER_LINE) {
+                *token_count = BTN_MAX_TOKENS_PER_LINE;
+            }
+            free(text);
+            *comment_state = ends;
+            *cached_line = ll;
+            *cached_line_start = ls;
+        }
+    }
+
+    if (row_len == 0) {
+        return;
+    }
+
+    char *raw = gb_copy_range(&ed->buffer, row_start, row_len);
+    size_t disp_len;
+    char *disp = expand_tabs_for_display(raw, row_len, &disp_len);
+    free(raw);
+
+    CFStringRef lineStr = CFStringCreateWithBytes(NULL, (const UInt8 *)disp,
+                                                   (CFIndex)disp_len, kCFStringEncodingUTF8, false);
+    if (!lineStr) {
+        /* Verteidigung in der Tiefe: sollte disp trotz des seq_start-Fixes
+         * in btn_layout_build() doch einmal keine gueltige UTF-8-Sequenz
+         * sein, lieber diese Zeile ohne Text ueberspringen als mit NULL
+         * weiterzurechnen (Absturz). */
+        free(disp);
+        return;
+    }
+    CFIndex utf16_len = CFStringGetLength(lineStr);
+    CFMutableAttributedStringRef attrStr = CFAttributedStringCreateMutable(NULL, 0);
+    CFAttributedStringReplaceString(attrStr, CFRangeMake(0, 0), lineStr);
+    CFAttributedStringSetAttributes(attrStr, CFRangeMake(0, utf16_len), attrs, true);
+
+    for (size_t t = 0; t < *token_count; t++) {
+        if (tokens[t].kind == BTN_TOK_NORMAL) {
+            continue;
+        }
+        size_t tok_abs_start = *cached_line_start + tokens[t].start;
+        size_t tok_abs_end = tok_abs_start + tokens[t].len;
+        size_t clip_start = tok_abs_start > row_start ? tok_abs_start : row_start;
+        size_t clip_end = tok_abs_end < row_end ? tok_abs_end : row_end;
+        if (clip_start >= clip_end) {
+            continue;
+        }
+        size_t col_from = editor_visual_column_in_range(ed, row_start, clip_start);
+        size_t col_to = editor_visual_column_in_range(ed, row_start, clip_end);
+        if (col_to > disp_len) {
+            col_to = disp_len;
+        }
+        if (col_from >= col_to) {
+            continue;
+        }
+        CFIndex u16_from = utf16_offset_for_byte_offset(disp, col_from);
+        CFIndex u16_to = utf16_offset_for_byte_offset(disp, col_to);
+        if (u16_to > utf16_len) {
+            u16_to = utf16_len;
+        }
+        if (u16_from >= u16_to) {
+            continue;
+        }
+        CFAttributedStringSetAttribute(attrStr, CFRangeMake(u16_from, u16_to - u16_from),
+                                        kCTForegroundColorAttributeName, get_token_color(tokens[t].kind));
+    }
+
+    CTLineRef ctLine = CTLineCreateWithAttributedString(attrStr);
+    CGContextSetTextPosition(ctx, x, top_y + 4.0);
+    CTLineDraw(ctLine, ctx);
+    CFRelease(ctLine);
+    CFRelease(attrStr);
+    CFRelease(lineStr);
+    free(disp);
+}
+
 void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_row, const BtnLangSpec *lang) {
     CGContextSetRGBFillColor(ctx, 1.0, 1.0, 1.0, 1.0);
     CGContextFillRect(ctx, bounds);
@@ -612,25 +710,6 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
         size_t row_len = rows[r].len;
         size_t row_end = row_start + row_len;
 
-        if (lang) {
-            size_t ll = rows[r].logical_line;
-            if (ll != cached_line) {
-                size_t ls, llen;
-                editor_line_bounds(ed, ll, &ls, &llen);
-                char *text = gb_copy_range(&ed->buffer, ls, llen);
-                int ends;
-                token_count = btn_highlight_tokenize(text, llen, lang, comment_state, &ends,
-                                                      tokens, BTN_MAX_TOKENS_PER_LINE);
-                if (token_count > BTN_MAX_TOKENS_PER_LINE) {
-                    token_count = BTN_MAX_TOKENS_PER_LINE;
-                }
-                free(text);
-                comment_state = ends;
-                cached_line = ll;
-                cached_line_start = ls;
-            }
-        }
-
         if (has_sel) {
             size_t hi_from = sel_start > row_start ? sel_start : row_start;
             size_t hi_to = sel_end < row_end ? sel_end : row_end;
@@ -667,74 +746,8 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
             }
         }
 
-        if (row_len > 0) {
-            char *raw = gb_copy_range(&ed->buffer, row_start, row_len);
-            size_t disp_len;
-            char *disp = expand_tabs_for_display(raw, row_len, &disp_len);
-            free(raw);
-
-            CFStringRef lineStr = CFStringCreateWithBytes(NULL, (const UInt8 *)disp,
-                                                           (CFIndex)disp_len, kCFStringEncodingUTF8, false);
-            if (!lineStr) {
-                /* Verteidigung in der Tiefe: sollte disp trotz des
-                 * seq_start-Fixes in btn_layout_build() doch einmal keine
-                 * gueltige UTF-8-Sequenz sein, lieber diese Zeile ohne Text
-                 * ueberspringen als mit NULL weiterzurechnen (Absturz). */
-                free(disp);
-                continue;
-            }
-            /* CFAttributedString-Ranges zaehlen in UTF-16-Einheiten, waehrend
-             * disp_len/col_from/col_to UTF-8-BYTES zaehlen - fuer reinen
-             * ASCII-Text ist das zufaellig identisch, aber jedes mehrbytige
-             * Zeichen (Umlaut, Akzent, Emoji) wuerde sonst eine zu lange
-             * Range anfordern (Absturz/undefiniertes Verhalten) oder falsch
-             * eingefaerbte Grenzen erzeugen. utf16_offset_for_byte_offset()
-             * rechnet die Byte-Position sauber in die tatsaechliche
-             * String-Position um. */
-            CFIndex utf16_len = CFStringGetLength(lineStr);
-            CFMutableAttributedStringRef attrStr = CFAttributedStringCreateMutable(NULL, 0);
-            CFAttributedStringReplaceString(attrStr, CFRangeMake(0, 0), lineStr);
-            CFAttributedStringSetAttributes(attrStr, CFRangeMake(0, utf16_len), attrs, true);
-
-            for (size_t t = 0; t < token_count; t++) {
-                if (tokens[t].kind == BTN_TOK_NORMAL) {
-                    continue;
-                }
-                size_t tok_abs_start = cached_line_start + tokens[t].start;
-                size_t tok_abs_end = tok_abs_start + tokens[t].len;
-                size_t clip_start = tok_abs_start > row_start ? tok_abs_start : row_start;
-                size_t clip_end = tok_abs_end < row_end ? tok_abs_end : row_end;
-                if (clip_start >= clip_end) {
-                    continue;
-                }
-                size_t col_from = editor_visual_column_in_range(ed, row_start, clip_start);
-                size_t col_to = editor_visual_column_in_range(ed, row_start, clip_end);
-                if (col_to > disp_len) {
-                    col_to = disp_len;
-                }
-                if (col_from >= col_to) {
-                    continue;
-                }
-                CFIndex u16_from = utf16_offset_for_byte_offset(disp, col_from);
-                CFIndex u16_to = utf16_offset_for_byte_offset(disp, col_to);
-                if (u16_to > utf16_len) {
-                    u16_to = utf16_len;
-                }
-                if (u16_from >= u16_to) {
-                    continue;
-                }
-                CFAttributedStringSetAttribute(attrStr, CFRangeMake(u16_from, u16_to - u16_from),
-                                                kCTForegroundColorAttributeName, get_token_color(tokens[t].kind));
-            }
-
-            CTLineRef ctLine = CTLineCreateWithAttributedString(attrStr);
-            CGContextSetTextPosition(ctx, GUTTER_WIDTH + LEFT_PADDING, top_y + 4.0);
-            CTLineDraw(ctLine, ctx);
-            CFRelease(ctLine);
-            CFRelease(attrStr);
-            CFRelease(lineStr);
-            free(disp);
-        }
+        draw_row_line(ctx, ed, lang, rows, r, GUTTER_WIDTH + LEFT_PADDING, top_y, attrs,
+                       &cached_line, &cached_line_start, &comment_state, tokens, &token_count);
     }
 
     if (!has_sel) {
@@ -752,6 +765,57 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
     draw_footer(ctx, bounds, ed);
 
     btn_layout_free(rows);
+    CFRelease(attrs);
+    CGColorRelease(black);
+}
+
+size_t btn_rows_per_page(double page_height) {
+    double usable = page_height - 2.0 * PRINT_MARGIN;
+    long n = (long)(usable / LINE_HEIGHT);
+    return n > 0 ? (size_t)n : 1;
+}
+
+double btn_print_text_width(double page_width) {
+    double w = page_width - 2.0 * PRINT_MARGIN;
+    return w > 1.0 ? w : 1.0;
+}
+
+/* Zeichnet die Rows [first_row, first_row + btn_rows_per_page(page_rect.height))
+ * einer Druckseite - Text mit Syntax-Hervorhebung wie am Bildschirm, aber
+ * bewusst ohne Gutter/Cursor/Selektion/Statuszeile (fuer den Ausdruck
+ * irrelevant). page_rect ist wie bei btn_draw_callback nicht geflippt
+ * (Ursprung unten links); main.c/shim.m sorgen per CTM-Verschiebung dafuer,
+ * dass hier stets bei (0,0) beginnende Seitenkoordinaten ankommen (siehe
+ * btn_print_pages() in shim.m). */
+void btn_render_print_page(CGContextRef ctx, CGRect page_rect, Editor *ed, const BtnLangSpec *lang,
+                            const BtnRow *rows, size_t row_count, size_t first_row) {
+    CGContextSetRGBFillColor(ctx, 1.0, 1.0, 1.0, 1.0);
+    CGContextFillRect(ctx, page_rect);
+
+    CTFontRef font = get_font();
+    CGColorRef black = CGColorCreateGenericRGB(0.0, 0.0, 0.0, 1.0);
+    CFDictionaryRef attrs = make_attrs(font, black);
+
+    size_t cached_line = (size_t)-1;
+    size_t cached_line_start = 0;
+    BtnToken tokens[BTN_MAX_TOKENS_PER_LINE];
+    size_t token_count = 0;
+    int comment_state = 0;
+    if (lang && first_row < row_count) {
+        comment_state = comment_state_before_line(ed, lang, rows[first_row].logical_line);
+    }
+
+    double x = page_rect.origin.x + PRINT_MARGIN;
+    size_t r = first_row;
+    for (size_t i = 0; r < row_count; i++, r++) {
+        double top_y = page_rect.origin.y + page_rect.size.height - PRINT_MARGIN - (double)(i + 1) * LINE_HEIGHT;
+        if (top_y < page_rect.origin.y + PRINT_MARGIN) {
+            break;
+        }
+        draw_row_line(ctx, ed, lang, rows, r, x, top_y, attrs,
+                       &cached_line, &cached_line_start, &comment_state, tokens, &token_count);
+    }
+
     CFRelease(attrs);
     CGColorRelease(black);
 }

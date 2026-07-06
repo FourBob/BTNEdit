@@ -1263,6 +1263,50 @@ static void on_scroll(double delta_y) {
     btn_app_request_redraw();
 }
 
+/* Zustand fuer den laufenden Druckvorgang: btn_print_pages() (shim.m) ruft
+ * on_print_page() ohne Userdata-Parameter auf (wie g_draw_cb auch), deshalb
+ * hier als Globals wie active_doc()/g_bounds - waehrend eines Drucks kann
+ * ohnehin immer nur ein Dokument gedruckt werden, kein Nebenlaeufigkeits-
+ * Problem. */
+static Editor *g_print_editor = NULL;
+static const BtnLangSpec *g_print_lang = NULL;
+static BtnRow *g_print_rows = NULL;
+static size_t g_print_row_count = 0;
+static size_t g_print_rows_per_page = 1;
+
+static void on_print_page(CGContextRef ctx, CGRect page_rect, int page_index) {
+    size_t first_row = (size_t)page_index * g_print_rows_per_page;
+    btn_render_print_page(ctx, page_rect, g_print_editor, g_print_lang,
+                           g_print_rows, g_print_row_count, first_row);
+}
+
+static void perform_print(void) {
+    Document *doc = active_doc();
+    CGSize page_size = btn_print_page_size();
+
+    size_t row_count;
+    BtnRow *rows = btn_layout_build(&doc->editor, btn_print_text_width(page_size.width), &row_count);
+    size_t rows_per_page = btn_rows_per_page(page_size.height);
+    int page_count = (int)((row_count + rows_per_page - 1) / rows_per_page);
+    if (page_count < 1) {
+        page_count = 1;
+    }
+
+    g_print_editor = &doc->editor;
+    g_print_lang = btn_highlight_lang_for_path(doc->path);
+    g_print_rows = rows;
+    g_print_row_count = row_count;
+    g_print_rows_per_page = rows_per_page;
+
+    btn_print_pages(page_count, page_size, on_print_page);
+
+    btn_layout_free(rows);
+    g_print_editor = NULL;
+    g_print_lang = NULL;
+    g_print_rows = NULL;
+    g_print_row_count = 0;
+}
+
 static void on_menu(int tag) {
     char *clip;
 
@@ -1340,7 +1384,7 @@ static void on_menu(int tag) {
             open_find_bar();
             break;
         case BTN_MENU_PRINT:
-            fprintf(stderr, "BTNEdit: Menu-Aktion %d noch nicht implementiert\n", tag);
+            perform_print();
             break;
         case BTN_MENU_HELP:
             btn_show_help_alert();

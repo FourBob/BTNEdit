@@ -99,6 +99,26 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
  * unter Beruecksichtigung der aktuellen Scroll-Position. */
 size_t btn_hit_test(Editor *ed, CGRect bounds, double x, double y, long scroll_row);
 
+/* Wieviele Rows auf eine Druckseite der gegebenen Hoehe (in Punkten) passen -
+ * main.c braucht das vor dem Druck, um die per btn_layout_build() erzeugten
+ * Rows auf Seiten aufzuteilen, ohne render.c's Layout-Konstanten (Zeilenhoehe,
+ * Rand) selbst zu duplizieren. */
+size_t btn_rows_per_page(double page_height);
+
+/* Verfuegbare Textbreite auf einer Druckseite (Seitenbreite minus Rand) -
+ * das Gegenstueck zu btn_layout_text_width() fuers Drucken. main.c MUSS
+ * dieses Ergebnis (nicht die volle Seitenbreite) an btn_layout_build()
+ * uebergeben, sonst umbricht das Layout breiter als btn_render_print_page()
+ * tatsaechlich Platz laesst. */
+double btn_print_text_width(double page_width);
+
+/* Zeichnet eine einzelne Druckseite: Rows [first_row, first_row +
+ * btn_rows_per_page(page_rect.height)) mit Syntax-Hervorhebung wie am
+ * Bildschirm, aber ohne Gutter/Cursor/Selektion/Statuszeile. page_rect ist
+ * wie bei btn_draw_callback nicht geflippt (Ursprung unten links). */
+void btn_render_print_page(CGContextRef ctx, CGRect page_rect, Editor *ed, const BtnLangSpec *lang,
+                            const BtnRow *rows, size_t row_count, size_t first_row);
+
 #ifdef __cplusplus
 }
 #endif

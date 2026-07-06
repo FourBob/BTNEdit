@@ -419,3 +419,77 @@ void btn_app_close_window(void) {
      * nutzt) weiterhin fragen wuerde. */
     [g_window performClose:nil];
 }
+
+/* Reiner Druck-View: kennt weder Editor noch Zeilenumbruch, reicht beim
+ * Zeichnen nur CGContext + Seiten-Rect an den C-Callback durch - genau wie
+ * BTNContentView oben es fuer den Bildschirm mit g_draw_cb tut. Nicht
+ * geflippt (wie BTNContentView), Seite 1 liegt oben im (langen) Gesamtview,
+ * die letzte Seite unten. */
+@interface BTNPrintView : NSView {
+@public
+    btn_print_page_callback printCb;
+    int pageCount;
+    CGSize pageSize;
+}
+@end
+
+@implementation BTNPrintView
+
+- (BOOL)knowsPageRange:(NSRangePointer)range {
+    range->location = 1;
+    range->length = pageCount;
+    return YES;
+}
+
+- (NSRect)rectForPage:(NSInteger)page {
+    double totalHeight = (double)pageCount * pageSize.height;
+    double top = totalHeight - (double)page * pageSize.height;
+    return NSMakeRect(0, top, pageSize.width, pageSize.height);
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    if (!printCb) {
+        return;
+    }
+    /* dirtyRect ist hier stets exakt das von rectForPage: gelieferte Rect
+     * (eine Seite) - CTM so verschieben, dass der Callback wie gewohnt bei
+     * (0,0) beginnende Seitenkoordinaten sieht (siehe btn_print_page_callback
+     * in shim.h). */
+    CGContextRef ctx = [[NSGraphicsContext currentContext] CGContext];
+    CGContextSaveGState(ctx);
+    CGContextTranslateCTM(ctx, dirtyRect.origin.x, dirtyRect.origin.y);
+    double totalHeight = (double)pageCount * pageSize.height;
+    int page_index = (int)(((totalHeight - dirtyRect.origin.y) / pageSize.height) - 1.0 + 0.5);
+    printCb(ctx, CGRectMake(0, 0, pageSize.width, pageSize.height), page_index);
+    CGContextRestoreGState(ctx);
+}
+
+@end
+
+CGSize btn_print_page_size(void) {
+    @autoreleasepool {
+        NSPrintInfo *info = [NSPrintInfo sharedPrintInfo];
+        NSSize paper = [info paperSize];
+        double width = paper.width - [info leftMargin] - [info rightMargin];
+        double height = paper.height - [info topMargin] - [info bottomMargin];
+        return CGSizeMake(width > 1.0 ? width : 1.0, height > 1.0 ? height : 1.0);
+    }
+}
+
+void btn_print_pages(int page_count, CGSize page_size, btn_print_page_callback cb) {
+    @autoreleasepool {
+        if (page_count < 1) {
+            page_count = 1;
+        }
+        BTNPrintView *view = [[BTNPrintView alloc] initWithFrame:NSMakeRect(0, 0, page_size.width,
+                                                                             (double)page_count * page_size.height)];
+        view->printCb = cb;
+        view->pageCount = page_count;
+        view->pageSize = page_size;
+
+        NSPrintOperation *op = [NSPrintOperation printOperationWithView:view];
+        [op setShowsPrintPanel:YES];
+        [op runOperation];
+        [view release];
+    }
+}

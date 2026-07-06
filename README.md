@@ -26,6 +26,8 @@ Graphics/Core Text gezeichnet.
   Spanisch, Chinesisch (vereinfacht)
 - Ungesichert-Dialog beim Schließen/Beenden (pro Tab, keiner geht verloren)
 - Hilfe-Menü mit Tastenkürzel-Übersicht
+- Drucken (über den System-Druckdialog, mit Syntax-Highlighting, seitenweise
+  umgebrochen)
 
 Was noch fehlt bzw. bekannte Einschränkungen: siehe [TODO.md](TODO.md).
 

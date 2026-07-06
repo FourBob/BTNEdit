@@ -3,12 +3,6 @@
 Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
 (nicht nur abgehakt liegen gelassen).
 
-## Von der ursprünglichen Feature-Liste noch nicht umgesetzt
-
-- **Drucken** - `BTN_MENU_PRINT` ist aktuell nur ein Stub (druckt eine
-  Debug-Meldung). Müsste über `NSPrintOperation` gehen (reine Chrome wie
-  `NSWindow`, kein Content-Widget - passt zur bestehenden Architektur).
-
 ## Bekannte Einschränkungen (bewusst zurückgestellt, kein akuter Bug)
 
 - Cursor-/Selektions-/Hit-Testing-Spaltenrechnung (`editor_visual_column_in_range`
