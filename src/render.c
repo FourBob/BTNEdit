@@ -575,6 +575,19 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
     size_t sel_start = has_sel ? editor_selection_start(ed) : 0;
     size_t sel_end = has_sel ? editor_selection_end(ed) : 0;
 
+    /* Klammer-Hervorhebung: nur ohne aktive Selektion (wie beim Cursor
+     * selbst weiter unten) - klebt der Cursor an einer Klammer, werden sie
+     * und ihre Gegenklammer markiert. */
+    int has_bracket_match = 0;
+    size_t bracket_a = 0, bracket_b = 0;
+    if (!has_sel) {
+        size_t adj;
+        if (editor_cursor_adjacent_bracket(ed, &adj)) {
+            has_bracket_match = editor_find_matching_bracket(ed, adj, &bracket_b);
+            bracket_a = adj;
+        }
+    }
+
     /* Tokens werden nur einmal pro logischer Zeile berechnet und ueber alle
      * ihre umgebrochenen Rows wiederverwendet (Zeilen sind in Dokument-
      * reihenfolge, logical_line ist also innerhalb der sichtbaren Rows
@@ -639,6 +652,18 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
                 }
                 CGContextSetRGBFillColor(ctx, 0.68, 0.82, 1.0, 0.55);
                 CGContextFillRect(ctx, CGRectMake(hx, top_y, hw, LINE_HEIGHT));
+            }
+        }
+
+        if (has_bracket_match) {
+            for (int b = 0; b < 2; b++) {
+                size_t pos = (b == 0) ? bracket_a : bracket_b;
+                if (pos >= row_start && pos < row_end) {
+                    size_t col = editor_visual_column_in_range(ed, row_start, pos);
+                    double bx = GUTTER_WIDTH + LEFT_PADDING + (double)col * char_width;
+                    CGContextSetRGBFillColor(ctx, 0.75, 0.85, 1.0, 0.6);
+                    CGContextFillRect(ctx, CGRectMake(bx, top_y, char_width, LINE_HEIGHT));
+                }
             }
         }
 

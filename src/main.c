@@ -1169,7 +1169,13 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
     } else if (c == 0x7F) {
         editor_delete_backward(ed);
     } else if (c >= 0x20) {
-        editor_insert_text(ed, characters, strlen(characters));
+        /* editor_handle_bracket_key() deckt Klammern-Auto-Vervollstaendigen
+         * und Typdurchlauf ab (siehe editor.c) - fuer alles andere normal
+         * einfuegen. Klammern sind ASCII, characters ist bei einem
+         * Klammer-Byte also garantiert genau dieses eine Zeichen. */
+        if (!editor_handle_bracket_key(ed, (char)c)) {
+            editor_insert_text(ed, characters, strlen(characters));
+        }
     } else {
         return;
     }

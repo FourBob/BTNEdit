@@ -19,6 +19,27 @@ static int is_word_char(char c) {
            (c >= '0' && c <= '9') || c == '_';
 }
 
+static int is_bracket_char(char c) {
+    return c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}';
+}
+
+static int is_closing_bracket(char c) {
+    return c == ')' || c == ']' || c == '}';
+}
+
+/* Gegenstueck einer OEFFNENDEN Klammer, oder 0 wenn c keine ist - genutzt
+ * sowohl fuers automatische Schliessen (editor_handle_bracket_key) als auch
+ * fuers Loeschen eines leeren Klammerpaars auf einen Schlag
+ * (editor_delete_backward). */
+static char matching_close_for(char c) {
+    switch (c) {
+        case '(': return ')';
+        case '[': return ']';
+        case '{': return '}';
+        default: return 0;
+    }
+}
+
 static size_t word_left(Editor *ed, size_t pos) {
     if (pos == 0) {
         return 0;
@@ -351,6 +372,85 @@ size_t editor_selection_end(Editor *ed) {
     return ed->cursor > ed->anchor ? ed->cursor : ed->anchor;
 }
 
+/* Steht bei offset eine Klammer, wird ihre Gegenklammer per Verschachtelungs-
+ * tiefen-Zaehlung derselben Klammerart gesucht (fuer render.c's Klammer-
+ * Hervorhebung). Reine Byte-Suche ohne Kenntnis von Kommentaren/Strings -
+ * die lebt in highlight.c, nicht hier; eine Klammer innerhalb eines
+ * String-Literals kann dadurch in seltenen Faellen einen inhaltlich
+ * "falschen", aber stets wohldefinierten Treffer liefern. */
+int editor_find_matching_bracket(Editor *ed, size_t offset, size_t *out_match) {
+    size_t len = editor_length(ed);
+    if (offset >= len) {
+        return 0;
+    }
+    char c = gb_char_at(&ed->buffer, offset);
+    char open_c, close_c;
+    int forward;
+    if (c == '(' || c == '[' || c == '{') {
+        open_c = c;
+        close_c = matching_close_for(c);
+        forward = 1;
+    } else if (is_closing_bracket(c)) {
+        close_c = c;
+        open_c = (c == ')') ? '(' : (c == ']') ? '[' : '{';
+        forward = 0;
+    } else {
+        return 0;
+    }
+
+    int depth = 0;
+    if (forward) {
+        for (size_t i = offset; i < len; i++) {
+            char ch = gb_char_at(&ed->buffer, i);
+            if (ch == open_c) {
+                depth++;
+            } else if (ch == close_c) {
+                depth--;
+                if (depth == 0) {
+                    *out_match = i;
+                    return 1;
+                }
+            }
+        }
+    } else {
+        for (size_t i = offset; ; ) {
+            char ch = gb_char_at(&ed->buffer, i);
+            if (ch == close_c) {
+                depth++;
+            } else if (ch == open_c) {
+                depth--;
+                if (depth == 0) {
+                    *out_match = i;
+                    return 1;
+                }
+            }
+            if (i == 0) {
+                break;
+            }
+            i--;
+        }
+    }
+    return 0;
+}
+
+/* Bevorzugt die Klammer direkt VOR dem Cursor, sonst die direkt DAHINTER -
+ * deckt beide ueblichen Faelle ab (gerade eine schliessende Klammer
+ * getippt / Cursor steht direkt vor einer oeffnenden). Fuer render.c's
+ * Klammer-Hervorhebung, die nur aktiv wird, wenn der Cursor unmittelbar an
+ * einer Klammer klebt. */
+int editor_cursor_adjacent_bracket(Editor *ed, size_t *out_pos) {
+    size_t len = editor_length(ed);
+    if (ed->cursor > 0 && is_bracket_char(gb_char_at(&ed->buffer, ed->cursor - 1))) {
+        *out_pos = ed->cursor - 1;
+        return 1;
+    }
+    if (ed->cursor < len && is_bracket_char(gb_char_at(&ed->buffer, ed->cursor))) {
+        *out_pos = ed->cursor;
+        return 1;
+    }
+    return 0;
+}
+
 /* ---- Bearbeiten ---- */
 
 void editor_delete_selection(Editor *ed) {
@@ -390,12 +490,72 @@ void editor_insert_text(Editor *ed, const char *text, size_t len) {
     ed->edit_seq++;
 }
 
+/* Fuegt eine Klammer ein: bei einer oeffnenden wird automatisch die
+ * Gegenklammer mit eingefuegt und der Cursor dazwischen platziert - oder,
+ * falls eine Selektion besteht, die Selektion damit umschlossen und
+ * weiterhin selektiert (so laesst sich z.B. ein bestehender Ausdruck
+ * nachtraeglich in Klammern setzen). Bei einer schliessenden Klammer wird
+ * nur darueber weggerueckt (Typdurchlauf), wenn genau diese schon direkt
+ * am Cursor steht (typischerweise weil sie gerade automatisch eingefuegt
+ * wurde) - sonst normal eingefuegt. Rueckgabe: 1 = behandelt (Aufrufer
+ * braucht selbst kein editor_insert_text() mehr), 0 = c war keine der drei
+ * unterstuetzten Klammerarten. */
+int editor_handle_bracket_key(Editor *ed, char c) {
+    char close_c = matching_close_for(c);
+    if (close_c) {
+        if (editor_has_selection(ed)) {
+            size_t start = editor_selection_start(ed);
+            char *sel = editor_get_selection_text(ed);
+            size_t sel_len = strlen(sel);
+            editor_delete_selection(ed);
+            editor_insert_text(ed, &c, 1);
+            editor_insert_text(ed, sel, sel_len);
+            editor_insert_text(ed, &close_c, 1);
+            free(sel);
+            ed->anchor = start + 1;
+            ed->cursor = start + 1 + sel_len;
+        } else {
+            char pair[2] = { c, close_c };
+            editor_insert_text(ed, pair, 2);
+            ed->cursor--;
+            ed->anchor = ed->cursor;
+        }
+        return 1;
+    }
+    if (is_closing_bracket(c) && ed->cursor < editor_length(ed) &&
+        gb_char_at(&ed->buffer, ed->cursor) == c) {
+        ed->cursor++;
+        ed->anchor = ed->cursor;
+        return 1;
+    }
+    return 0;
+}
+
 void editor_delete_backward(Editor *ed) {
     if (editor_has_selection(ed)) {
         editor_delete_selection(ed);
         return;
     }
     if (ed->cursor == 0) {
+        return;
+    }
+    /* Direkt zwischen einem gerade erst automatisch eingefuegten, noch
+     * leeren Klammerpaar (z.B. "()", nichts dazwischen getippt) loescht
+     * Backspace beide Zeichen auf einmal - sonst bliebe eine verwaiste
+     * schliessende Klammer stehen, die man sonst separat loeschen muesste. */
+    char before = gb_char_at(&ed->buffer, ed->cursor - 1);
+    char expected_close = matching_close_for(before);
+    if (expected_close && ed->cursor < editor_length(ed) &&
+        gb_char_at(&ed->buffer, ed->cursor) == expected_close) {
+        size_t pos = ed->cursor - 1;
+        char *deleted = gb_copy_range(&ed->buffer, pos, 2);
+        gb_delete(&ed->buffer, pos, 2);
+        undo_push_delete_block(ed, pos, deleted, 2);
+        free(deleted);
+        ed->cursor = pos;
+        ed->anchor = pos;
+        ed->desired_col = UNSET_COL;
+        ed->edit_seq++;
         return;
     }
     size_t n = utf8_backward_len(ed, ed->cursor);
