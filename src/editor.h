@@ -110,11 +110,14 @@ int editor_has_selection(Editor *ed);
 size_t editor_selection_start(Editor *ed);
 size_t editor_selection_end(Editor *ed);
 
-/* Klammer-Matching fuer render.c's Hervorhebung passender Klammernpaare -
- * reine Byte-Suche per Verschachtelungstiefe, ohne Kenntnis von Strings/
+/* Klammer/Anfuehrungszeichen-Matching fuer render.c's Hervorhebung
+ * passender Paare - reine Byte-Suche (bei echten Klammern per Verschachte-
+ * lungstiefe, bei Anfuehrungszeichen per naechstem/vorherigem Vorkommen
+ * desselben Zeichens, siehe editor.c), ohne Kenntnis von Strings/
  * Kommentaren (das lebt in highlight.c). editor_cursor_adjacent_bracket()
- * liefert die Klammer direkt vor oder hinter dem Cursor (falls vorhanden);
- * editor_find_matching_bracket() dazu deren Gegenstueck. */
+ * liefert die Klammer/das Anfuehrungszeichen direkt vor oder hinter dem
+ * Cursor (falls vorhanden); editor_find_matching_bracket() dazu deren
+ * Gegenstueck. */
 int editor_cursor_adjacent_bracket(Editor *ed, size_t *out_pos);
 int editor_find_matching_bracket(Editor *ed, size_t offset, size_t *out_match);
 
@@ -123,10 +126,11 @@ void editor_delete_backward(Editor *ed);
 void editor_delete_forward(Editor *ed);
 void editor_delete_selection(Editor *ed);
 
-/* Klammer-Eingabe mit Auto-Vervollstaendigen/Typdurchlauf (main.c ruft das
- * fuer '(' ')' '[' ']' '{' '}' anstelle von editor_insert_text() auf) -
- * siehe editor.c fuer die genaue Semantik. Rueckgabe: 1 = behandelt,
- * 0 = c war keine der drei Klammerarten (Aufrufer soll normal einfuegen). */
+/* Klammer-/Anfuehrungszeichen-Eingabe mit Auto-Vervollstaendigen/
+ * Typdurchlauf (main.c ruft das fuer '(' ')' '[' ']' '{' '}' '"' '\''
+ * anstelle von editor_insert_text() auf) - siehe editor.c fuer die genaue
+ * Semantik. Rueckgabe: 1 = behandelt, 0 = c war keine unterstuetzte Art
+ * (Aufrufer soll normal einfuegen). */
 int editor_handle_bracket_key(Editor *ed, char c);
 
 void editor_move(Editor *ed, BtnMove move, int extend_selection);

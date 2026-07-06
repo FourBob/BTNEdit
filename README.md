@@ -20,8 +20,8 @@ Graphics/Core Text gezeichnet.
   TypeScript, Swift
 - Suchen/Ersetzen mit regulären Ausdrücken (POSIX ERE), Ersetzen/Alle ersetzen
 - Undo/Redo mit Coalescing aufeinanderfolgender Tastendrücke
-- Klammern: Auto-Vervollständigung/Typdurchlauf für `()`, `[]`, `{}`, sowie
-  Hervorhebung des zusammengehörigen Paars
+- Klammern und Anführungszeichen: Auto-Vervollständigung/Typdurchlauf für
+  `()`, `[]`, `{}`, `""`, `''`, sowie Hervorhebung des zusammengehörigen Paars
 - UI-Sprache folgt der Systemeinstellung: Deutsch, Englisch, Französisch,
   Spanisch, Chinesisch (vereinfacht)
 - Ungesichert-Dialog beim Schließen/Beenden (pro Tab, keiner geht verloren)

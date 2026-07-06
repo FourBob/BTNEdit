@@ -19,17 +19,29 @@ static int is_word_char(char c) {
            (c >= '0' && c <= '9') || c == '_';
 }
 
+/* "Klammer" umfasst hier auf Wunsch auch Anfuehrungszeichen (einfach und
+ * doppelt) - fuers Auto-Vervollstaendigen/die Hervorhebung verhalten sie
+ * sich fast wie eine Klammer, nur dass oeffnendes und schliessendes Zeichen
+ * identisch sind (siehe is_quote_char()/find_matching_quote() unten, wo das
+ * eine andere Suchstrategie als bei echten Klammern braucht). */
 static int is_bracket_char(char c) {
-    return c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}';
+    return c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' ||
+           c == '"' || c == '\'';
 }
 
 static int is_closing_bracket(char c) {
     return c == ')' || c == ']' || c == '}';
 }
 
-/* Gegenstueck einer OEFFNENDEN Klammer, oder 0 wenn c keine ist - genutzt
- * sowohl fuers automatische Schliessen (editor_handle_bracket_key) als auch
- * fuers Loeschen eines leeren Klammerpaars auf einen Schlag
+static int is_quote_char(char c) {
+    return c == '"' || c == '\'';
+}
+
+/* Gegenstueck einer OEFFNENDEN Klammer, oder 0 wenn c keine ist (Anfuehrungs-
+ * zeichen bewusst NICHT hier drin, siehe is_quote_char() - deren oeffnendes
+ * und schliessendes Zeichen sind ja identisch, das braucht eigene Logik).
+ * Genutzt sowohl fuers automatische Schliessen (editor_handle_bracket_key)
+ * als auch fuers Loeschen eines leeren Klammerpaars auf einen Schlag
  * (editor_delete_backward). */
 static char matching_close_for(char c) {
     switch (c) {
@@ -372,18 +384,57 @@ size_t editor_selection_end(Editor *ed) {
     return ed->cursor > ed->anchor ? ed->cursor : ed->anchor;
 }
 
-/* Steht bei offset eine Klammer, wird ihre Gegenklammer per Verschachtelungs-
- * tiefen-Zaehlung derselben Klammerart gesucht (fuer render.c's Klammer-
- * Hervorhebung). Reine Byte-Suche ohne Kenntnis von Kommentaren/Strings -
- * die lebt in highlight.c, nicht hier; eine Klammer innerhalb eines
- * String-Literals kann dadurch in seltenen Faellen einen inhaltlich
- * "falschen", aber stets wohldefinierten Treffer liefern. */
+/* Anfuehrungszeichen haben kein eigenes oeffnendes/schliessendes Zeichen -
+ * anders als bei echten Klammern hilft Verschachtelungstiefe hier nichts.
+ * Stattdessen: erst vorwaerts nach dem naechsten gleichen Zeichen suchen
+ * (offset ist dann das oeffnende), sonst rueckwaerts (offset war dann das
+ * schliessende). Bricht an Zeilenumbruechen ab, da Strings ueblicherweise
+ * nicht ueber mehrere Zeilen gehen - reicht fuer den ueblichen Fall, kennt
+ * aber wie die Klammersuche kein Escaping (ein \" wird als eigenstaendiges
+ * Anfuehrungszeichen gezaehlt). */
+static int find_matching_quote(Editor *ed, size_t offset, char q, size_t *out_match) {
+    size_t len = editor_length(ed);
+    for (size_t i = offset + 1; i < len; i++) {
+        char ch = gb_char_at(&ed->buffer, i);
+        if (ch == '\n') {
+            break;
+        }
+        if (ch == q) {
+            *out_match = i;
+            return 1;
+        }
+    }
+    for (size_t i = offset; i > 0; ) {
+        i--;
+        char ch = gb_char_at(&ed->buffer, i);
+        if (ch == '\n') {
+            break;
+        }
+        if (ch == q) {
+            *out_match = i;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Steht bei offset eine Klammer ODER ein Anfuehrungszeichen, wird ihr
+ * Gegenstueck gesucht (fuer render.c's Hervorhebung) - bei Klammern per
+ * Verschachtelungstiefen-Zaehlung derselben Klammerart, bei Anfuehrungs-
+ * zeichen per find_matching_quote() (siehe dort). Reine Byte-Suche ohne
+ * Kenntnis von Kommentaren/Strings - die lebt in highlight.c, nicht hier;
+ * eine Klammer/ein Anfuehrungszeichen innerhalb eines String-Literals oder
+ * Kommentars kann dadurch in seltenen Faellen einen inhaltlich "falschen",
+ * aber stets wohldefinierten Treffer liefern. */
 int editor_find_matching_bracket(Editor *ed, size_t offset, size_t *out_match) {
     size_t len = editor_length(ed);
     if (offset >= len) {
         return 0;
     }
     char c = gb_char_at(&ed->buffer, offset);
+    if (is_quote_char(c)) {
+        return find_matching_quote(ed, offset, c, out_match);
+    }
     char open_c, close_c;
     int forward;
     if (c == '(' || c == '[' || c == '{') {
@@ -490,17 +541,46 @@ void editor_insert_text(Editor *ed, const char *text, size_t len) {
     ed->edit_seq++;
 }
 
-/* Fuegt eine Klammer ein: bei einer oeffnenden wird automatisch die
- * Gegenklammer mit eingefuegt und der Cursor dazwischen platziert - oder,
- * falls eine Selektion besteht, die Selektion damit umschlossen und
- * weiterhin selektiert (so laesst sich z.B. ein bestehender Ausdruck
- * nachtraeglich in Klammern setzen). Bei einer schliessenden Klammer wird
- * nur darueber weggerueckt (Typdurchlauf), wenn genau diese schon direkt
- * am Cursor steht (typischerweise weil sie gerade automatisch eingefuegt
- * wurde) - sonst normal eingefuegt. Rueckgabe: 1 = behandelt (Aufrufer
- * braucht selbst kein editor_insert_text() mehr), 0 = c war keine der drei
- * unterstuetzten Klammerarten. */
+/* Fuegt eine Klammer ODER ein Anfuehrungszeichen ein: bei einer oeffnenden
+ * Klammer wird automatisch die Gegenklammer mit eingefuegt und der Cursor
+ * dazwischen platziert - oder, falls eine Selektion besteht, die Selektion
+ * damit umschlossen und weiterhin selektiert (so laesst sich z.B. ein
+ * bestehender Ausdruck nachtraeglich in Klammern/Anfuehrungszeichen setzen).
+ * Bei einer schliessenden Klammer wird nur darueber weggerueckt (Typdurch-
+ * lauf), wenn genau diese schon direkt am Cursor steht (typischerweise weil
+ * sie gerade automatisch eingefuegt wurde) - sonst normal eingefuegt.
+ * Anfuehrungszeichen haben kein eigenes schliessendes Zeichen (oeffnend ==
+ * schliessend), brauchen den Typdurchlauf-Check deshalb VOR statt nach der
+ * "oeffnend einfuegen"-Logik. Rueckgabe: 1 = behandelt (Aufrufer braucht
+ * selbst kein editor_insert_text() mehr), 0 = c war keine unterstuetzte Art. */
 int editor_handle_bracket_key(Editor *ed, char c) {
+    if (is_quote_char(c)) {
+        if (!editor_has_selection(ed) && ed->cursor < editor_length(ed) &&
+            gb_char_at(&ed->buffer, ed->cursor) == c) {
+            ed->cursor++;
+            ed->anchor = ed->cursor;
+            return 1;
+        }
+        if (editor_has_selection(ed)) {
+            size_t start = editor_selection_start(ed);
+            char *sel = editor_get_selection_text(ed);
+            size_t sel_len = strlen(sel);
+            editor_delete_selection(ed);
+            editor_insert_text(ed, &c, 1);
+            editor_insert_text(ed, sel, sel_len);
+            editor_insert_text(ed, &c, 1);
+            free(sel);
+            ed->anchor = start + 1;
+            ed->cursor = start + 1 + sel_len;
+        } else {
+            char pair[2] = { c, c };
+            editor_insert_text(ed, pair, 2);
+            ed->cursor--;
+            ed->anchor = ed->cursor;
+        }
+        return 1;
+    }
+
     char close_c = matching_close_for(c);
     if (close_c) {
         if (editor_has_selection(ed)) {
@@ -540,11 +620,14 @@ void editor_delete_backward(Editor *ed) {
         return;
     }
     /* Direkt zwischen einem gerade erst automatisch eingefuegten, noch
-     * leeren Klammerpaar (z.B. "()", nichts dazwischen getippt) loescht
-     * Backspace beide Zeichen auf einmal - sonst bliebe eine verwaiste
-     * schliessende Klammer stehen, die man sonst separat loeschen muesste. */
+     * leeren Klammer- oder Anfuehrungszeichen-Paar (z.B. "()" oder ""'"'"',
+     * nichts dazwischen getippt) loescht Backspace beide Zeichen auf einmal
+     * - sonst bliebe ein verwaistes schliessendes Zeichen stehen, das man
+     * sonst separat loeschen muesste. Bei Anfuehrungszeichen ist "erwartetes
+     * schliessendes Zeichen" einfach dasselbe Zeichen (kein eigenes Gegen-
+     * stueck wie bei echten Klammern). */
     char before = gb_char_at(&ed->buffer, ed->cursor - 1);
-    char expected_close = matching_close_for(before);
+    char expected_close = is_quote_char(before) ? before : matching_close_for(before);
     if (expected_close && ed->cursor < editor_length(ed) &&
         gb_char_at(&ed->buffer, ed->cursor) == expected_close) {
         size_t pos = ed->cursor - 1;

@@ -17,14 +17,18 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
   (Umlaute, Emoji, CJK) kann die Cursor-Darstellung/Klick-Position von der
   visuellen Spalte leicht abweichen. Durchgängig auf Codepoints umzustellen
   wäre eine größere, zusammenhängende Änderung an mehreren Stellen.
-- Klammer-Matching/-Hervorhebung (`editor_find_matching_bracket`) kennt keine
-  Strings/Kommentare - eine Klammer innerhalb eines String-Literals oder
-  Kommentars kann in seltenen Fällen einen inhaltlich falschen (aber stets
-  wohldefinierten) Treffer liefern. Für eine echte Lösung müsste das mit
-  highlight.c's Tokenizer zusammenspielen.
-- Auto-Vervollständigung nur für `()`, `[]`, `{}` - keine Anführungszeichen
-  (andere Regeln: z.B. nicht verdoppeln, wenn schon in einem String), kein
-  `<>` (zu häufig ein Vergleichsoperator in Code, bräuchte Sprach-Kontext).
+- Klammer-/Anführungszeichen-Matching (`editor_find_matching_bracket`) kennt
+  keine Strings/Kommentare - eine Klammer oder ein Anführungszeichen
+  innerhalb eines String-Literals oder Kommentars kann in seltenen Fällen
+  einen inhaltlich falschen (aber stets wohldefinierten) Treffer liefern.
+  Für eine echte Lösung müsste das mit highlight.c's Tokenizer
+  zusammenspielen.
+- Anführungszeichen-Matching kennt zusätzlich kein Escaping - ein `\"`
+  mitten in einem String zählt als eigenständiges Anführungszeichen statt
+  ignoriert zu werden.
+- Auto-Vervollständigung nur für `()`, `[]`, `{}`, `""`, `''` - kein `<>`
+  (zu häufig ein Vergleichsoperator in Code, bräuchte Sprach-Kontext, um
+  zwischen Vergleich und generischem/Tag-artigem Gebrauch zu unterscheiden).
 - Tableiste schrumpft bei vielen Tabs proportional (bis 40pt Minimum), hat
   aber kein echtes horizontales Scrollen - bei sehr schmalen Fenstern
   kombiniert mit sehr vielen Tabs (nahe `MAX_TABS=20`) können Tabs trotzdem
