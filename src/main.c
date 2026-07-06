@@ -1342,6 +1342,9 @@ static void on_menu(int tag) {
         case BTN_MENU_PRINT:
             fprintf(stderr, "BTNEdit: Menu-Aktion %d noch nicht implementiert\n", tag);
             break;
+        case BTN_MENU_HELP:
+            btn_show_help_alert();
+            break;
         default:
             break;
     }

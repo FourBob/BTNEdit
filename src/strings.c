@@ -21,7 +21,27 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Your changes will be lost if you don't save them.",
         "Save", "Don't Save", "Cancel",
         "Find:", "Replace:", "Not found",
-        "%d replaced"
+        "%d replaced",
+        "Help", "Keyboard Shortcuts...", "Keyboard Shortcuts",
+        "⌘N — New
+⌘O — Open
+⌘S — Save
+⇧⌘S — Save As
+⌘W — Close
+⌘Z — Undo
+⇧⌘Z — Redo
+⌘X — Cut
+⌘C — Copy
+⌘V — Paste
+⌘A — Select All
+⌘F — Find & Replace
+⌥←/→ — Jump by word
+⌘←/→ — Line start/end
+Esc — Close find bar
+Return (search field) — Next match
+⇧Return (search field) — Previous match
+Return (replace field) — Replace + Next
+⌘Return (replace field) — Replace All"
     },
     /* BTN_LANG_DE */
     {
@@ -35,7 +55,27 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Deine Änderungen gehen verloren, wenn du sie nicht sicherst.",
         "Sichern", "Nicht sichern", "Abbrechen",
         "Suchen:", "Ersetzen:", "Nicht gefunden",
-        "%d ersetzt"
+        "%d ersetzt",
+        "Hilfe", "Tastenkürzel...", "Tastenkürzel",
+        "⌘N — Neu
+⌘O — Öffnen
+⌘S — Sichern
+⇧⌘S — Sichern unter
+⌘W — Schließen
+⌘Z — Widerrufen
+⇧⌘Z — Wiederholen
+⌘X — Ausschneiden
+⌘C — Kopieren
+⌘V — Einfügen
+⌘A — Alles auswählen
+⌘F — Suchen und Ersetzen
+⌥←/→ — Wortsprung
+⌘←/→ — Zeilenanfang/-ende
+Esc — Suchleiste schließen
+Return (Suchfeld) — Nächster Treffer
+⇧Return (Suchfeld) — Voriger Treffer
+Return (Ersetzen-Feld) — Ersetzen + Weiter
+⌘Return (Ersetzen-Feld) — Alle ersetzen"
     },
     /* BTN_LANG_FR */
     {
@@ -49,7 +89,27 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Vos modifications seront perdues si vous ne les enregistrez pas.",
         "Enregistrer", "Ne pas enregistrer", "Annuler",
         "Rechercher :", "Remplacer :", "Introuvable",
-        "%d remplacement(s)"
+        "%d remplacement(s)",
+        "Aide", "Raccourcis clavier...", "Raccourcis clavier",
+        "⌘N — Nouveau
+⌘O — Ouvrir
+⌘S — Enregistrer
+⇧⌘S — Enregistrer sous
+⌘W — Fermer
+⌘Z — Annuler
+⇧⌘Z — Rétablir
+⌘X — Couper
+⌘C — Copier
+⌘V — Coller
+⌘A — Tout sélectionner
+⌘F — Rechercher et remplacer
+⌥←/→ — Saut de mot
+⌘←/→ — Début/fin de ligne
+Échap — Fermer la barre de recherche
+Retour (champ de recherche) — Occurrence suivante
+⇧Retour (champ de recherche) — Occurrence précédente
+Retour (champ de remplacement) — Remplacer + suivant
+⌘Retour (champ de remplacement) — Tout remplacer"
     },
     /* BTN_LANG_ES */
     {
@@ -63,7 +123,27 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Tus cambios se perderán si no los guardas.",
         "Guardar", "No guardar", "Cancelar",
         "Buscar:", "Reemplazar:", "No encontrado",
-        "%d reemplazos"
+        "%d reemplazos",
+        "Ayuda", "Atajos de teclado...", "Atajos de teclado",
+        "⌘N — Nuevo
+⌘O — Abrir
+⌘S — Guardar
+⇧⌘S — Guardar como
+⌘W — Cerrar
+⌘Z — Deshacer
+⇧⌘Z — Rehacer
+⌘X — Cortar
+⌘C — Copiar
+⌘V — Pegar
+⌘A — Seleccionar todo
+⌘F — Buscar y reemplazar
+⌥←/→ — Salto de palabra
+⌘←/→ — Inicio/fin de línea
+Esc — Cerrar barra de búsqueda
+Intro (campo de búsqueda) — Siguiente coincidencia
+⇧Intro (campo de búsqueda) — Coincidencia anterior
+Intro (campo de reemplazo) — Reemplazar + siguiente
+⌘Intro (campo de reemplazo) — Reemplazar todo"
     },
     /* BTN_LANG_ZH (Simplified) */
     {
@@ -80,7 +160,27 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "如果不存储，你所做的修改将丢失。",
         "存储", "不存储", "取消",
         "查找:", "替换:", "未找到",
-        "已替换 %d 处"
+        "已替换 %d 处",
+        "帮助", "键盘快捷键…", "键盘快捷键",
+        "⌘N — 新建
+⌘O — 打开
+⌘S — 存储
+⇧⌘S — 存储为
+⌘W — 关闭
+⌘Z — 撤销
+⇧⌘Z — 重做
+⌘X — 剪切
+⌘C — 拷贝
+⌘V — 粘贴
+⌘A — 全选
+⌘F — 查找和替换
+⌥←/→ — 按词跳转
+⌘←/→ — 行首/行尾
+Esc — 关闭查找栏
+回车（查找框）— 下一个匹配项
+⇧回车（查找框）— 上一个匹配项
+回车（替换框）— 替换并查找下一个
+⌘回车（替换框）— 全部替换"
     }
 };
 

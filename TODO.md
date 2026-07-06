@@ -8,7 +8,6 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
 - **Drucken** - `BTN_MENU_PRINT` ist aktuell nur ein Stub (druckt eine
   Debug-Meldung). Müsste über `NSPrintOperation` gehen (reine Chrome wie
   `NSWindow`, kein Content-Widget - passt zur bestehenden Architektur).
-- **Hilfe/Shortcuts-Übersicht** - noch kein eigenes Panel/Fenster dafür.
 
 ## Bekannte Einschränkungen (bewusst zurückgestellt, kein akuter Bug)
 

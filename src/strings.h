@@ -50,6 +50,12 @@ typedef enum {
     BTN_STR_FIND_NOT_FOUND,
     /* Enthaelt ein "%d" fuer die Trefferanzahl - siehe BTN_STR_SAVE_PROMPT_TITLE_FMT. */
     BTN_STR_FIND_REPLACED_FMT,
+    BTN_STR_HELP_MENU,
+    BTN_STR_HELP_SHORTCUTS,
+    BTN_STR_HELP_TITLE,
+    /* Mehrzeilige Liste aller Tastenkuerzel (echte '\n', kein Format-String)
+     * fuer den NSAlert der Hilfe-Uebersicht. */
+    BTN_STR_HELP_BODY,
     BTN_STR_COUNT
 } BtnStringId;
 

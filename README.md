@@ -25,6 +25,7 @@ Graphics/Core Text gezeichnet.
 - UI-Sprache folgt der Systemeinstellung: Deutsch, Englisch, Französisch,
   Spanisch, Chinesisch (vereinfacht)
 - Ungesichert-Dialog beim Schließen/Beenden (pro Tab, keiner geht verloren)
+- Hilfe-Menü mit Tastenkürzel-Übersicht
 
 Was noch fehlt bzw. bekannte Einschränkungen: siehe [TODO.md](TODO.md).
 

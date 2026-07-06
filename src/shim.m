@@ -235,6 +235,12 @@ void btn_app_build_menu(void) {
         [editMenu addItem:[NSMenuItem separatorItem]];
         add_item(editMenu, trs(BTN_STR_FIND), @"f", BTN_MENU_FIND);
         [editMenuItem setSubmenu:editMenu];
+
+        NSMenuItem *helpMenuItem = [NSMenuItem new];
+        [menubar addItem:helpMenuItem];
+        NSMenu *helpMenu = [[NSMenu alloc] initWithTitle:trs(BTN_STR_HELP_MENU)];
+        add_item(helpMenu, trs(BTN_STR_HELP_SHORTCUTS), @"", BTN_MENU_HELP);
+        [helpMenuItem setSubmenu:helpMenu];
     }
 }
 
@@ -382,6 +388,15 @@ int btn_show_unsaved_changes_alert(const char *display_name) {
             return 2;
         }
         return 0;
+    }
+}
+
+void btn_show_help_alert(void) {
+    @autoreleasepool {
+        NSAlert *alert = [[NSAlert alloc] init];
+        [alert setMessageText:trs(BTN_STR_HELP_TITLE)];
+        [alert setInformativeText:trs(BTN_STR_HELP_BODY)];
+        [alert runModal];
     }
 }
 

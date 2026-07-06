@@ -23,7 +23,8 @@ enum {
     BTN_MENU_CUT,
     BTN_MENU_COPY,
     BTN_MENU_PASTE,
-    BTN_MENU_SELECT_ALL
+    BTN_MENU_SELECT_ALL,
+    BTN_MENU_HELP
 };
 
 /* Tags fuer die dynamischen "Zuletzt geoeffnet"-Menuepunkte liegen ab hier,
@@ -109,6 +110,11 @@ char *btn_show_save_panel(const char *suggested_path);
 
 /* Rueckgabe: 0 = Abbrechen, 1 = Sichern, 2 = Nicht sichern. */
 int btn_show_unsaved_changes_alert(const char *display_name);
+
+/* Zeigt die Tastenkuerzel-Uebersicht (Hilfe-Menue) als NSAlert - wie die
+ * anderen Systemdialoge reine Chrome, kein eigenes Content-Fenster noetig
+ * fuer eine simple, statische Liste. */
+void btn_show_help_alert(void);
 
 void btn_set_window_title(const char *title);
 void btn_app_set_document_edited(int edited);
