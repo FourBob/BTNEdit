@@ -26,9 +26,11 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
   aber kein echtes horizontales Scrollen - bei sehr schmalen Fenstern
   kombiniert mit sehr vielen Tabs (nahe `MAX_TABS=20`) können Tabs trotzdem
   noch unerreichbar werden.
-- Die Suchen/Ersetzen-Felder sind bewusst einfache Anhängen/Löschen-Felder
-  (kein Mini-Editor) - keine Cursor-Navigation, keine Selektion, kein
-  Copy/Paste innerhalb der Felder selbst.
+- Klick in ein Suchen/Ersetzen-Feld fokussiert es nur, positioniert den
+  Cursor aber nicht an der Klickstelle (dafür bräuchte main.c die
+  Zeichenbreite aus render.c, die dort bisher privat ist) - Tastatur-
+  Navigation (Pfeiltasten, Pos1/Ende, Shift-Selektion, Copy/Paste) ist voll
+  unterstützt, Mausklick mittendrin noch nicht.
 - Eingebettete NUL-Bytes in einer Selektion können das Vorbefüllen des
   Suchfelds (Cmd+F übernimmt die aktuelle Selektion) an der Stelle des
   NUL-Bytes abschneiden (`strlen`/`strchr` auf einem Puffer, der theoretisch

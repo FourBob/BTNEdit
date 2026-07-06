@@ -47,10 +47,12 @@ static int g_dragging = 0;
 static char *g_recent_paths[BTN_MAX_RECENT_FILES]; /* [0] = neuester Eintrag */
 static int g_recent_count = 0;
 
-/* Suchen/Ersetzen-Leiste. Die beiden Textfelder sind bewusst keine Mini-
- * Editoren mit Cursor/Selektion (das waere fast eine zweite editor.c) -
- * nur Anhaengen (Tippen) und Loeschen (Backspace) vom Ende her, das reicht
- * fuer einen Suchbegriff voellig aus. */
+/* Suchen/Ersetzen-Leiste. Die beiden Textfelder sind jeweils ein eigener,
+ * ganz normaler Editor (siehe editor.h) - kein Wortumbruch/Syntax noetig,
+ * aber Cursor/Selektion/Undo kommen dadurch kostenlos aus derselben Logik
+ * wie das Hauptdokument, statt sie fuer ein einzeiliges Feld ein zweites
+ * Mal nachzubauen. main.c sorgt lediglich dafuer, dass '\n' nie eingefuegt
+ * wird (Enter loest Suchen/Ersetzen aus statt eine Zeile einzufuegen). */
 typedef enum {
     BTN_FOCUS_DOCUMENT,
     BTN_FOCUS_SEARCH,
@@ -59,13 +61,27 @@ typedef enum {
 
 static int g_find_bar_visible = 0;
 static BtnFocus g_focus = BTN_FOCUS_DOCUMENT;
-static char g_search_query[256] = "";
-static char g_replace_text[256] = "";
+static Editor g_search_editor;
+static Editor g_replace_editor;
 static int g_search_regex = 0; /* 0 = Literalsuche, 1 = POSIX-Regex (ERE) */
 static char g_search_status[128] = "";
 
 static Document *active_doc(void) {
     return &g_docs[g_active_doc];
+}
+
+/* Welcher Editor gerade Tastatur-/Menuebefehle (Cmd+C/X/V/A/Z...) empfangen
+ * soll - das Dokument, oder falls die Suchen-Leiste fokussiert ist, deren
+ * Suchen- oder Ersetzen-Feld. */
+static Editor *focused_editor(void) {
+    switch (g_focus) {
+        case BTN_FOCUS_SEARCH:
+            return &g_search_editor;
+        case BTN_FOCUS_REPLACE:
+            return &g_replace_editor;
+        default:
+            return &active_doc()->editor;
+    }
 }
 
 static const char *basename_of(const char *path) {
@@ -293,11 +309,15 @@ static void open_find_bar(void) {
     if (editor_has_selection(ed)) {
         char *sel = editor_get_selection_text(ed);
         size_t sel_len = strlen(sel);
-        if (sel_len < sizeof(g_search_query) && strchr(sel, '\n') == NULL) {
-            memcpy(g_search_query, sel, sel_len + 1);
+        if (strchr(sel, '\n') == NULL) {
+            editor_set_text(&g_search_editor, sel, sel_len);
         }
         free(sel);
     }
+    /* Bestehenden Suchtext komplett selektieren (wie Cmd+F in praktisch
+     * jeder Mac-App) - Tippen ersetzt ihn dann sofort, statt ihn zu
+     * ergaenzen. */
+    editor_select_all(&g_search_editor);
     g_find_bar_visible = 1;
     g_focus = BTN_FOCUS_SEARCH;
     g_search_status[0] = '\0';
@@ -379,11 +399,14 @@ static void regex_escape_literal(const char *src, char *out, size_t out_cap) {
 
 static int compile_search_regex(regex_t *re) {
     char pattern[512];
+    size_t query_len;
+    char *query = editor_copy_all(&g_search_editor, &query_len);
     if (g_search_regex) {
-        snprintf(pattern, sizeof(pattern), "%s", g_search_query);
+        snprintf(pattern, sizeof(pattern), "%s", query);
     } else {
-        regex_escape_literal(g_search_query, pattern, sizeof(pattern));
+        regex_escape_literal(query, pattern, sizeof(pattern));
     }
+    free(query);
     return regcomp(re, pattern, REG_EXTENDED) == 0;
 }
 
@@ -409,7 +432,7 @@ static int regexec_flags_for(const char *text, size_t offset) {
 
 static int find_match(const char *text, size_t text_len, size_t from, int forward, int wrap,
                        size_t *out_start, size_t *out_end) {
-    if (g_search_query[0] == '\0') {
+    if (editor_length(&g_search_editor) == 0) {
         return 0;
     }
     regex_t re;
@@ -537,7 +560,10 @@ static void perform_replace_current(void) {
             return;
         }
     }
-    replace_selection(ed, g_replace_text, strlen(g_replace_text));
+    size_t replace_len;
+    char *replace_text = editor_copy_all(&g_replace_editor, &replace_len);
+    replace_selection(ed, replace_text, replace_len);
+    free(replace_text);
     sync_window_state();
     perform_find(1);
 }
@@ -545,10 +571,11 @@ static void perform_replace_current(void) {
 static void perform_replace_all(void) {
     Document *d = active_doc();
     Editor *ed = &d->editor;
-    if (g_search_query[0] == '\0') {
+    if (editor_length(&g_search_editor) == 0) {
         return;
     }
-    size_t replace_len = strlen(g_replace_text);
+    size_t replace_len;
+    char *replace_text = editor_copy_all(&g_replace_editor, &replace_len);
     size_t from = 0;
     int count = 0;
 
@@ -570,7 +597,7 @@ static void perform_replace_all(void) {
         }
         editor_set_cursor(ed, match_start, 0);
         editor_set_cursor(ed, match_end, 1);
-        replace_selection(ed, g_replace_text, replace_len);
+        replace_selection(ed, replace_text, replace_len);
         /* Bei leerem Treffer UND leerem Ersetzungstext wuerde from sonst
          * nicht vorruecken (Leertreffer an derselben Stelle immer wieder
          * "ersetzt") - mindestens 1 Byte Fortschritt erzwingen. */
@@ -581,6 +608,7 @@ static void perform_replace_all(void) {
         from = match_start + advance;
         count++;
     }
+    free(replace_text);
 
     snprintf(g_search_status, sizeof(g_search_status), btn_tr(BTN_STR_FIND_REPLACED_FMT), count);
     sync_window_state();
@@ -933,9 +961,10 @@ static void on_draw(CGContextRef ctx, CGRect bounds) {
     btn_render_tab_bar(ctx, bounds, labels, g_doc_count, g_active_doc);
 
     if (g_find_bar_visible) {
-        btn_render_find_bar(ctx, bounds, btn_tr(BTN_STR_FIND_SEARCH_LABEL), g_search_query,
-                             btn_tr(BTN_STR_FIND_REPLACE_LABEL), g_replace_text,
-                             g_search_regex, g_focus == BTN_FOCUS_SEARCH, g_search_status);
+        int focus_field = (g_focus == BTN_FOCUS_SEARCH) ? 1 : (g_focus == BTN_FOCUS_REPLACE) ? 2 : 0;
+        btn_render_find_bar(ctx, bounds, btn_tr(BTN_STR_FIND_SEARCH_LABEL), &g_search_editor,
+                             btn_tr(BTN_STR_FIND_REPLACE_LABEL), &g_replace_editor,
+                             g_search_regex, focus_field, g_search_status);
     }
 
     Document *active = active_doc();
@@ -995,22 +1024,42 @@ static void handle_find_bar_click(double x) {
  * Ersetzen-Feld) - komplett getrennt vom Dokument-Tippen unten in on_key().
  * Escape schliesst die Leiste, Tab wechselt zwischen den beiden Feldern,
  * Return loest je nach Feld Suchen/Ersetzen aus, Cmd+Return im Ersetzen-
- * Feld ersetzt alle Treffer. Die Felder selbst erlauben nur Anhaengen/
- * Loeschen vom Ende her (siehe Kommentar bei den globalen Puffern oben). */
-static void handle_find_bar_key(const char *characters, unsigned short keycode, int shift, int command) {
+ * Feld ersetzt alle Treffer. Fuer alles andere (Cursor-Bewegung, Tippen,
+ * Loeschen) ist das fokussierte Feld ein ganz normaler Editor (siehe
+ * focused_editor()) - kein Mehrzeilen-Konzept noetig, da BTN_MOVE_DOC_START/
+ * END fuer ein Feld ohne '\n' bereits genau Pos1/Ende sind. */
+static void handle_find_bar_key(const char *characters, unsigned short keycode, int shift, int option, int command) {
+    Editor *ed = (g_focus == BTN_FOCUS_REPLACE) ? &g_replace_editor : &g_search_editor;
+
     switch (keycode) {
         case KEYCODE_LEFT:
+            /* Cmd+Links springt wie im Dokument (move_row_edge()) an den
+             * Feldanfang - fuer ein einzeiliges Feld ist das exakt
+             * BTN_MOVE_DOC_START. */
+            editor_move(ed, command ? BTN_MOVE_DOC_START : (option ? BTN_MOVE_WORD_LEFT : BTN_MOVE_LEFT), shift);
+            btn_app_request_redraw();
+            return;
         case KEYCODE_RIGHT:
+            editor_move(ed, command ? BTN_MOVE_DOC_END : (option ? BTN_MOVE_WORD_RIGHT : BTN_MOVE_RIGHT), shift);
+            btn_app_request_redraw();
+            return;
+        case KEYCODE_HOME:
+            editor_move(ed, BTN_MOVE_DOC_START, shift);
+            btn_app_request_redraw();
+            return;
+        case KEYCODE_END:
+            editor_move(ed, BTN_MOVE_DOC_END, shift);
+            btn_app_request_redraw();
+            return;
         case KEYCODE_UP:
         case KEYCODE_DOWN:
-        case KEYCODE_HOME:
-        case KEYCODE_END:
+            /* Kein Mehrzeilen-Konzept in einem einzeiligen Feld - anders als
+             * im Dokument (siehe on_key()) hier ohne Bedeutung. */
+            return;
         case KEYCODE_FORWARD_DELETE:
-            /* Die Suchfelder erlauben nur Anhaengen/Loeschen vom Ende her
-             * (kein Mini-Editor) - diese Tasten haben hier keine Bedeutung.
-             * Ohne diesen Filter wuerden sie ueber ihre NSEvent.characters
-             * (Unicode Private-Use-Area, z.B. U+F702 fuer Pfeil-links) als
-             * Muell-Bytes im Suchtext landen, siehe naechster Absatz. */
+            editor_delete_forward(ed);
+            g_search_status[0] = '\0';
+            btn_app_request_redraw();
             return;
         default:
             break;
@@ -1041,28 +1090,16 @@ static void handle_find_bar_key(const char *characters, unsigned short keycode, 
         }
         return;
     }
-
-    char *buf = (g_focus == BTN_FOCUS_REPLACE) ? g_replace_text : g_search_query;
-    size_t cap = sizeof(g_search_query); /* beide Puffer gleich gross */
+    if (command) {
+        /* Cmd+A/C/X/V/Z laufen ueber Menu-Items (siehe on_menu() und
+         * focused_editor()), genau wie im Dokument (siehe on_key()). */
+        return;
+    }
 
     if (c == 0x7F) {
-        size_t len = strlen(buf);
-        if (len > 0) {
-            /* Ein UTF-8-Zeichen zurueck, nicht nur ein Byte - sonst wuerde
-             * Backspace mehrbytige Zeichen (Umlaute etc.) haeppchenweise
-             * zerlegen statt sie als Ganzes zu entfernen. */
-            size_t cut = len - 1;
-            while (cut > 0 && ((unsigned char)buf[cut] & 0xC0) == 0x80) {
-                cut--;
-            }
-            buf[cut] = '\0';
-        }
+        editor_delete_backward(ed);
     } else if (c >= 0x20) {
-        size_t len = strlen(buf);
-        size_t add_len = strlen(characters);
-        if (len + add_len < cap) {
-            memcpy(buf + len, characters, add_len + 1);
-        }
+        editor_insert_text(ed, characters, strlen(characters));
     } else {
         return;
     }
@@ -1085,7 +1122,7 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
     }
 
     if (g_focus != BTN_FOCUS_DOCUMENT) {
-        handle_find_bar_key(characters, keycode, shift, command);
+        handle_find_bar_key(characters, keycode, shift, option, command);
         return;
     }
 
@@ -1349,36 +1386,47 @@ static void on_menu(int tag) {
             close_tab(g_active_doc);
             break;
         case BTN_MENU_UNDO:
-            editor_undo(&active_doc()->editor);
+            editor_undo(focused_editor());
             break;
         case BTN_MENU_REDO:
-            editor_redo(&active_doc()->editor);
+            editor_redo(focused_editor());
             break;
         case BTN_MENU_CUT:
-            clip = editor_get_selection_text(&active_doc()->editor);
+            clip = editor_get_selection_text(focused_editor());
             btn_pasteboard_set_string(clip);
             free(clip);
-            editor_delete_selection(&active_doc()->editor);
+            editor_delete_selection(focused_editor());
             break;
         case BTN_MENU_COPY:
-            clip = editor_get_selection_text(&active_doc()->editor);
+            clip = editor_get_selection_text(focused_editor());
             btn_pasteboard_set_string(clip);
             free(clip);
             break;
         case BTN_MENU_PASTE: {
             size_t clip_len;
             clip = btn_pasteboard_copy_string(&clip_len);
+            /* Such-/Ersetzen-Feld sind einzeilig - eingefuegte Zeilenumbrueche
+             * durch Leerzeichen ersetzen, statt sie (fuer diese Felder
+             * unpassend) mit einzufuegen. Das Dokument selbst erlaubt
+             * natuerlich mehrzeiliges Einfuegen wie gewohnt. */
+            if (g_focus == BTN_FOCUS_SEARCH || g_focus == BTN_FOCUS_REPLACE) {
+                for (size_t i = 0; i < clip_len; i++) {
+                    if (clip[i] == '\n' || clip[i] == '\r') {
+                        clip[i] = ' ';
+                    }
+                }
+            }
             /* replace_selection() statt editor_insert_text() direkt: die
              * Zwischenablage kann eine gueltige, aber leere Zeichenkette
              * liefern (z.B. wenn sie kein Textformat enthaelt) - dann wuerde
              * editor_insert_text()s len==0-Guard eine bestehende Selektion
              * stehen lassen statt sie zu ersetzen. */
-            replace_selection(&active_doc()->editor, clip, clip_len);
+            replace_selection(focused_editor(), clip, clip_len);
             free(clip);
             break;
         }
         case BTN_MENU_SELECT_ALL:
-            editor_select_all(&active_doc()->editor);
+            editor_select_all(focused_editor());
             break;
         case BTN_MENU_FIND:
             open_find_bar();
@@ -1399,6 +1447,8 @@ static void on_menu(int tag) {
 
 int main(void) {
     add_tab(); /* erster, leerer Tab - g_active_doc ist bereits 0 */
+    editor_init(&g_search_editor);
+    editor_init(&g_replace_editor);
 
     btn_app_init();
     /* Bediensprache folgt der Systemeinstellung (kein eigener
@@ -1420,5 +1470,7 @@ int main(void) {
     for (int i = 0; i < g_doc_count; i++) {
         doc_free(&g_docs[i]);
     }
+    editor_free(&g_search_editor);
+    editor_free(&g_replace_editor);
     return 0;
 }

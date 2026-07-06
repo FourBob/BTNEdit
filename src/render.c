@@ -466,9 +466,42 @@ void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labe
     CGColorRelease(dimColor);
 }
 
-void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_label, const char *query,
-                          const char *replace_label, const char *replacement,
-                          int regex_mode, int search_focused, const char *status) {
+/* Zeichnet den Inhalt eines Suchen/Ersetzen-Feldes samt Selektions-
+ * Hervorhebung und (falls focused und ohne Selektion) Cursor - byte-genaue
+ * Spaltenmathematik wie beim Hauptdokument, aber ohne Tabs/Wortumbruch, weil
+ * main.c niemals '\n'/'\t' in diese Felder einfuegt (siehe editor_move()-
+ * Kommentar in editor.h: BTN_MOVE_DOC_START/END sind fuer ein Feld ohne
+ * Zeilenumbrueche bereits genau Pos1/Ende). */
+static void draw_find_field(CGContextRef ctx, Editor *ed, double field_x, double text_y, double bar_top,
+                             CFDictionaryRef attrs, double char_width, int focused) {
+    int has_sel = editor_has_selection(ed);
+    if (has_sel) {
+        size_t sel_start = editor_selection_start(ed);
+        size_t sel_end = editor_selection_end(ed);
+        double sx = field_x + (double)sel_start * char_width;
+        double sw = (double)(sel_end - sel_start) * char_width;
+        if (sw < 2.0) {
+            sw = 2.0;
+        }
+        CGContextSetRGBFillColor(ctx, 0.68, 0.82, 1.0, 0.55);
+        CGContextFillRect(ctx, CGRectMake(sx, bar_top + 4.0, sw, BTN_FIND_BAR_HEIGHT - 8.0));
+    }
+
+    size_t len;
+    char *text = editor_copy_all(ed, &len);
+    draw_text_at(ctx, text, field_x, text_y, attrs);
+    free(text);
+
+    if (focused && !has_sel) {
+        double cx = field_x + (double)ed->cursor * char_width;
+        CGContextSetRGBFillColor(ctx, 0.15, 0.15, 0.15, 1.0);
+        CGContextFillRect(ctx, CGRectMake(cx, bar_top + 6.0, 1.4, BTN_FIND_BAR_HEIGHT - 12.0));
+    }
+}
+
+void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_label, Editor *search_ed,
+                          const char *replace_label, Editor *replace_ed,
+                          int regex_mode, int focus_field, const char *status) {
     double bar_top = bounds.size.height - BTN_TAB_BAR_HEIGHT - BTN_FIND_BAR_HEIGHT;
     double text_y = bar_top + (BTN_FIND_BAR_HEIGHT - FONT_SIZE) / 2.0 + 3.0;
 
@@ -476,6 +509,7 @@ void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_lab
     CGContextFillRect(ctx, CGRectMake(0, bar_top, bounds.size.width, BTN_FIND_BAR_HEIGHT));
 
     CTFontRef font = get_font();
+    double char_width = get_char_width();
     CGColorRef textColor = CGColorCreateGenericRGB(0.15, 0.15, 0.15, 1.0);
     CGColorRef dimColor = CGColorCreateGenericRGB(0.45, 0.45, 0.45, 1.0);
     CGColorRef accentColor = CGColorCreateGenericRGB(0.20, 0.40, 0.85, 1.0);
@@ -491,11 +525,7 @@ void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_lab
     double status_x = replace_field_x + BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING * 2.0;
 
     draw_text_at(ctx, search_label, search_label_x, text_y, dimAttrs);
-    double query_w = draw_text_at(ctx, query, search_field_x, text_y, attrs);
-    if (search_focused) {
-        CGContextSetRGBFillColor(ctx, 0.15, 0.15, 0.15, 1.0);
-        CGContextFillRect(ctx, CGRectMake(search_field_x + query_w + 2.0, bar_top + 6.0, 1.4, BTN_FIND_BAR_HEIGHT - 12.0));
-    }
+    draw_find_field(ctx, search_ed, search_field_x, text_y, bar_top, attrs, char_width, focus_field == 1);
 
     /* ".*"-Umschalter fuer Regex-Modus - main.c testet dieselbe Position
      * (regex_x, Breite BTN_FIND_REGEX_WIDTH) beim Mausklick. */
@@ -504,11 +534,7 @@ void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_lab
     draw_text_at(ctx, ".*", regex_x + 3.0, text_y, regex_mode ? accentAttrs : dimAttrs);
 
     draw_text_at(ctx, replace_label, replace_label_x, text_y, dimAttrs);
-    double replacement_w = draw_text_at(ctx, replacement, replace_field_x, text_y, attrs);
-    if (!search_focused) {
-        CGContextSetRGBFillColor(ctx, 0.15, 0.15, 0.15, 1.0);
-        CGContextFillRect(ctx, CGRectMake(replace_field_x + replacement_w + 2.0, bar_top + 6.0, 1.4, BTN_FIND_BAR_HEIGHT - 12.0));
-    }
+    draw_find_field(ctx, replace_ed, replace_field_x, text_y, bar_top, attrs, char_width, focus_field == 2);
 
     if (status && status[0] != '\0') {
         draw_text_at(ctx, status, status_x, text_y, dimAttrs);

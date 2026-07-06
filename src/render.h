@@ -80,13 +80,15 @@ void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labe
 /* Zeichnet die Suchen/Ersetzen-Leiste direkt unter der Tableiste (Hoehe
  * BTN_FIND_BAR_HEIGHT). search_label/replace_label kommen von main.c
  * (uebersetzt via strings.h) - render.c selbst kennt wie beim Rest der App
- * keine Bediensprache. search_focused unterscheidet, in welchem der beiden
- * Felder der blinkende "Cursor" (nur ein Strich am Textende - Suchfelder
- * erlauben nur Anhaengen/Loeschen, keine Navigation mittendrin, siehe
- * main.c) gezeichnet wird. status darf leer sein. */
-void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_label, const char *query,
-                          const char *replace_label, const char *replacement,
-                          int regex_mode, int search_focused, const char *status);
+ * keine Bediensprache. search_ed/replace_ed sind die beiden Feld-Editoren
+ * (siehe editor.h) - liefern Inhalt, Cursor und Selektion in einem. Beide
+ * sind garantiert einzeilig (main.c fuegt nie '\n' ein), deshalb genuegt
+ * hier reine Byte-Spalten-Mathematik ohne Wortumbruch/Zeilen-Konzept.
+ * focus_field: 0 = keins der beiden Felder fokussiert (nur Inhalt zeigen,
+ * kein Cursor), 1 = Suchfeld, 2 = Ersetzen-Feld. status darf leer sein. */
+void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_label, Editor *search_ed,
+                          const char *replace_label, Editor *replace_ed,
+                          int regex_mode, int focus_field, const char *status);
 
 /* Zeichnet einen Frame: Hintergrund, Selektion, Text (optional per lang
  * syntax-hervorgehoben), Cursor, Zeilennummern-Gutter und die
