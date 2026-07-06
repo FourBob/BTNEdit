@@ -45,6 +45,11 @@ typedef enum {
     BTN_STR_BTN_SAVE,
     BTN_STR_BTN_DONT_SAVE,
     BTN_STR_BTN_CANCEL,
+    BTN_STR_FIND_SEARCH_LABEL,
+    BTN_STR_FIND_REPLACE_LABEL,
+    BTN_STR_FIND_NOT_FOUND,
+    /* Enthaelt ein "%d" fuer die Trefferanzahl - siehe BTN_STR_SAVE_PROMPT_TITLE_FMT. */
+    BTN_STR_FIND_REPLACED_FMT,
     BTN_STR_COUNT
 } BtnStringId;
 

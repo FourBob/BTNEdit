@@ -24,6 +24,16 @@ extern "C" {
 #define BTN_TAB_CLOSE_WIDTH 22.0
 #define BTN_TAB_NEW_WIDTH 32.0
 
+/* Suchen/Ersetzen-Leiste, sitzt direkt unter der Tableiste, wenn sichtbar -
+ * main.c braucht dieselben Masse fuers Reservieren der Content-Flaeche
+ * (content_bounds()) und fuers eigene Hit-Testing des Regex-Umschalters,
+ * genau wie bei der Tableiste oben. */
+#define BTN_FIND_BAR_HEIGHT 30.0
+#define BTN_FIND_BAR_PADDING 8.0
+#define BTN_FIND_LABEL_WIDTH 70.0
+#define BTN_FIND_FIELD_WIDTH 200.0
+#define BTN_FIND_REGEX_WIDTH 26.0
+
 /* Eine visuelle Zeile (Row) nach Wortumbruch: [start, start+len) im
  * Puffer. logical_line ist die zugehoerige "echte" Zeile (fuer die
  * Gutter-Nummerierung); is_continuation markiert Folge-Rows einer per
@@ -57,6 +67,17 @@ size_t btn_layout_row_for_offset(const BtnRow *rows, size_t row_count, size_t of
  * Aenderungen), active der Index des aktiven Tabs. Reserviert am Ende
  * einen "+"-Knopf zum Anlegen eines neuen Tabs. */
 void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labels, int count, int active);
+
+/* Zeichnet die Suchen/Ersetzen-Leiste direkt unter der Tableiste (Hoehe
+ * BTN_FIND_BAR_HEIGHT). search_label/replace_label kommen von main.c
+ * (uebersetzt via strings.h) - render.c selbst kennt wie beim Rest der App
+ * keine Bediensprache. search_focused unterscheidet, in welchem der beiden
+ * Felder der blinkende "Cursor" (nur ein Strich am Textende - Suchfelder
+ * erlauben nur Anhaengen/Loeschen, keine Navigation mittendrin, siehe
+ * main.c) gezeichnet wird. status darf leer sein. */
+void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_label, const char *query,
+                          const char *replace_label, const char *replacement,
+                          int regex_mode, int search_focused, const char *status);
 
 /* Zeichnet einen Frame: Hintergrund, Selektion, Text (optional per lang
  * syntax-hervorgehoben), Cursor, Zeilennummern-Gutter und die

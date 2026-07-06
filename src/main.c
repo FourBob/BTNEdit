@@ -7,6 +7,7 @@
 #include "editor.h"
 #include "strings.h"
 
+#include <regex.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,6 +46,23 @@ static int g_dragging = 0;
 
 static char *g_recent_paths[BTN_MAX_RECENT_FILES]; /* [0] = neuester Eintrag */
 static int g_recent_count = 0;
+
+/* Suchen/Ersetzen-Leiste. Die beiden Textfelder sind bewusst keine Mini-
+ * Editoren mit Cursor/Selektion (das waere fast eine zweite editor.c) -
+ * nur Anhaengen (Tippen) und Loeschen (Backspace) vom Ende her, das reicht
+ * fuer einen Suchbegriff voellig aus. */
+typedef enum {
+    BTN_FOCUS_DOCUMENT,
+    BTN_FOCUS_SEARCH,
+    BTN_FOCUS_REPLACE
+} BtnFocus;
+
+static int g_find_bar_visible = 0;
+static BtnFocus g_focus = BTN_FOCUS_DOCUMENT;
+static char g_search_query[256] = "";
+static char g_replace_text[256] = "";
+static int g_search_regex = 0; /* 0 = Literalsuche, 1 = POSIX-Regex (ERE) */
+static char g_search_status[128] = "";
 
 static Document *active_doc(void) {
     return &g_docs[g_active_doc];
@@ -174,15 +192,19 @@ static void add_recent_file(const char *path) {
     recent_files_refresh_menu();
 }
 
-/* Content-Flaeche ist g_bounds abzueglich der Tableiste oben - dieselbe
- * Rueckgabe geht an btn_render_frame/btn_hit_test/btn_layout_build, sodass
- * Zeichnen, Scrollen und Klick-Trefferpruefung nie auseinanderlaufen. Da nur
- * die Hoehe verkleinert wird (Ursprung bleibt (0,0)), bleiben absolute
- * y-Koordinaten unterhalb der Tableiste unveraendert gueltig - eine
- * gesonderte Koordinatentransformation fuer Mausklicks ist nicht noetig. */
+/* Content-Flaeche ist g_bounds abzueglich der Tableiste (und, falls
+ * sichtbar, der Suchen-Leiste) oben - dieselbe Rueckgabe geht an
+ * btn_render_frame/btn_hit_test/btn_layout_build, sodass Zeichnen, Scrollen
+ * und Klick-Trefferpruefung nie auseinanderlaufen. Da nur die Hoehe
+ * verkleinert wird (Ursprung bleibt (0,0)), bleiben absolute y-Koordinaten
+ * unterhalb der Leisten unveraendert gueltig - eine gesonderte
+ * Koordinatentransformation fuer Mausklicks ist nicht noetig. */
 static CGRect content_bounds(void) {
     CGRect r = g_bounds;
     r.size.height -= BTN_TAB_BAR_HEIGHT;
+    if (g_find_bar_visible) {
+        r.size.height -= BTN_FIND_BAR_HEIGHT;
+    }
     if (r.size.height < 0) {
         r.size.height = 0;
     }
@@ -248,12 +270,50 @@ static void sync_scroll_to_cursor(void) {
     clamp_scroll_to_row_count((long)row_count);
 }
 
+static void close_find_bar(void) {
+    if (!g_find_bar_visible) {
+        return;
+    }
+    g_find_bar_visible = 0;
+    g_focus = BTN_FOCUS_DOCUMENT;
+    /* Content-Flaeche wird wieder groesser (siehe content_bounds()) -
+     * ohne Neuberechnung koennte der Cursor jetzt in der bisher von der
+     * Leiste verdeckten Zeile stehen, ohne dass eine Bewegung stattfand. */
+    sync_scroll_to_cursor();
+    btn_app_request_redraw();
+}
+
+/* Oeffnet die Leiste (oder holt sie einfach wieder in den Fokus, falls
+ * schon offen) und uebernimmt eine vorhandene einzeilige Selektion als
+ * Suchtext - genau wie Cmd+F das in so gut wie jedem macOS-Editor tut.
+ * Mehrzeilige Selektionen werden ignoriert (Zeilenumbrueche/Regex-
+ * Sonderzeichen darin ergeben selten einen sinnvollen Suchbegriff). */
+static void open_find_bar(void) {
+    Editor *ed = &active_doc()->editor;
+    if (editor_has_selection(ed)) {
+        char *sel = editor_get_selection_text(ed);
+        size_t sel_len = strlen(sel);
+        if (sel_len < sizeof(g_search_query) && strchr(sel, '\n') == NULL) {
+            memcpy(g_search_query, sel, sel_len + 1);
+        }
+        free(sel);
+    }
+    g_find_bar_visible = 1;
+    g_focus = BTN_FOCUS_SEARCH;
+    g_search_status[0] = '\0';
+    sync_scroll_to_cursor();
+    btn_app_request_redraw();
+}
+
 /* Macht idx zum aktiven Tab und bringt Fenstertitel/Ungesichert-Indikator/
  * Scroll-Position auf den Stand dieses Dokuments - noetig, weil waehrend ein
  * anderer Tab aktiv war, weder sein Titel/Dirty-Status im Fenster sichtbar
  * war noch sich seine Scroll-Position an eine zwischenzeitliche
- * Fenstergroessenaenderung angepasst haben kann. */
+ * Fenstergroessenaenderung angepasst haben kann. Schliesst nebenbei eine
+ * offene Suchen-Leiste - deren Zustand (Selektion als aktueller Treffer)
+ * bezieht sich sonst auf ein Dokument, das gerade nicht mehr sichtbar ist. */
 static void switch_to_tab(int idx) {
+    close_find_bar();
     g_active_doc = idx;
     btn_set_window_title(doc_display_name(active_doc()));
     sync_window_state();
@@ -299,6 +359,213 @@ static void new_tab_or_reuse_blank(void) {
         return;
     }
     switch_to_tab(idx);
+}
+
+/* Escaped alle ERE-Sonderzeichen in src, damit eine Literalsuche ueber
+ * dieselbe Regex-Engine laufen kann wie eine echte Regex-Suche - vermeidet
+ * eine komplett zweite (Vorwaerts-/Rueckwaerts-)Suchimplementierung fuer
+ * den Nicht-Regex-Fall. */
+static void regex_escape_literal(const char *src, char *out, size_t out_cap) {
+    static const char *special = ".^$*+?()[]{}|\\";
+    size_t o = 0;
+    for (const char *p = src; *p && o + 2 < out_cap; p++) {
+        if (strchr(special, *p)) {
+            out[o++] = '\\';
+        }
+        out[o++] = *p;
+    }
+    out[o] = '\0';
+}
+
+static int compile_search_regex(regex_t *re) {
+    char pattern[512];
+    if (g_search_regex) {
+        snprintf(pattern, sizeof(pattern), "%s", g_search_query);
+    } else {
+        regex_escape_literal(g_search_query, pattern, sizeof(pattern));
+    }
+    return regcomp(re, pattern, REG_EXTENDED) == 0;
+}
+
+/* Sucht in text[0,text_len) ab Position from. forward=1 durchsucht
+ * [from,text_len) und wickelt bei wrap=1 zu [0,text_len) zurueck, falls
+ * nichts gefunden wurde. forward=0 (Rueckwaertssuche) sammelt alle Treffer
+ * im ganzen Dokument einmal vorwaerts (POSIX regexec kennt keine
+ * Rueckwaertssuche) und nimmt den letzten VOR from, oder bei wrap=1 den
+ * letzten insgesamt (Wrap ans Ende). REG_STARTEND (BSD/Darwin-Erweiterung)
+ * erlaubt Start/Ende direkt vorzugeben, ohne Teilstrings zu kopieren. */
+static int find_match(const char *text, size_t text_len, size_t from, int forward, int wrap,
+                       size_t *out_start, size_t *out_end) {
+    if (g_search_query[0] == '\0') {
+        return 0;
+    }
+    regex_t re;
+    if (!compile_search_regex(&re)) {
+        return 0;
+    }
+
+    regmatch_t m;
+    int found = 0;
+    size_t found_start = 0, found_end = 0;
+
+    if (forward) {
+        m.rm_so = (regoff_t)from;
+        m.rm_eo = (regoff_t)text_len;
+        if (regexec(&re, text, 1, &m, REG_STARTEND) == 0) {
+            found = 1;
+            found_start = (size_t)m.rm_so;
+            found_end = (size_t)m.rm_eo;
+        } else if (wrap && from > 0) {
+            m.rm_so = 0;
+            m.rm_eo = (regoff_t)text_len;
+            if (regexec(&re, text, 1, &m, REG_STARTEND) == 0) {
+                found = 1;
+                found_start = (size_t)m.rm_so;
+                found_end = (size_t)m.rm_eo;
+            }
+        }
+    } else {
+        size_t scan = 0;
+        int any_found = 0;
+        size_t last_start = 0, last_end = 0;
+        int has_before = 0;
+        size_t before_start = 0, before_end = 0;
+
+        while (scan <= text_len) {
+            m.rm_so = (regoff_t)scan;
+            m.rm_eo = (regoff_t)text_len;
+            if (regexec(&re, text, 1, &m, REG_STARTEND) != 0) {
+                break;
+            }
+            size_t ms = (size_t)m.rm_so, me = (size_t)m.rm_eo;
+            any_found = 1;
+            last_start = ms;
+            last_end = me;
+            if (ms < from) {
+                has_before = 1;
+                before_start = ms;
+                before_end = me;
+            }
+            scan = (me > ms) ? me : ms + 1; /* Leertreffer: mind. 1 vorruecken */
+        }
+
+        if (has_before) {
+            found = 1;
+            found_start = before_start;
+            found_end = before_end;
+        } else if (wrap && any_found) {
+            found = 1;
+            found_start = last_start;
+            found_end = last_end;
+        }
+    }
+
+    regfree(&re);
+    if (found) {
+        *out_start = found_start;
+        *out_end = found_end;
+    }
+    return found;
+}
+
+/* Sucht den naechsten/vorigen Treffer ab der aktuellen Selektion (oder dem
+ * Cursor, falls keine besteht) und selektiert ihn - editor_set_cursor()
+ * zweimal (erst ohne, dann mit extend) baut die neue Selektion sauber auf,
+ * genau wie es editor.c's eigene Selektionsfunktionen tun. */
+static void perform_find(int forward) {
+    Document *d = active_doc();
+    Editor *ed = &d->editor;
+    size_t len;
+    char *text = editor_copy_all(ed, &len);
+
+    size_t from = forward ? editor_selection_end(ed) : editor_selection_start(ed);
+    size_t match_start, match_end;
+    int found = find_match(text, len, from, forward, 1, &match_start, &match_end);
+    free(text);
+
+    if (found) {
+        editor_set_cursor(ed, match_start, 0);
+        editor_set_cursor(ed, match_end, 1);
+        g_search_status[0] = '\0';
+    } else {
+        snprintf(g_search_status, sizeof(g_search_status), "%s", btn_tr(BTN_STR_FIND_NOT_FOUND));
+    }
+    sync_scroll_to_cursor();
+    btn_app_request_redraw();
+}
+
+/* Ersetzt die aktuelle Selektion durch text/len - anders als
+ * editor_insert_text() direkt loescht das die Selektion auch dann, wenn
+ * text leer ist ("Ersetzen" durch nichts, also Treffer entfernen):
+ * editor_insert_text() selbst kehrt bei len==0 sofort zurueck (Guard gegen
+ * No-Op-Inserts), was die Selektion in genau diesem Fall stehen liesse. */
+static void replace_selection(Editor *ed, const char *text, size_t len) {
+    if (len == 0) {
+        editor_delete_selection(ed);
+    } else {
+        editor_insert_text(ed, text, len);
+    }
+}
+
+/* Ersetzt den aktuellen Treffer (sucht erst einen, falls gerade keiner
+ * selektiert ist) und springt direkt zum naechsten weiter. */
+static void perform_replace_current(void) {
+    Editor *ed = &active_doc()->editor;
+    if (!editor_has_selection(ed)) {
+        perform_find(1);
+        if (!editor_has_selection(ed)) {
+            return;
+        }
+    }
+    replace_selection(ed, g_replace_text, strlen(g_replace_text));
+    sync_window_state();
+    perform_find(1);
+}
+
+static void perform_replace_all(void) {
+    Document *d = active_doc();
+    Editor *ed = &d->editor;
+    if (g_search_query[0] == '\0') {
+        return;
+    }
+    size_t replace_len = strlen(g_replace_text);
+    size_t from = 0;
+    int count = 0;
+
+    while (1) {
+        size_t len;
+        char *text = editor_copy_all(ed, &len);
+        if (from > len) {
+            free(text);
+            break;
+        }
+        size_t match_start, match_end;
+        /* wrap=0: sonst wuerde die Schleife, sobald sie einmal das
+         * Dokumentende erreicht, wieder vorne anfangen und bereits
+         * ersetzte Treffer erneut finden - eine Endlosschleife. */
+        int found = find_match(text, len, from, 1, 0, &match_start, &match_end);
+        free(text);
+        if (!found) {
+            break;
+        }
+        editor_set_cursor(ed, match_start, 0);
+        editor_set_cursor(ed, match_end, 1);
+        replace_selection(ed, g_replace_text, replace_len);
+        /* Bei leerem Treffer UND leerem Ersetzungstext wuerde from sonst
+         * nicht vorruecken (Leertreffer an derselben Stelle immer wieder
+         * "ersetzt") - mindestens 1 Byte Fortschritt erzwingen. */
+        size_t advance = replace_len;
+        if (advance == 0 && match_end == match_start) {
+            advance = 1;
+        }
+        from = match_start + advance;
+        count++;
+    }
+
+    snprintf(g_search_status, sizeof(g_search_status), btn_tr(BTN_STR_FIND_REPLACED_FMT), count);
+    sync_window_state();
+    sync_scroll_to_cursor();
+    btn_app_request_redraw();
 }
 
 /* Gemeinsamer Abschluss aller Cursor-Bewegungen unten: Cursor setzen,
@@ -562,6 +829,12 @@ static void on_draw(CGContextRef ctx, CGRect bounds) {
     }
     btn_render_tab_bar(ctx, bounds, labels, g_doc_count, g_active_doc);
 
+    if (g_find_bar_visible) {
+        btn_render_find_bar(ctx, bounds, btn_tr(BTN_STR_FIND_SEARCH_LABEL), g_search_query,
+                             btn_tr(BTN_STR_FIND_REPLACE_LABEL), g_replace_text,
+                             g_search_regex, g_focus == BTN_FOCUS_SEARCH, g_search_status);
+    }
+
     Document *active = active_doc();
     btn_render_frame(ctx, content_bounds(), &active->editor, active->scroll_row,
                       btn_highlight_lang_for_path(active->path));
@@ -590,10 +863,124 @@ static void handle_tab_bar_click(double x) {
     }
 }
 
+/* Klick irgendwo in der Suchen-Leiste (y schon vom Aufrufer geprueft):
+ * trifft entweder den ".*"-Regex-Umschalter oder eines der beiden Felder
+ * (setzt den Fokus dorthin) - dieselben x-Positionen wie
+ * btn_render_find_bar()'s Zeichnung in render.c, aus denselben render.h-
+ * Konstanten berechnet. */
+static void handle_find_bar_click(double x) {
+    double search_field_x = BTN_FIND_BAR_PADDING + BTN_FIND_LABEL_WIDTH;
+    double regex_x = search_field_x + BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING;
+    double replace_label_x = regex_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING * 2.0;
+    double replace_field_x = replace_label_x + BTN_FIND_LABEL_WIDTH;
+
+    if (x >= regex_x && x < regex_x + BTN_FIND_REGEX_WIDTH) {
+        g_search_regex = !g_search_regex;
+    } else if (x >= search_field_x && x < regex_x) {
+        g_focus = BTN_FOCUS_SEARCH;
+    } else if (x >= replace_field_x) {
+        g_focus = BTN_FOCUS_REPLACE;
+    }
+}
+
+/* Tastatureingabe, waehrend die Suchen-Leiste fokussiert ist (Suchen- oder
+ * Ersetzen-Feld) - komplett getrennt vom Dokument-Tippen unten in on_key().
+ * Escape schliesst die Leiste, Tab wechselt zwischen den beiden Feldern,
+ * Return loest je nach Feld Suchen/Ersetzen aus, Cmd+Return im Ersetzen-
+ * Feld ersetzt alle Treffer. Die Felder selbst erlauben nur Anhaengen/
+ * Loeschen vom Ende her (siehe Kommentar bei den globalen Puffern oben). */
+static void handle_find_bar_key(const char *characters, unsigned short keycode, int shift, int command) {
+    switch (keycode) {
+        case KEYCODE_LEFT:
+        case KEYCODE_RIGHT:
+        case KEYCODE_UP:
+        case KEYCODE_DOWN:
+        case KEYCODE_HOME:
+        case KEYCODE_END:
+        case KEYCODE_FORWARD_DELETE:
+            /* Die Suchfelder erlauben nur Anhaengen/Loeschen vom Ende her
+             * (kein Mini-Editor) - diese Tasten haben hier keine Bedeutung.
+             * Ohne diesen Filter wuerden sie ueber ihre NSEvent.characters
+             * (Unicode Private-Use-Area, z.B. U+F702 fuer Pfeil-links) als
+             * Muell-Bytes im Suchtext landen, siehe naechster Absatz. */
+            return;
+        default:
+            break;
+    }
+    if (!characters) {
+        return;
+    }
+    unsigned char c = (unsigned char)characters[0];
+
+    if (c == 0x1B) {
+        close_find_bar();
+        return;
+    }
+    if (c == '\t') {
+        g_focus = (g_focus == BTN_FOCUS_SEARCH) ? BTN_FOCUS_REPLACE : BTN_FOCUS_SEARCH;
+        btn_app_request_redraw();
+        return;
+    }
+    if (c == '\r') {
+        if (g_focus == BTN_FOCUS_REPLACE) {
+            if (command) {
+                perform_replace_all();
+            } else {
+                perform_replace_current();
+            }
+        } else {
+            perform_find(!shift);
+        }
+        return;
+    }
+
+    char *buf = (g_focus == BTN_FOCUS_REPLACE) ? g_replace_text : g_search_query;
+    size_t cap = sizeof(g_search_query); /* beide Puffer gleich gross */
+
+    if (c == 0x7F) {
+        size_t len = strlen(buf);
+        if (len > 0) {
+            /* Ein UTF-8-Zeichen zurueck, nicht nur ein Byte - sonst wuerde
+             * Backspace mehrbytige Zeichen (Umlaute etc.) haeppchenweise
+             * zerlegen statt sie als Ganzes zu entfernen. */
+            size_t cut = len - 1;
+            while (cut > 0 && ((unsigned char)buf[cut] & 0xC0) == 0x80) {
+                cut--;
+            }
+            buf[cut] = '\0';
+        }
+    } else if (c >= 0x20) {
+        size_t len = strlen(buf);
+        size_t add_len = strlen(characters);
+        if (len + add_len < cap) {
+            memcpy(buf + len, characters, add_len + 1);
+        }
+    } else {
+        return;
+    }
+    g_search_status[0] = '\0';
+    btn_app_request_redraw();
+}
+
 static void on_key(const char *characters, unsigned short keycode, unsigned long modifierFlags) {
     int shift = (modifierFlags & BTN_MOD_SHIFT) != 0;
     int option = (modifierFlags & BTN_MOD_OPTION) != 0;
     int command = (modifierFlags & BTN_MOD_COMMAND) != 0;
+
+    /* Escape schliesst eine sichtbare Suchen-Leiste immer, auch wenn der
+     * Fokus (z.B. durch einen Klick ins Dokument) inzwischen wieder auf dem
+     * Dokument liegt - sonst gaebe es keinen Weg mehr, sie zu schliessen,
+     * ausser erneut Cmd+F zu druecken. */
+    if (g_find_bar_visible && characters && (unsigned char)characters[0] == 0x1B) {
+        close_find_bar();
+        return;
+    }
+
+    if (g_focus != BTN_FOCUS_DOCUMENT) {
+        handle_find_bar_key(characters, keycode, shift, command);
+        return;
+    }
+
     Editor *ed = &active_doc()->editor;
 
     switch (keycode) {
@@ -705,9 +1092,19 @@ static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, 
                 btn_app_request_redraw();
                 return;
             }
+            if (g_find_bar_visible && y >= g_bounds.size.height - BTN_TAB_BAR_HEIGHT - BTN_FIND_BAR_HEIGHT) {
+                handle_find_bar_click(x);
+                btn_app_request_redraw();
+                return;
+            }
             if (y < BTN_FOOTER_HEIGHT) {
                 return;
             }
+            /* Klick im Dokument entzieht der Suchen-Leiste den Fokus (die
+             * Leiste selbst bleibt offen) - genau wie das Anklicken von
+             * irgendwas anderem ein fokussiertes Textfeld sonst auch
+             * de-fokussiert. */
+            g_focus = BTN_FOCUS_DOCUMENT;
             Document *doc = active_doc();
             size_t offset = btn_hit_test(&doc->editor, content_bounds(), x, y, doc->scroll_row);
             if (clickCount >= 3) {
@@ -819,8 +1216,10 @@ static void on_menu(int tag) {
         case BTN_MENU_SELECT_ALL:
             editor_select_all(&active_doc()->editor);
             break;
-        case BTN_MENU_PRINT:
         case BTN_MENU_FIND:
+            open_find_bar();
+            break;
+        case BTN_MENU_PRINT:
             fprintf(stderr, "BTNEdit: Menu-Aktion %d noch nicht implementiert\n", tag);
             break;
         default:

@@ -422,6 +422,67 @@ void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labe
     CGColorRelease(dimColor);
 }
 
+void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_label, const char *query,
+                          const char *replace_label, const char *replacement,
+                          int regex_mode, int search_focused, const char *status) {
+    double bar_top = bounds.size.height - BTN_TAB_BAR_HEIGHT - BTN_FIND_BAR_HEIGHT;
+    double text_y = bar_top + (BTN_FIND_BAR_HEIGHT - FONT_SIZE) / 2.0 + 3.0;
+
+    CGContextSetRGBFillColor(ctx, 0.90, 0.90, 0.90, 1.0);
+    CGContextFillRect(ctx, CGRectMake(0, bar_top, bounds.size.width, BTN_FIND_BAR_HEIGHT));
+
+    CTFontRef font = get_font();
+    CGColorRef textColor = CGColorCreateGenericRGB(0.15, 0.15, 0.15, 1.0);
+    CGColorRef dimColor = CGColorCreateGenericRGB(0.45, 0.45, 0.45, 1.0);
+    CGColorRef accentColor = CGColorCreateGenericRGB(0.20, 0.40, 0.85, 1.0);
+    CFDictionaryRef attrs = make_attrs(font, textColor);
+    CFDictionaryRef dimAttrs = make_attrs(font, dimColor);
+    CFDictionaryRef accentAttrs = make_attrs(font, accentColor);
+
+    double search_label_x = BTN_FIND_BAR_PADDING;
+    double search_field_x = search_label_x + BTN_FIND_LABEL_WIDTH;
+    double regex_x = search_field_x + BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING;
+    double replace_label_x = regex_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING * 2.0;
+    double replace_field_x = replace_label_x + BTN_FIND_LABEL_WIDTH;
+    double status_x = replace_field_x + BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING * 2.0;
+
+    draw_text_at(ctx, search_label, search_label_x, text_y, dimAttrs);
+    double query_w = draw_text_at(ctx, query, search_field_x, text_y, attrs);
+    if (search_focused) {
+        CGContextSetRGBFillColor(ctx, 0.15, 0.15, 0.15, 1.0);
+        CGContextFillRect(ctx, CGRectMake(search_field_x + query_w + 2.0, bar_top + 6.0, 1.4, BTN_FIND_BAR_HEIGHT - 12.0));
+    }
+
+    /* ".*"-Umschalter fuer Regex-Modus - main.c testet dieselbe Position
+     * (regex_x, Breite BTN_FIND_REGEX_WIDTH) beim Mausklick. */
+    CGContextSetRGBFillColor(ctx, regex_mode ? 0.80 : 0.90, regex_mode ? 0.85 : 0.90, regex_mode ? 0.97 : 0.90, 1.0);
+    CGContextFillRect(ctx, CGRectMake(regex_x, bar_top + 4.0, BTN_FIND_REGEX_WIDTH, BTN_FIND_BAR_HEIGHT - 8.0));
+    draw_text_at(ctx, ".*", regex_x + 3.0, text_y, regex_mode ? accentAttrs : dimAttrs);
+
+    draw_text_at(ctx, replace_label, replace_label_x, text_y, dimAttrs);
+    double replacement_w = draw_text_at(ctx, replacement, replace_field_x, text_y, attrs);
+    if (!search_focused) {
+        CGContextSetRGBFillColor(ctx, 0.15, 0.15, 0.15, 1.0);
+        CGContextFillRect(ctx, CGRectMake(replace_field_x + replacement_w + 2.0, bar_top + 6.0, 1.4, BTN_FIND_BAR_HEIGHT - 12.0));
+    }
+
+    if (status && status[0] != '\0') {
+        draw_text_at(ctx, status, status_x, text_y, dimAttrs);
+    }
+
+    CGContextSetRGBStrokeColor(ctx, 0.55, 0.55, 0.55, 1.0);
+    CGContextSetLineWidth(ctx, 1.0);
+    CGPoint bottom_divider[2] = { { 0, bar_top }, { bounds.size.width, bar_top } };
+    CGContextStrokeLineSegments(ctx, bottom_divider, 2);
+
+    CFRelease(attrs);
+    CFRelease(dimAttrs);
+    CFRelease(accentAttrs);
+    CGColorRelease(textColor);
+    CGColorRelease(dimColor);
+    CGColorRelease(accentColor);
+}
+
 /* Kommentar-Zustand direkt vor logical_line, indem alle vorherigen Zeilen
  * einmal (nur fuers Zustands-Tracking, max_tokens=0) tokenisiert werden -
  * noetig, damit mehrzeilige Blockkommentare beim Scrollen mitten ins

@@ -16,10 +16,12 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
     {
         "About ", "Quit ", "File", "New", "Open...", "Open Recent", "(None)",
         "Save", "Save As...", "Close", "Print...", "Edit", "Undo", "Redo",
-        "Cut", "Copy", "Paste", "Select All", "Find...", "Untitled",
+        "Cut", "Copy", "Paste", "Select All", "Find & Replace...", "Untitled",
         "Do you want to save the changes made to “%s”?",
         "Your changes will be lost if you don't save them.",
-        "Save", "Don't Save", "Cancel"
+        "Save", "Don't Save", "Cancel",
+        "Find:", "Replace:", "Not found",
+        "%d replaced"
     },
     /* BTN_LANG_DE */
     {
@@ -28,10 +30,12 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Sichern", "Sichern unter...", "Schließen", "Drucken...",
         "Bearbeiten", "Widerrufen", "Wiederholen",
         "Ausschneiden", "Kopieren", "Einfügen", "Alles auswählen",
-        "Suchen...", "Unbenannt",
+        "Suchen und Ersetzen...", "Unbenannt",
         "Möchtest du die Änderungen an „%s“ sichern?",
         "Deine Änderungen gehen verloren, wenn du sie nicht sicherst.",
-        "Sichern", "Nicht sichern", "Abbrechen"
+        "Sichern", "Nicht sichern", "Abbrechen",
+        "Suchen:", "Ersetzen:", "Nicht gefunden",
+        "%d ersetzt"
     },
     /* BTN_LANG_FR */
     {
@@ -40,10 +44,12 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Enregistrer", "Enregistrer sous...", "Fermer", "Imprimer...",
         "Édition", "Annuler", "Rétablir",
         "Couper", "Copier", "Coller", "Tout sélectionner",
-        "Rechercher...", "Sans titre",
+        "Rechercher et remplacer...", "Sans titre",
         "Voulez-vous enregistrer les modifications apportées à « %s » ?",
         "Vos modifications seront perdues si vous ne les enregistrez pas.",
-        "Enregistrer", "Ne pas enregistrer", "Annuler"
+        "Enregistrer", "Ne pas enregistrer", "Annuler",
+        "Rechercher :", "Remplacer :", "Introuvable",
+        "%d remplacement(s)"
     },
     /* BTN_LANG_ES */
     {
@@ -52,10 +58,12 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Guardar", "Guardar como...", "Cerrar", "Imprimir...",
         "Edición", "Deshacer", "Rehacer",
         "Cortar", "Copiar", "Pegar", "Seleccionar todo",
-        "Buscar...", "Sin título",
+        "Buscar y reemplazar...", "Sin título",
         "¿Quieres guardar los cambios realizados en “%s”?",
         "Tus cambios se perderán si no los guardas.",
-        "Guardar", "No guardar", "Cancelar"
+        "Guardar", "No guardar", "Cancelar",
+        "Buscar:", "Reemplazar:", "No encontrado",
+        "%d reemplazos"
     },
     /* BTN_LANG_ZH (Simplified) */
     {
@@ -67,10 +75,12 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "关闭", "打印…",
         "编辑", "撤销", "重做",
         "剪切", "拷贝", "粘贴",
-        "全选", "查找…", "未命名",
+        "全选", "查找和替换…", "未命名",
         "要存储对“%s”的修改吗？",
         "如果不存储，你所做的修改将丢失。",
-        "存储", "不存储", "取消"
+        "存储", "不存储", "取消",
+        "查找:", "替换:", "未找到",
+        "已替换 %d 处"
     }
 };
 
