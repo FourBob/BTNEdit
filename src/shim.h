@@ -3,6 +3,7 @@
 
 #include <CoreGraphics/CoreGraphics.h>
 #include <stddef.h>
+#include "strings.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -24,6 +25,14 @@ enum {
     BTN_MENU_PASTE,
     BTN_MENU_SELECT_ALL
 };
+
+/* Tags fuer die dynamischen "Zuletzt geoeffnet"-Menuepunkte liegen ab hier,
+ * weit oberhalb der festen BTN_MENU_*-Werte oben, damit sich die beiden
+ * Tag-Raeume nie ueberschneiden - main.c erkennt sie per tag >=
+ * BTN_MENU_RECENT_BASE und leitet den Index (tag - BTN_MENU_RECENT_BASE)
+ * in die eigene Recent-Files-Liste zurueck. */
+#define BTN_MENU_RECENT_BASE 1000
+#define BTN_MAX_RECENT_FILES 10
 
 /* Rohe NSEvent.ModifierFlags-Bitwerte (von Apple dokumentiert/stabil), damit
  * main.c ohne Cocoa-Header auskommt. */
@@ -51,6 +60,13 @@ typedef void (*btn_scroll_callback)(double delta_y);
  * dieser beiden System-Wege den Ungesichert-Dialog umgehen kann. */
 typedef int (*btn_should_close_callback)(void);
 
+/* Liest NSLocale.preferredLanguages (Systemeinstellung, nicht der App
+ * eigene Auswahl - kein Sprachumschalter im Menue, ganz im Sinne der
+ * schlanken Notepad.exe-Philosophie) und ordnet die bevorzugte Sprache
+ * einer BtnUiLang zu. main() ruft das einmal beim Start auf, bevor
+ * btn_strings_set_language() und btn_app_build_menu() folgen. */
+BtnUiLang btn_app_detect_system_language(void);
+
 void btn_app_init(void);
 void btn_app_set_draw_callback(btn_draw_callback cb);
 void btn_app_set_key_callback(btn_key_callback cb);
@@ -60,6 +76,13 @@ void btn_app_set_mouse_callback(btn_mouse_callback cb);
 void btn_app_set_scroll_callback(btn_scroll_callback cb);
 void btn_app_set_should_close_callback(btn_should_close_callback cb);
 void btn_app_build_menu(void);
+
+/* Baut das "Zuletzt geoeffnet"-Untermenue komplett neu aus paths[0..count)
+ * auf (paths[0] = neuester Eintrag). main.c ruft das nach jedem Laden/
+ * Sichern und einmal beim Start auf; count == 0 zeigt einen deaktivierten
+ * Platzhaltereintrag. count wird intern auf BTN_MAX_RECENT_FILES gekappt. */
+void btn_app_set_recent_files(const char **paths, int count);
+
 void btn_app_request_redraw(void);
 void btn_app_run(void);
 

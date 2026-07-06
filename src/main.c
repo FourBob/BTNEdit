@@ -5,10 +5,12 @@
 #include "shim.h"
 #include "render.h"
 #include "editor.h"
+#include "strings.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #define KEYCODE_LEFT           123
 #define KEYCODE_RIGHT          124
@@ -28,6 +30,9 @@ static double g_scroll_accum = 0.0;
 
 static char *g_current_path = NULL; /* NULL = unbenanntes, neues Dokument */
 static size_t g_saved_edit_seq = 0;
+
+static char *g_recent_paths[BTN_MAX_RECENT_FILES]; /* [0] = neuester Eintrag */
+static int g_recent_count = 0;
 
 static const char *basename_of(const char *path) {
     const char *slash = strrchr(path, '/');
@@ -49,11 +54,98 @@ static void set_current_path(const char *path) {
     char *copy = path ? btn_dup_cstring(path) : NULL;
     free(g_current_path);
     g_current_path = copy;
-    btn_set_window_title(g_current_path ? basename_of(g_current_path) : "Unbenannt");
+    btn_set_window_title(g_current_path ? basename_of(g_current_path) : btn_tr(BTN_STR_UNTITLED));
 }
 
 static void sync_window_state(void) {
     btn_app_set_document_edited(is_dirty());
+}
+
+/* Persistiert als einfache Zeilenliste unter ~/.btnedit_recent statt in
+ * NSUserDefaults - main.c bleibt so komplett Cocoa-frei, der Shim muss dafuer
+ * keine neue API bekommen. */
+static char *recent_file_list_path(void) {
+    const char *home = getenv("HOME");
+    if (!home) {
+        return NULL;
+    }
+    size_t len = strlen(home) + strlen("/.btnedit_recent") + 1;
+    char *path = malloc(len);
+    snprintf(path, len, "%s/.btnedit_recent", home);
+    return path;
+}
+
+static void recent_files_refresh_menu(void) {
+    const char *paths[BTN_MAX_RECENT_FILES];
+    for (int i = 0; i < g_recent_count; i++) {
+        paths[i] = g_recent_paths[i];
+    }
+    btn_app_set_recent_files(paths, g_recent_count);
+}
+
+static void save_recent_files(void) {
+    char *list_path = recent_file_list_path();
+    if (!list_path) {
+        return;
+    }
+    FILE *f = fopen(list_path, "w");
+    free(list_path);
+    if (!f) {
+        return;
+    }
+    for (int i = 0; i < g_recent_count; i++) {
+        fprintf(f, "%s\n", g_recent_paths[i]);
+    }
+    fclose(f);
+}
+
+static void load_recent_files(void) {
+    char *list_path = recent_file_list_path();
+    if (!list_path) {
+        return;
+    }
+    FILE *f = fopen(list_path, "r");
+    free(list_path);
+    if (!f) {
+        return;
+    }
+    char line[4096];
+    while (g_recent_count < BTN_MAX_RECENT_FILES && fgets(line, sizeof(line), f)) {
+        size_t len = strlen(line);
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+            line[--len] = '\0';
+        }
+        /* Eintraege, deren Datei inzwischen verschwunden ist, gar nicht erst
+         * ins Menu aufnehmen - sonst haette "Zuletzt geoeffnet" tote
+         * Eintraege, die beim Anklicken nur eine Fehlermeldung produzieren. */
+        if (len == 0 || access(line, R_OK) != 0) {
+            continue;
+        }
+        g_recent_paths[g_recent_count++] = btn_dup_cstring(line);
+    }
+    fclose(f);
+}
+
+static void add_recent_file(const char *path) {
+    for (int i = 0; i < g_recent_count; i++) {
+        if (strcmp(g_recent_paths[i], path) == 0) {
+            free(g_recent_paths[i]);
+            memmove(&g_recent_paths[i], &g_recent_paths[i + 1],
+                    (size_t)(g_recent_count - i - 1) * sizeof(char *));
+            g_recent_count--;
+            break;
+        }
+    }
+    if (g_recent_count == BTN_MAX_RECENT_FILES) {
+        free(g_recent_paths[g_recent_count - 1]);
+        g_recent_count--;
+    }
+    memmove(&g_recent_paths[1], &g_recent_paths[0], (size_t)g_recent_count * sizeof(char *));
+    g_recent_paths[0] = btn_dup_cstring(path);
+    g_recent_count++;
+
+    save_recent_files();
+    recent_files_refresh_menu();
 }
 
 static long visible_line_capacity(void) {
@@ -202,6 +294,28 @@ static int write_file_contents(const char *path, const char *data, size_t len) {
     return written == len;
 }
 
+/* Gemeinsame Ladelogik fuer Datei > Oeffnen... und Klicks im "Zuletzt
+ * geoeffnet"-Untermenue - beide muessen dieselbe Reihenfolge (lesen, Editor
+ * fuellen, Pfad/Dirty-Status/Recent-Liste synchronisieren) einhalten. */
+static void open_file_path(const char *path) {
+    size_t len;
+    char *contents = read_file_contents(path, &len);
+    if (contents) {
+        editor_set_text(&g_editor, contents, len);
+        free(contents);
+        set_current_path(path);
+        g_saved_edit_seq = g_editor.edit_seq;
+        /* g_current_path statt path: set_current_path() dupliziert path
+         * selbst dann sauber, wenn path zufaellig mit dem *alten*
+         * g_current_path identisch war (und dieser Speicher dabei
+         * freigegeben wird) - path waere in dem Fall hier bereits
+         * ein haengender Zeiger. */
+        add_recent_file(g_current_path);
+    } else {
+        fprintf(stderr, "BTNEdit: Datei konnte nicht gelesen werden: %s\n", path);
+    }
+}
+
 /* force_save_as: immer den Sichern-Dialog zeigen, auch wenn schon ein Pfad
  * bekannt ist. Rueckgabe: 1 = gesichert, 0 = abgebrochen/fehlgeschlagen. */
 static int perform_save(int force_save_as) {
@@ -226,6 +340,12 @@ static int perform_save(int force_save_as) {
     if (ok) {
         set_current_path(path);
         g_saved_edit_seq = g_editor.edit_seq;
+        /* g_current_path statt path: bei "Sichern" auf einen bereits
+         * bekannten Pfad ist path == der alte g_current_path, dessen
+         * Speicher set_current_path() gerade freigegeben hat - path waere
+         * hier ein haengender Zeiger (siehe gleiche Begruendung in
+         * open_file_path()). */
+        add_recent_file(g_current_path);
     } else {
         fprintf(stderr, "BTNEdit: Datei konnte nicht geschrieben werden: %s\n", path);
     }
@@ -241,7 +361,7 @@ static int confirm_discard_if_dirty(void) {
     if (!is_dirty()) {
         return 1;
     }
-    int choice = btn_show_unsaved_changes_alert(g_current_path ? basename_of(g_current_path) : "Unbenannt");
+    int choice = btn_show_unsaved_changes_alert(g_current_path ? basename_of(g_current_path) : btn_tr(BTN_STR_UNTITLED));
     if (choice == 0) {
         return 0;
     }
@@ -424,6 +544,23 @@ static void on_scroll(double delta_y) {
 
 static void on_menu(int tag) {
     char *clip;
+
+    if (tag >= BTN_MENU_RECENT_BASE) {
+        int index = tag - BTN_MENU_RECENT_BASE;
+        if (index < g_recent_count && confirm_discard_if_dirty()) {
+            /* Vorher duplizieren: open_file_path() ruft add_recent_file()
+             * auf, das g_recent_paths[] ummordnet/freigibt - ein Zeiger
+             * direkt ins Array waere spaetestens dann nicht mehr gueltig. */
+            char *path = btn_dup_cstring(g_recent_paths[index]);
+            open_file_path(path);
+            free(path);
+        }
+        sync_window_state();
+        sync_scroll_to_cursor();
+        btn_app_request_redraw();
+        return;
+    }
+
     switch (tag) {
         case BTN_MENU_NEW:
             if (confirm_discard_if_dirty()) {
@@ -437,16 +574,7 @@ static void on_menu(int tag) {
             if (confirm_discard_if_dirty()) {
                 char *path = btn_show_open_panel();
                 if (path) {
-                    size_t len;
-                    char *contents = read_file_contents(path, &len);
-                    if (contents) {
-                        editor_set_text(&g_editor, contents, len);
-                        free(contents);
-                        set_current_path(path);
-                        g_saved_edit_seq = g_editor.edit_seq;
-                    } else {
-                        fprintf(stderr, "BTNEdit: Datei konnte nicht gelesen werden: %s\n", path);
-                    }
+                    open_file_path(path);
                     free(path);
                 }
             }
@@ -507,6 +635,10 @@ int main(void) {
     editor_init(&g_editor);
 
     btn_app_init();
+    /* Bediensprache folgt der Systemeinstellung (kein eigener
+     * Sprachumschalter im Menue) - muss vor btn_app_build_menu() gesetzt
+     * sein, das die Menuetitel bereits in der aktiven Sprache aufbaut. */
+    btn_strings_set_language(btn_app_detect_system_language());
     btn_app_set_draw_callback(on_draw);
     btn_app_set_key_callback(on_key);
     btn_app_set_resize_callback(on_resize);
@@ -515,6 +647,8 @@ int main(void) {
     btn_app_set_menu_callback(on_menu);
     btn_app_set_should_close_callback(should_close);
     btn_app_build_menu();
+    load_recent_files();
+    recent_files_refresh_menu();
     btn_app_run();
 
     editor_free(&g_editor);

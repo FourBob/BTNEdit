@@ -8,6 +8,7 @@
  */
 #import <Cocoa/Cocoa.h>
 #include "shim.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -20,6 +21,7 @@ static btn_scroll_callback g_scroll_cb = NULL;
 static btn_should_close_callback g_should_close_cb = NULL;
 
 static NSWindow *g_window = nil;
+static NSMenu *g_recentMenu = nil;
 
 @interface BTNContentView : NSView
 @end
@@ -135,6 +137,22 @@ static void add_item(NSMenu *menu, NSString *title, NSString *key, int tag) {
     [item setTag:tag];
 }
 
+/* Kurzform fuer btn_tr() + Umwandlung in NSString - btn_tr() gibt bewusst
+ * ein rohes C-const-char* zurueck (siehe strings.h), damit main.c dieselbe
+ * Tabelle ohne Foundation nutzen kann; hier im Shim wird daraus erst bei
+ * Bedarf ein NSString. */
+static NSString *trs(BtnStringId id) {
+    return [NSString stringWithUTF8String:btn_tr(id)];
+}
+
+BtnUiLang btn_app_detect_system_language(void) {
+    @autoreleasepool {
+        NSArray<NSString *> *preferred = [NSLocale preferredLanguages];
+        NSString *code = preferred.count > 0 ? preferred[0] : @"en";
+        return btn_strings_lang_from_code([code UTF8String]);
+    }
+}
+
 void btn_app_init(void) {
     @autoreleasepool {
         [NSApplication sharedApplication];
@@ -180,40 +198,65 @@ void btn_app_build_menu(void) {
 
         NSString *appName = @"BTNEdit";
         NSMenu *appMenu = [NSMenu new];
-        [appMenu addItemWithTitle:[@"Ueber " stringByAppendingString:appName] action:nil keyEquivalent:@""];
+        [appMenu addItemWithTitle:[trs(BTN_STR_ABOUT_PREFIX) stringByAppendingString:appName] action:nil keyEquivalent:@""];
         [appMenu addItem:[NSMenuItem separatorItem]];
-        [appMenu addItemWithTitle:[@"Beende " stringByAppendingString:appName]
+        [appMenu addItemWithTitle:[trs(BTN_STR_QUIT_PREFIX) stringByAppendingString:appName]
                             action:@selector(terminate:)
                      keyEquivalent:@"q"];
         [appMenuItem setSubmenu:appMenu];
 
         NSMenuItem *fileMenuItem = [NSMenuItem new];
         [menubar addItem:fileMenuItem];
-        NSMenu *fileMenu = [[NSMenu alloc] initWithTitle:@"Ablage"];
-        add_item(fileMenu, @"Neu", @"n", BTN_MENU_NEW);
-        add_item(fileMenu, @"Oeffnen...", @"o", BTN_MENU_OPEN);
+        NSMenu *fileMenu = [[NSMenu alloc] initWithTitle:trs(BTN_STR_FILE_MENU)];
+        add_item(fileMenu, trs(BTN_STR_NEW), @"n", BTN_MENU_NEW);
+        add_item(fileMenu, trs(BTN_STR_OPEN), @"o", BTN_MENU_OPEN);
+        g_recentMenu = [[NSMenu alloc] initWithTitle:trs(BTN_STR_RECENT)];
+        NSMenuItem *recentItem = [fileMenu addItemWithTitle:trs(BTN_STR_RECENT) action:nil keyEquivalent:@""];
+        [recentItem setSubmenu:g_recentMenu];
         [fileMenu addItem:[NSMenuItem separatorItem]];
-        add_item(fileMenu, @"Sichern", @"s", BTN_MENU_SAVE);
-        add_item(fileMenu, @"Sichern unter...", @"S", BTN_MENU_SAVE_AS);
+        add_item(fileMenu, trs(BTN_STR_SAVE), @"s", BTN_MENU_SAVE);
+        add_item(fileMenu, trs(BTN_STR_SAVE_AS), @"S", BTN_MENU_SAVE_AS);
         [fileMenu addItem:[NSMenuItem separatorItem]];
-        add_item(fileMenu, @"Schliessen", @"w", BTN_MENU_CLOSE);
+        add_item(fileMenu, trs(BTN_STR_CLOSE), @"w", BTN_MENU_CLOSE);
         [fileMenu addItem:[NSMenuItem separatorItem]];
-        add_item(fileMenu, @"Drucken...", @"p", BTN_MENU_PRINT);
+        add_item(fileMenu, trs(BTN_STR_PRINT), @"p", BTN_MENU_PRINT);
         [fileMenuItem setSubmenu:fileMenu];
 
         NSMenuItem *editMenuItem = [NSMenuItem new];
         [menubar addItem:editMenuItem];
-        NSMenu *editMenu = [[NSMenu alloc] initWithTitle:@"Bearbeiten"];
-        add_item(editMenu, @"Widerrufen", @"z", BTN_MENU_UNDO);
-        add_item(editMenu, @"Wiederholen", @"Z", BTN_MENU_REDO);
+        NSMenu *editMenu = [[NSMenu alloc] initWithTitle:trs(BTN_STR_EDIT_MENU)];
+        add_item(editMenu, trs(BTN_STR_UNDO), @"z", BTN_MENU_UNDO);
+        add_item(editMenu, trs(BTN_STR_REDO), @"Z", BTN_MENU_REDO);
         [editMenu addItem:[NSMenuItem separatorItem]];
-        add_item(editMenu, @"Ausschneiden", @"x", BTN_MENU_CUT);
-        add_item(editMenu, @"Kopieren", @"c", BTN_MENU_COPY);
-        add_item(editMenu, @"Einfuegen", @"v", BTN_MENU_PASTE);
-        add_item(editMenu, @"Alles auswaehlen", @"a", BTN_MENU_SELECT_ALL);
+        add_item(editMenu, trs(BTN_STR_CUT), @"x", BTN_MENU_CUT);
+        add_item(editMenu, trs(BTN_STR_COPY), @"c", BTN_MENU_COPY);
+        add_item(editMenu, trs(BTN_STR_PASTE), @"v", BTN_MENU_PASTE);
+        add_item(editMenu, trs(BTN_STR_SELECT_ALL), @"a", BTN_MENU_SELECT_ALL);
         [editMenu addItem:[NSMenuItem separatorItem]];
-        add_item(editMenu, @"Suchen...", @"f", BTN_MENU_FIND);
+        add_item(editMenu, trs(BTN_STR_FIND), @"f", BTN_MENU_FIND);
         [editMenuItem setSubmenu:editMenu];
+    }
+}
+
+void btn_app_set_recent_files(const char **paths, int count) {
+    @autoreleasepool {
+        if (count > BTN_MAX_RECENT_FILES) {
+            count = BTN_MAX_RECENT_FILES;
+        }
+        [g_recentMenu removeAllItems];
+        for (int i = 0; i < count; i++) {
+            NSString *full = [NSString stringWithUTF8String:paths[i]];
+            NSMenuItem *item = [g_recentMenu addItemWithTitle:[full lastPathComponent]
+                                                        action:@selector(menuAction:)
+                                                 keyEquivalent:@""];
+            [item setTarget:g_menuTarget];
+            [item setTag:BTN_MENU_RECENT_BASE + i];
+            [item setToolTip:full];
+        }
+        if (count == 0) {
+            NSMenuItem *empty = [g_recentMenu addItemWithTitle:trs(BTN_STR_RECENT_EMPTY) action:nil keyEquivalent:@""];
+            [empty setEnabled:NO];
+        }
     }
 }
 
@@ -230,7 +273,7 @@ void btn_app_run(void) {
                                                 styleMask:style
                                                   backing:NSBackingStoreBuffered
                                                     defer:NO];
-        [g_window setTitle:@"Unbenannt"];
+        [g_window setTitle:trs(BTN_STR_UNTITLED)];
         [g_window setMinSize:NSMakeSize(400, 300)];
 
         g_view = [[BTNContentView alloc] initWithFrame:frame];
@@ -308,7 +351,7 @@ char *btn_show_save_panel(const char *suggested_path) {
             [panel setDirectoryURL:[[NSURL fileURLWithPath:s] URLByDeletingLastPathComponent]];
             [panel setNameFieldStringValue:[s lastPathComponent]];
         } else {
-            [panel setNameFieldStringValue:@"Unbenannt.txt"];
+            [panel setNameFieldStringValue:[trs(BTN_STR_UNTITLED) stringByAppendingString:@".txt"]];
         }
         if ([panel runModal] == NSModalResponseOK) {
             return btn_dup_cstring([[[panel URL] path] UTF8String]);
@@ -319,13 +362,18 @@ char *btn_show_save_panel(const char *suggested_path) {
 
 int btn_show_unsaved_changes_alert(const char *display_name) {
     @autoreleasepool {
-        NSString *name = [NSString stringWithUTF8String:display_name ? display_name : "Unbenannt"];
+        /* snprintf statt NSString stringWithFormat:/%@, weil btn_tr()s
+         * Format-String bewusst "%s" statt "%@" nutzt (main.c braucht
+         * dieselbe Tabelle ohne Foundation, siehe strings.h). */
+        char msg[512];
+        snprintf(msg, sizeof(msg), btn_tr(BTN_STR_SAVE_PROMPT_TITLE_FMT),
+                 display_name ? display_name : btn_tr(BTN_STR_UNTITLED));
         NSAlert *alert = [[NSAlert alloc] init];
-        [alert setMessageText:[NSString stringWithFormat:@"Moechtest du die Aenderungen an „%@“ sichern?", name]];
-        [alert setInformativeText:@"Deine Aenderungen gehen verloren, wenn du sie nicht sicherst."];
-        [alert addButtonWithTitle:@"Sichern"];
-        [alert addButtonWithTitle:@"Nicht sichern"];
-        [alert addButtonWithTitle:@"Abbrechen"];
+        [alert setMessageText:[NSString stringWithUTF8String:msg]];
+        [alert setInformativeText:trs(BTN_STR_SAVE_PROMPT_INFO)];
+        [alert addButtonWithTitle:trs(BTN_STR_BTN_SAVE)];
+        [alert addButtonWithTitle:trs(BTN_STR_BTN_DONT_SAVE)];
+        [alert addButtonWithTitle:trs(BTN_STR_BTN_CANCEL)];
         NSModalResponse resp = [alert runModal];
         if (resp == NSAlertFirstButtonReturn) {
             return 1;
@@ -339,7 +387,7 @@ int btn_show_unsaved_changes_alert(const char *display_name) {
 
 void btn_set_window_title(const char *title) {
     @autoreleasepool {
-        [g_window setTitle:[NSString stringWithUTF8String:title ? title : "Unbenannt"]];
+        [g_window setTitle:[NSString stringWithUTF8String:title ? title : btn_tr(BTN_STR_UNTITLED)]];
     }
 }
 
