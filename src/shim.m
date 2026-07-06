@@ -348,5 +348,11 @@ void btn_app_set_document_edited(int edited) {
 }
 
 void btn_app_close_window(void) {
-    [g_window close];
+    /* performClose: (nicht close!) simuliert den Klick auf den roten
+     * Knopf und loest dabei windowShouldClose: aus - [g_window close]
+     * wuerde den Delegate-Check stillschweigend umgehen und damit den
+     * Ungesichert-Dialog fuer Datei > Schliessen/Cmd+W ausser Kraft
+     * setzen, obwohl der rote Knopf selbst (der intern performClose:
+     * nutzt) weiterhin fragen wuerde. */
+    [g_window performClose:nil];
 }

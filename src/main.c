@@ -71,14 +71,14 @@ static size_t build_current_rows(BtnRow **out_rows) {
     return row_count;
 }
 
-static void clamp_scroll(void) {
+/* Klemmt g_scroll_row auf [0, row_count - Sichtkapazitaet] - row_count wird
+ * uebergeben statt selbst neu gebaut, damit Aufrufer, die das Layout schon
+ * haben (z.B. sync_scroll_to_cursor), es nicht ein zweites Mal fuers
+ * selbe Aktion aufbauen muessen. */
+static void clamp_scroll_to_row_count(long row_count) {
     if (g_scroll_row < 0) {
         g_scroll_row = 0;
     }
-    BtnRow *rows;
-    long row_count = (long)build_current_rows(&rows);
-    btn_layout_free(rows);
-
     long max_scroll = row_count - visible_line_capacity();
     if (max_scroll < 0) {
         max_scroll = 0;
@@ -86,6 +86,13 @@ static void clamp_scroll(void) {
     if (g_scroll_row > max_scroll) {
         g_scroll_row = max_scroll;
     }
+}
+
+static void clamp_scroll(void) {
+    BtnRow *rows;
+    long row_count = (long)build_current_rows(&rows);
+    btn_layout_free(rows);
+    clamp_scroll_to_row_count(row_count);
 }
 
 /* Scrollt automatisch nach, damit der Cursor immer sichtbar bleibt -
@@ -103,18 +110,22 @@ static void sync_scroll_to_cursor(void) {
     } else if (cur_row >= g_scroll_row + capacity) {
         g_scroll_row = cur_row - capacity + 1;
     }
-    clamp_scroll();
+    clamp_scroll_to_row_count((long)row_count);
 }
 
 /* Gemeinsamer Abschluss aller Cursor-Bewegungen unten: Cursor setzen,
  * Anchor nur ohne Selektion mitziehen, desired_col fuer die naechste
- * Auf/Ab-Bewegung merken (oder mit (size_t)-1 zuruecksetzen). */
+ * Auf/Ab-Bewegung merken (oder mit (size_t)-1 zuruecksetzen), und
+ * suppress_coalesce setzen - sonst wuerde Tippen nach Auf/Ab/Pos1/Ende
+ * wieder faelschlich mit einem alten Undo-Schritt zusammengefasst,
+ * genau der Bug, den suppress_coalesce in editor.c beheben soll. */
 static void commit_cursor(size_t new_offset, int extend, size_t desired_col) {
     g_editor.cursor = new_offset;
     if (!extend) {
         g_editor.anchor = new_offset;
     }
     g_editor.desired_col = desired_col;
+    g_editor.suppress_coalesce = 1;
 }
 
 /* Wortumbruch-bewusste vertikale Bewegung (Auf/Ab bewegen sich um eine
