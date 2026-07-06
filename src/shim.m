@@ -256,22 +256,33 @@ void btn_pasteboard_set_string(const char *utf8) {
     }
 }
 
-char *btn_pasteboard_copy_string(void) {
+char *btn_pasteboard_copy_string(size_t *out_len) {
     @autoreleasepool {
         NSPasteboard *pb = [NSPasteboard generalPasteboard];
         NSString *s = [pb stringForType:NSPasteboardTypeString];
-        const char *utf8 = s ? [s UTF8String] : "";
-        size_t len = strlen(utf8);
+        if (!s) {
+            char *empty = malloc(1);
+            empty[0] = '\0';
+            *out_len = 0;
+            return empty;
+        }
+        /* Ueber NSData statt strlen(UTF8String): strlen wuerde bei einem
+         * eingebetteten NUL-Byte im Zwischenablage-Inhalt vorzeitig
+         * abbrechen und den Rest des Textes stillschweigend verwerfen. */
+        NSData *data = [s dataUsingEncoding:NSUTF8StringEncoding];
+        size_t len = [data length];
         char *out = malloc(len + 1);
-        memcpy(out, utf8, len + 1);
+        memcpy(out, [data bytes], len);
+        out[len] = '\0';
+        *out_len = len;
         return out;
     }
 }
 
-static char *copy_cstring(const char *utf8) {
-    size_t len = strlen(utf8);
+char *btn_dup_cstring(const char *s) {
+    size_t len = strlen(s);
     char *out = malloc(len + 1);
-    memcpy(out, utf8, len + 1);
+    memcpy(out, s, len + 1);
     return out;
 }
 
@@ -283,7 +294,7 @@ char *btn_show_open_panel(void) {
         [panel setAllowsMultipleSelection:NO];
         if ([panel runModal] == NSModalResponseOK) {
             NSURL *url = [[panel URLs] firstObject];
-            return copy_cstring([[url path] UTF8String]);
+            return btn_dup_cstring([[url path] UTF8String]);
         }
         return NULL;
     }
@@ -300,7 +311,7 @@ char *btn_show_save_panel(const char *suggested_path) {
             [panel setNameFieldStringValue:@"Unbenannt.txt"];
         }
         if ([panel runModal] == NSModalResponseOK) {
-            return copy_cstring([[[panel URL] path] UTF8String]);
+            return btn_dup_cstring([[[panel URL] path] UTF8String]);
         }
         return NULL;
     }

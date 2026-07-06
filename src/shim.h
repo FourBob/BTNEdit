@@ -2,6 +2,7 @@
 #define BTN_SHIM_H
 
 #include <CoreGraphics/CoreGraphics.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -63,9 +64,18 @@ void btn_app_request_redraw(void);
 void btn_app_run(void);
 
 /* Systemweite Zwischenablage. btn_pasteboard_copy_string gibt einen neu
- * allokierten String zurueck (caller muss free() aufrufen). */
+ * allokierten String zurueck (caller muss free() aufrufen) und schreibt
+ * die tatsaechliche Byte-Laenge nach *out_len - wichtig, weil strlen() bei
+ * einem eingebetteten NUL-Byte im Zwischenablage-Inhalt vorzeitig abbrechen
+ * und den Rest stillschweigend verwerfen wuerde. */
 void btn_pasteboard_set_string(const char *utf8);
-char *btn_pasteboard_copy_string(void);
+char *btn_pasteboard_copy_string(size_t *out_len);
+
+/* Dupliziert einen NUL-terminierten C-String in einen neu allokierten
+ * Puffer (caller muss free() aufrufen). Kleiner gemeinsamer Helfer, den
+ * sowohl der Shim (Pfade aus NSOpenPanel/NSSavePanel) als auch main.c
+ * (Dateipfad-Tracking) brauchen. */
+char *btn_dup_cstring(const char *s);
 
 /* Systemdialoge (NSOpenPanel/NSSavePanel/NSAlert) - wie NSWindow/NSMenu
  * reine Chrome/Systemdienste, kein Content-Widget. Die *_panel-Funktionen

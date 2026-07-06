@@ -125,9 +125,24 @@ static void record_grow(UndoRecord *r, size_t extra) {
     r->text = realloc(r->text, r->capacity);
 }
 
+/* Legt einen frischen UndoRecord an und fuellt ihn - der gemeinsame Kern
+ * fuer alle drei Stellen, die einen NICHT zusammengefassten Record
+ * brauchen (neuer Insert, neuer Delete, Block-Delete einer Selektion). */
+static void undo_record_fill(UndoStack *st, int is_insert, size_t pos, const char *src, size_t len) {
+    UndoRecord *r = undo_stack_push_new(st);
+    r->is_insert = is_insert;
+    r->pos = pos;
+    r->len = len;
+    r->capacity = len;
+    r->text = malloc(len ? len : 1);
+    memcpy(r->text, src, len);
+}
+
 static void undo_push_insert(Editor *ed, size_t pos, const char *text, size_t len) {
     UndoStack *st = &ed->undo;
-    if (st->pos > 0 && st->pos == st->count) {
+    int blocked = ed->suppress_coalesce;
+    ed->suppress_coalesce = 0;
+    if (!blocked && st->pos > 0 && st->pos == st->count) {
         UndoRecord *last = &st->records[st->pos - 1];
         if (last->is_insert && last->pos + last->len == pos && len == 1 &&
             text[0] != '\n' && (last->len == 0 || last->text[last->len - 1] != '\n')) {
@@ -137,19 +152,14 @@ static void undo_push_insert(Editor *ed, size_t pos, const char *text, size_t le
             return;
         }
     }
-
-    UndoRecord *r = undo_stack_push_new(st);
-    r->is_insert = 1;
-    r->pos = pos;
-    r->len = len;
-    r->capacity = len;
-    r->text = malloc(len ? len : 1);
-    memcpy(r->text, text, len);
+    undo_record_fill(st, 1, pos, text, len);
 }
 
 static void undo_push_delete(Editor *ed, size_t pos, const char *deleted, size_t len, int backward) {
     UndoStack *st = &ed->undo;
-    if (st->pos > 0 && st->pos == st->count && len == 1 && deleted[0] != '\n') {
+    int blocked = ed->suppress_coalesce;
+    ed->suppress_coalesce = 0;
+    if (!blocked && st->pos > 0 && st->pos == st->count && len == 1 && deleted[0] != '\n') {
         UndoRecord *last = &st->records[st->pos - 1];
         if (!last->is_insert) {
             if (backward && pos + len == last->pos) {
@@ -168,24 +178,12 @@ static void undo_push_delete(Editor *ed, size_t pos, const char *deleted, size_t
             }
         }
     }
-
-    UndoRecord *r = undo_stack_push_new(st);
-    r->is_insert = 0;
-    r->pos = pos;
-    r->len = len;
-    r->capacity = len;
-    r->text = malloc(len ? len : 1);
-    memcpy(r->text, deleted, len);
+    undo_record_fill(st, 0, pos, deleted, len);
 }
 
 static void undo_push_delete_block(Editor *ed, size_t pos, const char *deleted, size_t len) {
-    UndoRecord *r = undo_stack_push_new(&ed->undo);
-    r->is_insert = 0;
-    r->pos = pos;
-    r->len = len;
-    r->capacity = len;
-    r->text = malloc(len ? len : 1);
-    memcpy(r->text, deleted, len);
+    ed->suppress_coalesce = 0;
+    undo_record_fill(&ed->undo, 0, pos, deleted, len);
 }
 
 /* ---- Lebenszyklus ---- */
@@ -196,6 +194,7 @@ void editor_init(Editor *ed) {
     ed->anchor = 0;
     ed->desired_col = UNSET_COL;
     ed->edit_seq = 0;
+    ed->suppress_coalesce = 0;
     undo_stack_init(&ed->undo);
 }
 
@@ -213,6 +212,7 @@ void editor_set_text(Editor *ed, const char *text, size_t len) {
     ed->anchor = 0;
     ed->desired_col = UNSET_COL;
     ed->edit_seq = 0;
+    ed->suppress_coalesce = 0;
 
     undo_stack_free(&ed->undo);
     undo_stack_init(&ed->undo);
@@ -447,6 +447,7 @@ void editor_move(Editor *ed, BtnMove move, int extend) {
     }
 
     ed->desired_col = UNSET_COL;
+    ed->suppress_coalesce = 1;
     ed->cursor = new_pos;
     if (!extend) {
         ed->anchor = new_pos;
@@ -463,6 +464,7 @@ void editor_set_cursor(Editor *ed, size_t offset, int extend) {
         ed->anchor = offset;
     }
     ed->desired_col = UNSET_COL;
+    ed->suppress_coalesce = 1;
 }
 
 void editor_select_word_at(Editor *ed, size_t offset) {
@@ -505,6 +507,7 @@ void editor_select_word_at(Editor *ed, size_t offset) {
     ed->anchor = start;
     ed->cursor = end;
     ed->desired_col = UNSET_COL;
+    ed->suppress_coalesce = 1;
 }
 
 void editor_select_line_at(Editor *ed, size_t offset) {
@@ -519,12 +522,14 @@ void editor_select_line_at(Editor *ed, size_t offset) {
     ed->anchor = start;
     ed->cursor = end;
     ed->desired_col = UNSET_COL;
+    ed->suppress_coalesce = 1;
 }
 
 void editor_select_all(Editor *ed) {
     ed->anchor = 0;
     ed->cursor = editor_length(ed);
     ed->desired_col = UNSET_COL;
+    ed->suppress_coalesce = 1;
 }
 
 /* ---- Kopieren ---- */
@@ -564,6 +569,7 @@ void editor_undo(Editor *ed) {
     }
     ed->anchor = ed->cursor;
     ed->desired_col = UNSET_COL;
+    ed->suppress_coalesce = 1;
     ed->edit_seq++;
 }
 
@@ -583,5 +589,6 @@ void editor_redo(Editor *ed) {
     st->pos++;
     ed->anchor = ed->cursor;
     ed->desired_col = UNSET_COL;
+    ed->suppress_coalesce = 1;
     ed->edit_seq++;
 }

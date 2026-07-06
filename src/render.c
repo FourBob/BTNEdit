@@ -157,44 +157,54 @@ static void rows_push(BtnRow **rows, size_t *count, size_t *cap,
     (*count)++;
 }
 
+/* Ein einziger Vorwaertsdurchlauf ueber den ganzen Puffer statt "pro
+ * logischer Zeile editor_line_bounds() aufrufen" (das waere O(Zeilen *
+ * Zeichen), weil editor_line_bounds selbst jedes Mal von vorn scannt) -
+ * Zeilenenden ('\n') und Umbruchpunkte werden in derselben Schleife
+ * erkannt, macht die Layout-Berechnung O(Zeichen) statt O(Zeilen*Zeichen). */
 BtnRow *btn_layout_build(Editor *ed, double text_width, size_t *out_row_count) {
     long chars_per_row = chars_per_row_for(text_width);
 
     size_t cap = 0, count = 0;
     BtnRow *rows = NULL;
 
-    size_t line_count = editor_line_count(ed);
-    for (size_t li = 0; li < line_count; li++) {
-        size_t line_start, line_len;
-        editor_line_bounds(ed, li, &line_start, &line_len);
-        size_t line_end = line_start + line_len;
+    size_t total_len = editor_length(ed);
+    size_t logical_line = 0;
+    size_t line_start = 0;
+    size_t row_start = 0;
+    size_t last_break = (size_t)-1;
+    long col = 0;
+    size_t i = 0;
 
-        size_t row_start = line_start;
-        size_t last_break = (size_t)-1;
-        long col = 0;
-        size_t i = line_start;
-
-        while (i < line_end) {
-            char c = gb_char_at(&ed->buffer, i);
-            long new_col = (c == '\t') ? (long)editor_tab_advance((size_t)col) : col + 1;
-
-            if (new_col > chars_per_row && i > row_start) {
-                size_t break_at = (last_break != (size_t)-1 && last_break > row_start) ? last_break : i;
-                rows_push(&rows, &count, &cap, row_start, break_at - row_start, li, row_start != line_start);
-                row_start = break_at;
-                col = (long)editor_visual_column_in_range(ed, row_start, i);
-                last_break = (size_t)-1;
-                continue;
-            }
-
-            if (c == ' ' || c == '\t') {
-                last_break = i + 1;
-            }
-            col = new_col;
+    while (i <= total_len) {
+        if (i == total_len || gb_char_at(&ed->buffer, i) == '\n') {
+            rows_push(&rows, &count, &cap, row_start, i - row_start, logical_line, row_start != line_start);
+            logical_line++;
+            line_start = i + 1;
+            row_start = line_start;
+            last_break = (size_t)-1;
+            col = 0;
             i++;
+            continue;
         }
 
-        rows_push(&rows, &count, &cap, row_start, line_end - row_start, li, row_start != line_start);
+        char c = gb_char_at(&ed->buffer, i);
+        long new_col = (c == '\t') ? (long)editor_tab_advance((size_t)col) : col + 1;
+
+        if (new_col > chars_per_row && i > row_start) {
+            size_t break_at = (last_break != (size_t)-1 && last_break > row_start) ? last_break : i;
+            rows_push(&rows, &count, &cap, row_start, break_at - row_start, logical_line, row_start != line_start);
+            row_start = break_at;
+            col = (long)editor_visual_column_in_range(ed, row_start, i);
+            last_break = (size_t)-1;
+            continue;
+        }
+
+        if (c == ' ' || c == '\t') {
+            last_break = i + 1;
+        }
+        col = new_col;
+        i++;
     }
 
     *out_row_count = count;
@@ -230,8 +240,12 @@ static void draw_gutter(CGContextRef ctx, CGRect bounds, const BtnRow *rows, siz
     CFDictionaryRef attrs = make_attrs(font, gray);
 
     for (size_t r = (size_t)scroll_row; r < row_count; r++) {
-        double y = bounds.size.height - TOP_PADDING - (double)(r - (size_t)scroll_row + 1) * LINE_HEIGHT + 4.0;
-        if (y < BTN_FOOTER_HEIGHT) {
+        /* Dieselbe top_y-Formel und Abbruchbedingung wie btn_render_frame's
+         * Zeilen-Schleife (siehe dort) - sonst hoert diese Schleife bei
+         * einer anderen Reihe auf als die Text-Zeichnung, und die unterste
+         * sichtbare Zeile bekommt Text, aber keine Zeilennummer. */
+        double top_y = bounds.size.height - TOP_PADDING - (double)(r - (size_t)scroll_row + 1) * LINE_HEIGHT;
+        if (top_y + LINE_HEIGHT < BTN_FOOTER_HEIGHT) {
             break;
         }
         if (rows[r].is_continuation) {
@@ -245,7 +259,7 @@ static void draw_gutter(CGContextRef ctx, CGRect bounds, const BtnRow *rows, siz
         CTLineRef line = CTLineCreateWithAttributedString(attrStr);
 
         double textWidth = CTLineGetTypographicBounds(line, NULL, NULL, NULL);
-        CGContextSetTextPosition(ctx, GUTTER_WIDTH - 8.0 - textWidth, y);
+        CGContextSetTextPosition(ctx, GUTTER_WIDTH - 8.0 - textWidth, top_y + 4.0);
         CTLineDraw(line, ctx);
 
         CFRelease(line);
@@ -307,17 +321,30 @@ static void draw_footer(CGContextRef ctx, CGRect bounds, Editor *ed) {
 /* Kommentar-Zustand direkt vor logical_line, indem alle vorherigen Zeilen
  * einmal (nur fuers Zustands-Tracking, max_tokens=0) tokenisiert werden -
  * noetig, damit mehrzeilige Blockkommentare beim Scrollen mitten ins
- * Dokument korrekt erkannt werden. */
+ * Dokument korrekt erkannt werden. Ein einziger Vorwaertsdurchlauf (statt
+ * pro Zeile editor_line_bounds() aufzurufen, was selbst wieder von vorn
+ * scannt) haelt das bei O(Zeichen) statt O(Zeilen*Zeichen). */
 static int comment_state_before_line(Editor *ed, const BtnLangSpec *lang, size_t logical_line) {
     int state = 0;
-    for (size_t li = 0; li < logical_line; li++) {
-        size_t ls, ll;
-        editor_line_bounds(ed, li, &ls, &ll);
-        char *text = gb_copy_range(&ed->buffer, ls, ll);
-        int ends;
-        btn_highlight_tokenize(text, ll, lang, state, &ends, NULL, 0);
-        free(text);
-        state = ends;
+    if (logical_line == 0) {
+        return state;
+    }
+
+    size_t total_len = editor_length(ed);
+    size_t li = 0;
+    size_t line_start = 0;
+
+    for (size_t i = 0; i <= total_len && li < logical_line; i++) {
+        if (i == total_len || gb_char_at(&ed->buffer, i) == '\n') {
+            size_t line_len = i - line_start;
+            char *text = gb_copy_range(&ed->buffer, line_start, line_len);
+            int ends;
+            btn_highlight_tokenize(text, line_len, lang, state, &ends, NULL, 0);
+            free(text);
+            state = ends;
+            li++;
+            line_start = i + 1;
+        }
     }
     return state;
 }

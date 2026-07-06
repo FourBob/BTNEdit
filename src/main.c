@@ -29,13 +29,6 @@ static double g_scroll_accum = 0.0;
 static char *g_current_path = NULL; /* NULL = unbenanntes, neues Dokument */
 static size_t g_saved_edit_seq = 0;
 
-static char *dup_string(const char *s) {
-    size_t len = strlen(s) + 1;
-    char *copy = malloc(len);
-    memcpy(copy, s, len);
-    return copy;
-}
-
 static const char *basename_of(const char *path) {
     const char *slash = strrchr(path, '/');
     return slash ? slash + 1 : path;
@@ -52,8 +45,8 @@ static void set_current_path(const char *path) {
     /* path darf mit g_current_path identisch sein (z.B. bei einem
      * erneuten "Sichern" auf denselben Pfad) - deshalb erst die Kopie
      * anlegen und danach erst den alten Speicher freigeben, sonst wuerde
-     * dup_string aus bereits freigegebenem Speicher lesen. */
-    char *copy = path ? dup_string(path) : NULL;
+     * btn_dup_cstring aus bereits freigegebenem Speicher lesen. */
+    char *copy = path ? btn_dup_cstring(path) : NULL;
     free(g_current_path);
     g_current_path = copy;
     btn_set_window_title(g_current_path ? basename_of(g_current_path) : "Unbenannt");
@@ -113,6 +106,17 @@ static void sync_scroll_to_cursor(void) {
     clamp_scroll();
 }
 
+/* Gemeinsamer Abschluss aller Cursor-Bewegungen unten: Cursor setzen,
+ * Anchor nur ohne Selektion mitziehen, desired_col fuer die naechste
+ * Auf/Ab-Bewegung merken (oder mit (size_t)-1 zuruecksetzen). */
+static void commit_cursor(size_t new_offset, int extend, size_t desired_col) {
+    g_editor.cursor = new_offset;
+    if (!extend) {
+        g_editor.anchor = new_offset;
+    }
+    g_editor.desired_col = desired_col;
+}
+
 /* Wortumbruch-bewusste vertikale Bewegung (Auf/Ab bewegen sich um eine
  * visuelle Zeile, nicht um eine logische) - editor_move kennt das nicht,
  * weil der Umbruch von der Fensterbreite abhaengt. Nutzt ed->desired_col
@@ -136,43 +140,20 @@ static void move_visual_row(int direction, int extend) {
         new_offset = editor_offset_for_column_in_range(&g_editor, rows[target_row].start, rows[target_row].len, col);
     }
     btn_layout_free(rows);
-
-    g_editor.cursor = new_offset;
-    if (!extend) {
-        g_editor.anchor = new_offset;
-    }
-    g_editor.desired_col = col;
+    commit_cursor(new_offset, extend, col);
 }
 
 /* Pos1/Ende und Cmd+Links/Rechts springen an Anfang/Ende der aktuellen
  * visuellen Zeile (nach Umbruch) - das entspricht dem nativen macOS-
- * Verhalten (nicht der logischen, evtl. umgebrochenen Zeile). */
-static void move_row_start(int extend) {
+ * Verhalten (nicht der logischen, evtl. umgebrochenen Zeile). to_end
+ * waehlt zwischen den beiden Row-Grenzen. */
+static void move_row_edge(int to_end, int extend) {
     BtnRow *rows;
     size_t row_count = build_current_rows(&rows);
     size_t cur_row = btn_layout_row_for_offset(rows, row_count, g_editor.cursor);
-    size_t new_offset = rows[cur_row].start;
+    size_t new_offset = to_end ? rows[cur_row].start + rows[cur_row].len : rows[cur_row].start;
     btn_layout_free(rows);
-
-    g_editor.cursor = new_offset;
-    if (!extend) {
-        g_editor.anchor = new_offset;
-    }
-    g_editor.desired_col = (size_t)-1;
-}
-
-static void move_row_end(int extend) {
-    BtnRow *rows;
-    size_t row_count = build_current_rows(&rows);
-    size_t cur_row = btn_layout_row_for_offset(rows, row_count, g_editor.cursor);
-    size_t new_offset = rows[cur_row].start + rows[cur_row].len;
-    btn_layout_free(rows);
-
-    g_editor.cursor = new_offset;
-    if (!extend) {
-        g_editor.anchor = new_offset;
-    }
-    g_editor.desired_col = (size_t)-1;
+    commit_cursor(new_offset, extend, (size_t)-1);
 }
 
 static char *read_file_contents(const char *path, size_t *out_len) {
@@ -276,7 +257,7 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
     switch (keycode) {
         case KEYCODE_LEFT:
             if (command) {
-                move_row_start(shift);
+                move_row_edge(0, shift);
             } else {
                 editor_move(&g_editor, option ? BTN_MOVE_WORD_LEFT : BTN_MOVE_LEFT, shift);
             }
@@ -285,7 +266,7 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
             return;
         case KEYCODE_RIGHT:
             if (command) {
-                move_row_end(shift);
+                move_row_edge(1, shift);
             } else {
                 editor_move(&g_editor, option ? BTN_MOVE_WORD_RIGHT : BTN_MOVE_RIGHT, shift);
             }
@@ -311,12 +292,12 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
             btn_app_request_redraw();
             return;
         case KEYCODE_HOME:
-            move_row_start(shift);
+            move_row_edge(0, shift);
             sync_scroll_to_cursor();
             btn_app_request_redraw();
             return;
         case KEYCODE_END:
-            move_row_end(shift);
+            move_row_edge(1, shift);
             sync_scroll_to_cursor();
             btn_app_request_redraw();
             return;
@@ -363,7 +344,12 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
 
 static void on_resize(CGSize size) {
     g_bounds = CGRectMake(0, 0, size.width, size.height);
-    clamp_scroll();
+    /* sync_scroll_to_cursor() ruft clamp_scroll() intern mit auf - reines
+     * Clamping reicht hier nicht: Verkleinern des Fensters kann den Text
+     * neu umbrechen und die Cursor-Zeile weit aus dem sichtbaren Bereich
+     * schieben, ohne dass eine Cursor-Bewegung stattfand, die das sonst
+     * erkennen wuerde. */
+    sync_scroll_to_cursor();
     btn_app_request_redraw();
 }
 
@@ -474,11 +460,13 @@ static void on_menu(int tag) {
             btn_pasteboard_set_string(clip);
             free(clip);
             break;
-        case BTN_MENU_PASTE:
-            clip = btn_pasteboard_copy_string();
-            editor_insert_text(&g_editor, clip, strlen(clip));
+        case BTN_MENU_PASTE: {
+            size_t clip_len;
+            clip = btn_pasteboard_copy_string(&clip_len);
+            editor_insert_text(&g_editor, clip, clip_len);
             free(clip);
             break;
+        }
         case BTN_MENU_SELECT_ALL:
             editor_select_all(&g_editor);
             break;

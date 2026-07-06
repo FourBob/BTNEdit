@@ -43,6 +43,12 @@ typedef struct {
      * folgender Tastendruecke unveraendert bleiben kann, obwohl sich der
      * Inhalt sehr wohl geaendert hat. */
     size_t edit_seq;
+    /* Von jeder Cursor-Neupositionierung (Klick, Pfeiltasten, Undo/Redo,
+     * Wort-/Zeilen-/Alles-Auswahl) auf 1 gesetzt und vom naechsten Insert/
+     * Delete konsumiert: verhindert, dass Tippen nach einem Klick zurueck
+     * an dieselbe Stelle faelschlich mit einem viel frueheren Undo-Schritt
+     * zusammengefasst (coalesced) wird. */
+    int suppress_coalesce;
 } Editor;
 
 /* Auf/Ab, Pos1/Ende und Cmd+Links/Rechts fehlen hier bewusst: die haengen
