@@ -45,6 +45,41 @@ static size_t word_right(Editor *ed, size_t pos) {
     return i;
 }
 
+/* Byte-Laenge des UTF-8-Zeichens, das VOR pos endet (fuer Backspace) -
+ * laeuft rueckwaerts ueber Continuation-Bytes (10xxxxxx) bis zum
+ * Lead-Byte, hoechstens 4 Bytes (laengste gueltige UTF-8-Sequenz). Ohne
+ * das wuerde Backspace bei jedem mehrbytigen Zeichen (Umlaute, Akzente,
+ * nicht-lateinische Schrift) nur ein Byte davon loeschen und ein
+ * ungueltiges UTF-8-Fragment im Puffer zuruecklassen. */
+static size_t utf8_backward_len(Editor *ed, size_t pos) {
+    size_t n = 1;
+    while (n < 4 && n < pos && (((unsigned char)gb_char_at(&ed->buffer, pos - n)) & 0xC0) == 0x80) {
+        n++;
+    }
+    return n;
+}
+
+/* Byte-Laenge des UTF-8-Zeichens, das BEI pos beginnt (fuer Forward Delete). */
+static size_t utf8_forward_len(Editor *ed, size_t pos, size_t limit) {
+    unsigned char b = (unsigned char)gb_char_at(&ed->buffer, pos);
+    size_t n;
+    if ((b & 0x80) == 0x00) {
+        n = 1;
+    } else if ((b & 0xE0) == 0xC0) {
+        n = 2;
+    } else if ((b & 0xF0) == 0xE0) {
+        n = 3;
+    } else if ((b & 0xF8) == 0xF0) {
+        n = 4;
+    } else {
+        n = 1; /* ungueltiges Lead-Byte - defensiv nur 1 Byte loeschen */
+    }
+    if (pos + n > limit) {
+        n = limit - pos;
+    }
+    return n;
+}
+
 /* ---- Undo-Stack ---- */
 
 static void undo_stack_init(UndoStack *st) {
@@ -160,6 +195,7 @@ void editor_init(Editor *ed) {
     ed->cursor = 0;
     ed->anchor = 0;
     ed->desired_col = UNSET_COL;
+    ed->edit_seq = 0;
     undo_stack_init(&ed->undo);
 }
 
@@ -176,6 +212,7 @@ void editor_set_text(Editor *ed, const char *text, size_t len) {
     ed->cursor = 0;
     ed->anchor = 0;
     ed->desired_col = UNSET_COL;
+    ed->edit_seq = 0;
 
     undo_stack_free(&ed->undo);
     undo_stack_init(&ed->undo);
@@ -314,6 +351,7 @@ void editor_delete_selection(Editor *ed) {
     ed->cursor = start;
     ed->anchor = start;
     ed->desired_col = UNSET_COL;
+    ed->edit_seq++;
 }
 
 void editor_insert_text(Editor *ed, const char *text, size_t len) {
@@ -331,6 +369,7 @@ void editor_insert_text(Editor *ed, const char *text, size_t len) {
     ed->cursor = pos + len;
     ed->anchor = ed->cursor;
     ed->desired_col = UNSET_COL;
+    ed->edit_seq++;
 }
 
 void editor_delete_backward(Editor *ed) {
@@ -341,14 +380,17 @@ void editor_delete_backward(Editor *ed) {
     if (ed->cursor == 0) {
         return;
     }
-    size_t pos = ed->cursor - 1;
-    char ch = gb_char_at(&ed->buffer, pos);
-    gb_delete(&ed->buffer, pos, 1);
-    undo_push_delete(ed, pos, &ch, 1, 1);
+    size_t n = utf8_backward_len(ed, ed->cursor);
+    size_t pos = ed->cursor - n;
+    char *deleted = gb_copy_range(&ed->buffer, pos, n);
+    gb_delete(&ed->buffer, pos, n);
+    undo_push_delete(ed, pos, deleted, n, 1);
+    free(deleted);
 
     ed->cursor = pos;
     ed->anchor = pos;
     ed->desired_col = UNSET_COL;
+    ed->edit_seq++;
 }
 
 void editor_delete_forward(Editor *ed) {
@@ -360,10 +402,13 @@ void editor_delete_forward(Editor *ed) {
     if (ed->cursor >= len) {
         return;
     }
-    char ch = gb_char_at(&ed->buffer, ed->cursor);
-    gb_delete(&ed->buffer, ed->cursor, 1);
-    undo_push_delete(ed, ed->cursor, &ch, 1, 0);
+    size_t n = utf8_forward_len(ed, ed->cursor, len);
+    char *deleted = gb_copy_range(&ed->buffer, ed->cursor, n);
+    gb_delete(&ed->buffer, ed->cursor, n);
+    undo_push_delete(ed, ed->cursor, deleted, n, 0);
+    free(deleted);
     ed->desired_col = UNSET_COL;
+    ed->edit_seq++;
 }
 
 /* ---- Bewegung & Selektion ---- */
@@ -519,6 +564,7 @@ void editor_undo(Editor *ed) {
     }
     ed->anchor = ed->cursor;
     ed->desired_col = UNSET_COL;
+    ed->edit_seq++;
 }
 
 void editor_redo(Editor *ed) {
@@ -537,4 +583,5 @@ void editor_redo(Editor *ed) {
     st->pos++;
     ed->anchor = ed->cursor;
     ed->desired_col = UNSET_COL;
+    ed->edit_seq++;
 }

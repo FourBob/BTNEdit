@@ -93,7 +93,7 @@ static char *expand_tabs_for_display(const char *text, size_t len, size_t *out_l
 
     for (size_t i = 0; i < len; i++) {
         char c = text[i];
-        size_t needed = (c == '\t') ? (((col / BTN_TAB_WIDTH) + 1) * BTN_TAB_WIDTH - col) : 1;
+        size_t needed = (c == '\t') ? (editor_tab_advance(col) - col) : 1;
         if (n + needed > cap) {
             cap = (n + needed) * 2;
             out = realloc(out, cap);
@@ -111,6 +111,25 @@ static char *expand_tabs_for_display(const char *text, size_t len, size_t *out_l
 
     *out_len = n;
     return out;
+}
+
+/* CFAttributedString-Ranges zaehlen in UTF-16-Code-Units, waehrend unsere
+ * eigene Spaltenrechnung (editor_visual_column_in_range) in UTF-8-Bytes
+ * zaehlt. Fuer reinen ASCII-Text ist das identisch, aber jedes mehrbytige
+ * Zeichen wuerde sonst eine zu lange/falsche CFRange erzeugen. Dekodiert
+ * einfach den Praefix bis byte_offset erneut und misst dessen echte Laenge -
+ * das ist fuer die kurzen Zeilen, die wir hier behandeln, guenstig genug. */
+static CFIndex utf16_offset_for_byte_offset(const char *utf8, size_t byte_offset) {
+    if (byte_offset == 0) {
+        return 0;
+    }
+    CFStringRef prefix = CFStringCreateWithBytes(NULL, (const UInt8 *)utf8, (CFIndex)byte_offset,
+                                                  kCFStringEncodingUTF8, false);
+    CFIndex len = prefix ? CFStringGetLength(prefix) : 0;
+    if (prefix) {
+        CFRelease(prefix);
+    }
+    return len;
 }
 
 /* ---- Wortumbruch-Layout ---- */
@@ -396,9 +415,18 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
 
             CFStringRef lineStr = CFStringCreateWithBytes(NULL, (const UInt8 *)disp,
                                                            (CFIndex)disp_len, kCFStringEncodingUTF8, false);
+            /* CFAttributedString-Ranges zaehlen in UTF-16-Einheiten, waehrend
+             * disp_len/col_from/col_to UTF-8-BYTES zaehlen - fuer reinen
+             * ASCII-Text ist das zufaellig identisch, aber jedes mehrbytige
+             * Zeichen (Umlaut, Akzent, Emoji) wuerde sonst eine zu lange
+             * Range anfordern (Absturz/undefiniertes Verhalten) oder falsch
+             * eingefaerbte Grenzen erzeugen. utf16_offset_for_byte_offset()
+             * rechnet die Byte-Position sauber in die tatsaechliche
+             * String-Position um. */
+            CFIndex utf16_len = CFStringGetLength(lineStr);
             CFMutableAttributedStringRef attrStr = CFAttributedStringCreateMutable(NULL, 0);
             CFAttributedStringReplaceString(attrStr, CFRangeMake(0, 0), lineStr);
-            CFAttributedStringSetAttributes(attrStr, CFRangeMake(0, (CFIndex)disp_len), attrs, true);
+            CFAttributedStringSetAttributes(attrStr, CFRangeMake(0, utf16_len), attrs, true);
 
             for (size_t t = 0; t < token_count; t++) {
                 if (tokens[t].kind == BTN_TOK_NORMAL) {
@@ -419,7 +447,15 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
                 if (col_from >= col_to) {
                     continue;
                 }
-                CFAttributedStringSetAttribute(attrStr, CFRangeMake((CFIndex)col_from, (CFIndex)(col_to - col_from)),
+                CFIndex u16_from = utf16_offset_for_byte_offset(disp, col_from);
+                CFIndex u16_to = utf16_offset_for_byte_offset(disp, col_to);
+                if (u16_to > utf16_len) {
+                    u16_to = utf16_len;
+                }
+                if (u16_from >= u16_to) {
+                    continue;
+                }
+                CFAttributedStringSetAttribute(attrStr, CFRangeMake(u16_from, u16_to - u16_from),
                                                 kCTForegroundColorAttributeName, get_token_color(tokens[t].kind));
             }
 

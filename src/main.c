@@ -27,7 +27,7 @@ static long g_scroll_row = 0;
 static double g_scroll_accum = 0.0;
 
 static char *g_current_path = NULL; /* NULL = unbenanntes, neues Dokument */
-static size_t g_saved_undo_pos = 0;
+static size_t g_saved_edit_seq = 0;
 
 static char *dup_string(const char *s) {
     size_t len = strlen(s) + 1;
@@ -42,7 +42,10 @@ static const char *basename_of(const char *path) {
 }
 
 static int is_dirty(void) {
-    return g_editor.undo.pos != g_saved_undo_pos;
+    /* Bewusst ueber edit_seq statt ueber undo.pos: Undo-Coalescing kann
+     * pos unveraendert lassen, obwohl sich der Inhalt geaendert hat (siehe
+     * editor.h-Kommentar bei edit_seq). */
+    return g_editor.edit_seq != g_saved_edit_seq;
 }
 
 static void set_current_path(const char *path) {
@@ -226,7 +229,7 @@ static int perform_save(int force_save_as) {
 
     if (ok) {
         set_current_path(path);
-        g_saved_undo_pos = g_editor.undo.pos;
+        g_saved_edit_seq = g_editor.edit_seq;
     } else {
         fprintf(stderr, "BTNEdit: Datei konnte nicht geschrieben werden: %s\n", path);
     }
@@ -250,6 +253,14 @@ static int confirm_discard_if_dirty(void) {
         return perform_save(0);
     }
     return 1;
+}
+
+/* Wird vom Shim sowohl beim Klick auf den roten Schliessen-Knopf als auch
+ * bei Cmd+Q/"Beende" aufgerufen (windowShouldClose:/applicationShouldTerminate:)
+ * - zentral hier statt separat pro Aufrufer, damit keiner dieser beiden
+ * System-Wege den Ungesichert-Dialog umgehen kann. */
+static int should_close(void) {
+    return confirm_discard_if_dirty();
 }
 
 static void on_draw(CGContextRef ctx, CGRect bounds) {
@@ -412,7 +423,7 @@ static void on_menu(int tag) {
                 editor_free(&g_editor);
                 editor_init(&g_editor);
                 set_current_path(NULL);
-                g_saved_undo_pos = g_editor.undo.pos;
+                g_saved_edit_seq = g_editor.edit_seq;
             }
             break;
         case BTN_MENU_OPEN:
@@ -425,7 +436,7 @@ static void on_menu(int tag) {
                         editor_set_text(&g_editor, contents, len);
                         free(contents);
                         set_current_path(path);
-                        g_saved_undo_pos = g_editor.undo.pos;
+                        g_saved_edit_seq = g_editor.edit_seq;
                     } else {
                         fprintf(stderr, "BTNEdit: Datei konnte nicht gelesen werden: %s\n", path);
                     }
@@ -440,9 +451,11 @@ static void on_menu(int tag) {
             perform_save(1);
             break;
         case BTN_MENU_CLOSE:
-            if (confirm_discard_if_dirty()) {
-                btn_app_close_window();
-            }
+            /* Kein confirm_discard_if_dirty() hier: [g_window close] loest
+             * windowShouldClose: aus, das denselben Check zentral macht (und
+             * damit auch den roten Schliessen-Knopf abdeckt) - ein zweiter
+             * Check hier wuerde bei "Nicht sichern" den Dialog doppelt zeigen. */
+            btn_app_close_window();
             break;
         case BTN_MENU_UNDO:
             editor_undo(&g_editor);
@@ -491,6 +504,7 @@ int main(void) {
     btn_app_set_mouse_callback(on_mouse);
     btn_app_set_scroll_callback(on_scroll);
     btn_app_set_menu_callback(on_menu);
+    btn_app_set_should_close_callback(should_close);
     btn_app_build_menu();
     btn_app_run();
 

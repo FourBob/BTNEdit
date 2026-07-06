@@ -17,6 +17,7 @@ static btn_resize_callback g_resize_cb = NULL;
 static btn_menu_callback g_menu_cb = NULL;
 static btn_mouse_callback g_mouse_cb = NULL;
 static btn_scroll_callback g_scroll_cb = NULL;
+static btn_should_close_callback g_should_close_cb = NULL;
 
 static NSWindow *g_window = nil;
 
@@ -83,7 +84,7 @@ static NSWindow *g_window = nil;
 
 static BTNContentView *g_view = nil;
 
-@interface BTNAppDelegate : NSObject <NSApplicationDelegate>
+@interface BTNAppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate>
 @end
 
 @implementation BTNAppDelegate
@@ -91,6 +92,22 @@ static BTNContentView *g_view = nil;
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
     (void)sender;
     return YES;
+}
+
+- (BOOL)windowShouldClose:(id)sender {
+    (void)sender;
+    if (g_should_close_cb) {
+        return g_should_close_cb() ? YES : NO;
+    }
+    return YES;
+}
+
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
+    (void)sender;
+    if (g_should_close_cb) {
+        return g_should_close_cb() ? NSTerminateNow : NSTerminateCancel;
+    }
+    return NSTerminateNow;
 }
 
 @end
@@ -148,6 +165,10 @@ void btn_app_set_mouse_callback(btn_mouse_callback cb) {
 
 void btn_app_set_scroll_callback(btn_scroll_callback cb) {
     g_scroll_cb = cb;
+}
+
+void btn_app_set_should_close_callback(btn_should_close_callback cb) {
+    g_should_close_cb = cb;
 }
 
 void btn_app_build_menu(void) {
@@ -218,6 +239,7 @@ void btn_app_run(void) {
 
         BTNAppDelegate *delegate = [BTNAppDelegate new];
         [NSApp setDelegate:delegate];
+        [g_window setDelegate:delegate];
 
         [g_window makeKeyAndOrderFront:nil];
         [NSApp activateIgnoringOtherApps:YES];

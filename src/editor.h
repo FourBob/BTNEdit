@@ -36,6 +36,13 @@ typedef struct {
     size_t anchor;       /* selection is [min(cursor,anchor), max(cursor,anchor)) */
     size_t desired_col;  /* (size_t)-1 = unset; used for Up/Down column memory */
     UndoStack undo;
+    /* Steigt bei jeder tatsaechlichen Inhaltsaenderung (auch bei Undo/Redo).
+     * main.c vergleicht dies mit dem bei der letzten Sicherung/dem letzten
+     * Laden gemerkten Wert, um "ungesichert" zu erkennen - bewusst NICHT
+     * ueber undo.pos, weil das beim Zusammenfassen (Coalescing) aufeinander
+     * folgender Tastendruecke unveraendert bleiben kann, obwohl sich der
+     * Inhalt sehr wohl geaendert hat. */
+    size_t edit_seq;
 } Editor;
 
 /* Auf/Ab, Pos1/Ende und Cmd+Links/Rechts fehlen hier bewusst: die haengen

@@ -44,6 +44,11 @@ typedef void (*btn_mouse_callback)(btn_mouse_phase phase, double x, double y, in
 /* delta_y in Punkten, positiv = nach oben scrollen (Trackpad-"natural
  * scrolling" ist bereits vom System eingerechnet). */
 typedef void (*btn_scroll_callback)(double delta_y);
+/* Rueckgabe: 1 = Fenster schliessen/App beenden erlauben, 0 = abbrechen.
+ * Wird sowohl vom roten Schliessen-Knopf (windowShouldClose:) als auch von
+ * Cmd+Q/"Beende" (applicationShouldTerminate:) aufgerufen, damit keiner
+ * dieser beiden System-Wege den Ungesichert-Dialog umgehen kann. */
+typedef int (*btn_should_close_callback)(void);
 
 void btn_app_init(void);
 void btn_app_set_draw_callback(btn_draw_callback cb);
@@ -52,6 +57,7 @@ void btn_app_set_resize_callback(btn_resize_callback cb);
 void btn_app_set_menu_callback(btn_menu_callback cb);
 void btn_app_set_mouse_callback(btn_mouse_callback cb);
 void btn_app_set_scroll_callback(btn_scroll_callback cb);
+void btn_app_set_should_close_callback(btn_should_close_callback cb);
 void btn_app_build_menu(void);
 void btn_app_request_redraw(void);
 void btn_app_run(void);
