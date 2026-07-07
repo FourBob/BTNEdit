@@ -19,6 +19,7 @@ static btn_menu_callback g_menu_cb = NULL;
 static btn_mouse_callback g_mouse_cb = NULL;
 static btn_scroll_callback g_scroll_cb = NULL;
 static btn_should_close_callback g_should_close_cb = NULL;
+static btn_open_file_callback g_open_file_cb = NULL;
 
 static NSWindow *g_window = nil;
 static NSMenu *g_recentMenu = nil;
@@ -112,6 +113,29 @@ static BTNContentView *g_view = nil;
     return NSTerminateNow;
 }
 
+/* Wird von "Oeffnen mit"/Doppelklick auf eine registrierte Dateiendung/
+ * Drag&Drop aufs Dock-Icon ausgeloest - sowohl beim Programmstart (macOS
+ * sammelt die Datei(en) aus dem Start-Kontext und liefert sie hierueber statt
+ * ueber argv) als auch waehrend die App bereits laeuft. Reicht jede Datei
+ * einzeln an main.c durch (g_open_file_cb), das dieselbe open_path_in_tab()-
+ * Logik wie Datei > Oeffnen... nutzt. */
+- (void)application:(NSApplication *)app openURLs:(NSArray<NSURL *> *)urls {
+    (void)app;
+    if (!g_open_file_cb) {
+        return;
+    }
+    for (NSURL *url in urls) {
+        if (![url isFileURL]) {
+            continue;
+        }
+        const char *path = [[url path] UTF8String];
+        if (path) {
+            g_open_file_cb(path);
+        }
+    }
+    [NSApp activateIgnoringOtherApps:YES];
+}
+
 @end
 
 @interface BTNMenuTarget : NSObject
@@ -187,6 +211,10 @@ void btn_app_set_scroll_callback(btn_scroll_callback cb) {
 
 void btn_app_set_should_close_callback(btn_should_close_callback cb) {
     g_should_close_cb = cb;
+}
+
+void btn_app_set_open_file_callback(btn_open_file_callback cb) {
+    g_open_file_cb = cb;
 }
 
 void btn_app_build_menu(void) {

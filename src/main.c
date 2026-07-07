@@ -1344,6 +1344,18 @@ static void perform_print(void) {
     g_print_row_count = 0;
 }
 
+/* "Oeffnen mit"/Doppelklick auf eine registrierte Dateiendung/Drag&Drop
+ * aufs Dock-Icon (siehe btn_app_set_open_file_callback() in shim.h) - nutzt
+ * dieselbe Tab-Auswahl/Lade-Logik wie Datei > Oeffnen..., damit eine schon
+ * offene Datei nicht doppelt geladen wird und ein noch unbenutztes leeres
+ * Tab wiederverwendet wird. */
+static void on_open_file(const char *path) {
+    open_path_in_tab(path);
+    sync_window_state();
+    sync_scroll_to_cursor();
+    btn_app_request_redraw();
+}
+
 static void on_menu(int tag) {
     char *clip;
 
@@ -1462,6 +1474,7 @@ int main(void) {
     btn_app_set_scroll_callback(on_scroll);
     btn_app_set_menu_callback(on_menu);
     btn_app_set_should_close_callback(should_close);
+    btn_app_set_open_file_callback(on_open_file);
     btn_app_build_menu();
     load_recent_files();
     recent_files_refresh_menu();

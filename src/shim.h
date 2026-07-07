@@ -61,6 +61,13 @@ typedef void (*btn_scroll_callback)(double delta_y);
  * dieser beiden System-Wege den Ungesichert-Dialog umgehen kann. */
 typedef int (*btn_should_close_callback)(void);
 
+/* Wird einmal pro Datei aufgerufen, die per "Oeffnen mit" (Finder), per
+ * Doppelklick auf eine Datei eines registrierten Typs, oder per Drag&Drop
+ * aufs Dock-Icon geoeffnet werden soll - sowohl beim Programmstart (App war
+ * noch nicht offen) als auch waehrend die App bereits laeuft. path ist ein
+ * absoluter Dateisystempfad (kein NSURL, main.c bleibt Cocoa-frei). */
+typedef void (*btn_open_file_callback)(const char *path);
+
 /* Liest NSLocale.preferredLanguages (Systemeinstellung, nicht der App
  * eigene Auswahl - kein Sprachumschalter im Menue, ganz im Sinne der
  * schlanken Notepad.exe-Philosophie) und ordnet die bevorzugte Sprache
@@ -76,6 +83,7 @@ void btn_app_set_menu_callback(btn_menu_callback cb);
 void btn_app_set_mouse_callback(btn_mouse_callback cb);
 void btn_app_set_scroll_callback(btn_scroll_callback cb);
 void btn_app_set_should_close_callback(btn_should_close_callback cb);
+void btn_app_set_open_file_callback(btn_open_file_callback cb);
 void btn_app_build_menu(void);
 
 /* Baut das "Zuletzt geoeffnet"-Untermenue komplett neu aus paths[0..count)
