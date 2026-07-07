@@ -3,6 +3,7 @@ BUILD_DIR   := build
 APP_DIR     := $(BUILD_DIR)/$(APP_NAME).app
 CONTENTS_DIR:= $(APP_DIR)/Contents
 MACOS_DIR   := $(CONTENTS_DIR)/MacOS
+RESOURCES_DIR:= $(CONTENTS_DIR)/Resources
 
 CC       := clang
 CFLAGS   := -Wall -Wextra -std=c11 -O2 -Isrc
@@ -18,16 +19,25 @@ BINARY := $(MACOS_DIR)/$(APP_NAME)
 
 .PHONY: all run clean
 
-all: $(BINARY) $(CONTENTS_DIR)/Info.plist
+all: $(BINARY) $(CONTENTS_DIR)/Info.plist $(RESOURCES_DIR)/AppIcon.icns
 
 $(MACOS_DIR):
 	mkdir -p $(MACOS_DIR)
+
+$(RESOURCES_DIR):
+	mkdir -p $(RESOURCES_DIR)
 
 $(BINARY): $(OBJ) | $(MACOS_DIR)
 	$(CC) -o $@ $(OBJ) $(FRAMEWORKS)
 
 $(CONTENTS_DIR)/Info.plist: Info.plist | $(MACOS_DIR)
 	cp Info.plist $@
+
+# iconutil ist Teil der Xcode-Kommandozeilenwerkzeuge (macOS-only) - baut aus
+# resources/AppIcon.iconset (einzelne PNGs in Standard-Groessen) das fertige
+# .icns-Bundle-Icon.
+$(RESOURCES_DIR)/AppIcon.icns: resources/AppIcon.iconset | $(RESOURCES_DIR)
+	iconutil -c icns resources/AppIcon.iconset -o $@
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@

@@ -46,7 +46,8 @@ Was noch fehlt bzw. bekannte Einschränkungen: siehe [TODO.md](TODO.md).
 ## Bauen
 
 Voraussetzungen: macOS mit installierten Xcode-Kommandozeilenwerkzeugen
-(`xcode-select --install`).
+(`xcode-select --install` - liefert neben `clang` auch `iconutil`, das
+`make` fürs App-Icon aus `resources/AppIcon.iconset` braucht).
 
 ```bash
 make        # baut build/BTNEdit.app
