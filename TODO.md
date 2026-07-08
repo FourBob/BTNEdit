@@ -10,6 +10,8 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
 - Suchen/Ersetzen: Anzeige des Ergebnisses des Ersetzens der ersten
   Fundstelle (Rückmeldung, dass/was ersetzt wurde), nicht nur bei
   "Alle ersetzen".
+- Suchen: Treffer sollen dynamisch beim Tippen im Suchfeld hervorgehoben
+  werden (Live-Suche), statt erst nach Return.
 
 ## Bekannte Einschränkungen (bewusst zurückgestellt, kein akuter Bug)
 
