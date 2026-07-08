@@ -448,14 +448,36 @@ void btn_app_close_window(void) {
     [g_window performClose:nil];
 }
 
+/* Bedruckbare Flaeche (Papierformat minus Systemraender) von info - eigene
+ * Funktion statt Duplikat, weil sowohl BTNPrintView (live, pro Aufruf von
+ * -knowsPageRange:) als auch eine etwaige spaetere Vorschau dieselbe
+ * Umrechnung brauchen. */
+static CGSize page_size_from_print_info(NSPrintInfo *info) {
+    NSSize paper = [info paperSize];
+    double width = paper.width - [info leftMargin] - [info rightMargin];
+    double height = paper.height - [info topMargin] - [info bottomMargin];
+    return CGSizeMake(width > 1.0 ? width : 1.0, height > 1.0 ? height : 1.0);
+}
+
 /* Reiner Druck-View: kennt weder Editor noch Zeilenumbruch, reicht beim
  * Zeichnen nur CGContext + Seiten-Rect an den C-Callback durch - genau wie
  * BTNContentView oben es fuer den Bildschirm mit g_draw_cb tut. Nicht
  * geflippt (wie BTNContentView), Seite 1 liegt oben im (langen) Gesamtview,
- * die letzte Seite unten. */
+ * die letzte Seite unten.
+ *
+ * knowsPageRange: fragt bewusst [[NSPrintOperation currentOperation]
+ * printInfo] ab (statt eine beim Aufbau des Views fest uebergebene
+ * Seitengroesse zu benutzen) und ruft layoutCb JEDES Mal frisch auf: AppKit
+ * ruft diese Methode nicht nur einmal auf, sondern wiederholt waehrend der
+ * Nutzer im Systemdruckdialog Papierformat/Ausrichtung/Raender aendert (fuer
+ * dessen Live-Vorschau) und ein letztes Mal nach der Bestaetigung - eine vor
+ * dem Dialog fest berechnete Seitengroesse/Seitenanzahl wuerde sonst bei
+ * einer im Dialog geaenderten Einstellung nicht mehr zum tatsaechlich
+ * bedruckten Papier passen. */
 @interface BTNPrintView : NSView {
 @public
-    btn_print_page_callback printCb;
+    btn_print_page_callback drawCb;
+    btn_print_layout_callback layoutCb;
     int pageCount;
     CGSize pageSize;
 }
@@ -464,6 +486,13 @@ void btn_app_close_window(void) {
 @implementation BTNPrintView
 
 - (BOOL)knowsPageRange:(NSRangePointer)range {
+    NSPrintInfo *info = [[NSPrintOperation currentOperation] printInfo];
+    pageSize = page_size_from_print_info(info);
+    pageCount = layoutCb ? layoutCb(pageSize) : 1;
+    if (pageCount < 1) {
+        pageCount = 1;
+    }
+    [self setFrameSize:NSMakeSize(pageSize.width, (double)pageCount * pageSize.height)];
     range->location = 1;
     range->length = pageCount;
     return YES;
@@ -476,7 +505,7 @@ void btn_app_close_window(void) {
 }
 
 - (void)drawRect:(NSRect)dirtyRect {
-    if (!printCb) {
+    if (!drawCb) {
         return;
     }
     /* dirtyRect ist hier stets exakt das von rectForPage: gelieferte Rect
@@ -488,32 +517,21 @@ void btn_app_close_window(void) {
     CGContextTranslateCTM(ctx, dirtyRect.origin.x, dirtyRect.origin.y);
     double totalHeight = (double)pageCount * pageSize.height;
     int page_index = (int)(((totalHeight - dirtyRect.origin.y) / pageSize.height) - 1.0 + 0.5);
-    printCb(ctx, CGRectMake(0, 0, pageSize.width, pageSize.height), page_index);
+    drawCb(ctx, CGRectMake(0, 0, pageSize.width, pageSize.height), page_index);
     CGContextRestoreGState(ctx);
 }
 
 @end
 
-CGSize btn_print_page_size(void) {
+void btn_print_pages(btn_print_layout_callback layout_cb, btn_print_page_callback draw_cb) {
     @autoreleasepool {
-        NSPrintInfo *info = [NSPrintInfo sharedPrintInfo];
-        NSSize paper = [info paperSize];
-        double width = paper.width - [info leftMargin] - [info rightMargin];
-        double height = paper.height - [info topMargin] - [info bottomMargin];
-        return CGSizeMake(width > 1.0 ? width : 1.0, height > 1.0 ? height : 1.0);
-    }
-}
-
-void btn_print_pages(int page_count, CGSize page_size, btn_print_page_callback cb) {
-    @autoreleasepool {
-        if (page_count < 1) {
-            page_count = 1;
-        }
-        BTNPrintView *view = [[BTNPrintView alloc] initWithFrame:NSMakeRect(0, 0, page_size.width,
-                                                                             (double)page_count * page_size.height)];
-        view->printCb = cb;
-        view->pageCount = page_count;
-        view->pageSize = page_size;
+        /* Startgroesse ist nur ein Platzhalter - knowsPageRange: setzt Frame/
+         * Seitengroesse/-anzahl neu, sobald AppKit sie braucht (siehe oben). */
+        BTNPrintView *view = [[BTNPrintView alloc] initWithFrame:NSMakeRect(0, 0, 1, 1)];
+        view->drawCb = draw_cb;
+        view->layoutCb = layout_cb;
+        view->pageCount = 1;
+        view->pageSize = CGSizeMake(1, 1);
 
         NSPrintOperation *op = [NSPrintOperation printOperationWithView:view];
         [op setShowsPrintPanel:YES];

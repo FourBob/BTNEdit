@@ -398,16 +398,28 @@ static void regex_escape_literal(const char *src, char *out, size_t out_cap) {
 }
 
 static int compile_search_regex(regex_t *re) {
-    char pattern[512];
     size_t query_len;
     char *query = editor_copy_all(&g_search_editor, &query_len);
+    /* Dynamisch statt eines festen char[512]: das Suchfeld ist seit den
+     * Editor-basierten Suchleisten-Feldern unbegrenzt lang (kein 256-Byte-
+     * Deckel mehr wie frueher beim rohen char[]-Puffer) - ein fester
+     * pattern-Puffer wuerde eine lange Literalsuche mit vielen ERE-
+     * Sonderzeichen (regex_escape_literal() verdoppelt im schlimmsten Fall
+     * jedes Byte) sonst still auf einen kuerzeren, anderen Suchbegriff
+     * kappen, ohne dass der Nutzer davon etwas merkt. *2+1 deckt sowohl den
+     * unveraenderten Regex-Modus als auch den maximal verdoppelten
+     * Literal-Modus ab. */
+    size_t cap = query_len * 2 + 1;
+    char *pattern = malloc(cap);
     if (g_search_regex) {
-        snprintf(pattern, sizeof(pattern), "%s", query);
+        snprintf(pattern, cap, "%s", query);
     } else {
-        regex_escape_literal(query, pattern, sizeof(pattern));
+        regex_escape_literal(query, pattern, cap);
     }
     free(query);
-    return regcomp(re, pattern, REG_EXTENDED) == 0;
+    int ok = regcomp(re, pattern, REG_EXTENDED) == 0;
+    free(pattern);
+    return ok;
 }
 
 /* Sucht in text[0,text_len) ab Position from. forward=1 durchsucht
@@ -1301,26 +1313,45 @@ static void on_scroll(double delta_y) {
 }
 
 /* Zustand fuer den laufenden Druckvorgang: btn_print_pages() (shim.m) ruft
- * on_print_page() ohne Userdata-Parameter auf (wie g_draw_cb auch), deshalb
- * hier als Globals wie active_doc()/g_bounds - waehrend eines Drucks kann
- * ohnehin immer nur ein Dokument gedruckt werden, kein Nebenlaeufigkeits-
- * Problem. */
+ * on_print_layout()/on_print_page() ohne Userdata-Parameter auf (wie
+ * g_draw_cb auch), deshalb hier als Globals wie active_doc()/g_bounds -
+ * waehrend eines Drucks kann ohnehin immer nur ein Dokument gedruckt
+ * werden, kein Nebenlaeufigkeitsproblem. g_print_line_states[i] ist der
+ * Kommentar-Zustand VOR logischer Zeile i (siehe
+ * btn_compute_line_comment_states()) - einmal pro Layout-Aufruf komplett
+ * neu berechnet, damit on_print_page() nicht pro Seite von Dokumentanfang
+ * an rescannen muss (die Druckvorschau zeichnet Seiten nicht zwingend
+ * aufsteigend, ein blosses Mitschleppen des letzten Zustands waere dafuer
+ * nicht sicher). */
 static Editor *g_print_editor = NULL;
 static const BtnLangSpec *g_print_lang = NULL;
 static BtnRow *g_print_rows = NULL;
 static size_t g_print_row_count = 0;
 static size_t g_print_rows_per_page = 1;
+static int *g_print_line_states = NULL;
 
-static void on_print_page(CGContextRef ctx, CGRect page_rect, int page_index) {
-    size_t first_row = (size_t)page_index * g_print_rows_per_page;
-    btn_render_print_page(ctx, page_rect, g_print_editor, g_print_lang,
-                           g_print_rows, g_print_row_count, first_row);
+static void free_print_layout(void) {
+    if (g_print_rows) {
+        btn_layout_free(g_print_rows);
+        g_print_rows = NULL;
+    }
+    free(g_print_line_states);
+    g_print_line_states = NULL;
 }
 
-static void perform_print(void) {
+/* Wird von btn_print_pages() (shim.m) aufgerufen, sobald AppKit die
+ * Seitenanzahl fuer page_size braucht - das passiert waehrend der Nutzer im
+ * Systemdruckdialog Papierformat/Ausrichtung/Raender waehlt (fuer dessen
+ * Live-Vorschau, ggf. mehrfach) und ein letztes Mal nach dessen
+ * Bestaetigung. Baut das Wortumbruch-/Seiten-Layout deshalb bei JEDEM
+ * Aufruf komplett neu auf, statt es einmalig VOR dem Dialog zu berechnen -
+ * sonst wuerde eine im Dialog geaenderte Einstellung nie beim tatsaechlichen
+ * Druck ankommen. */
+static int on_print_layout(CGSize page_size) {
     Document *doc = active_doc();
-    CGSize page_size = btn_print_page_size();
+    free_print_layout();
 
+    const BtnLangSpec *lang = btn_highlight_lang_for_path(doc->path);
     size_t row_count;
     BtnRow *rows = btn_layout_build(&doc->editor, btn_print_text_width(page_size.width), &row_count);
     size_t rows_per_page = btn_rows_per_page(page_size.height);
@@ -1329,18 +1360,36 @@ static void perform_print(void) {
         page_count = 1;
     }
 
+    size_t line_count = editor_line_count(&doc->editor);
+    int *line_states = malloc(sizeof(int) * (line_count > 0 ? line_count : 1));
+    btn_compute_line_comment_states(&doc->editor, lang, line_states);
+
     g_print_editor = &doc->editor;
-    g_print_lang = btn_highlight_lang_for_path(doc->path);
+    g_print_lang = lang;
     g_print_rows = rows;
     g_print_row_count = row_count;
     g_print_rows_per_page = rows_per_page;
+    g_print_line_states = line_states;
 
-    btn_print_pages(page_count, page_size, on_print_page);
+    return page_count;
+}
 
-    btn_layout_free(rows);
+static void on_print_page(CGContextRef ctx, CGRect page_rect, int page_index) {
+    size_t first_row = (size_t)page_index * g_print_rows_per_page;
+    int start_state = 0;
+    if (g_print_lang && first_row < g_print_row_count) {
+        start_state = g_print_line_states[g_print_rows[first_row].logical_line];
+    }
+    btn_render_print_page(ctx, page_rect, g_print_editor, g_print_lang,
+                           g_print_rows, g_print_row_count, first_row, start_state);
+}
+
+static void perform_print(void) {
+    btn_print_pages(on_print_layout, on_print_page);
+
+    free_print_layout();
     g_print_editor = NULL;
     g_print_lang = NULL;
-    g_print_rows = NULL;
     g_print_row_count = 0;
 }
 
@@ -1417,18 +1466,11 @@ static void on_menu(int tag) {
         case BTN_MENU_PASTE: {
             size_t clip_len;
             clip = btn_pasteboard_copy_string(&clip_len);
-            /* Such-/Ersetzen-Feld sind einzeilig - eingefuegte Zeilenumbrueche
-             * durch Leerzeichen ersetzen, statt sie (fuer diese Felder
-             * unpassend) mit einzufuegen. Das Dokument selbst erlaubt
-             * natuerlich mehrzeiliges Einfuegen wie gewohnt. */
-            if (g_focus == BTN_FOCUS_SEARCH || g_focus == BTN_FOCUS_REPLACE) {
-                for (size_t i = 0; i < clip_len; i++) {
-                    if (clip[i] == '\n' || clip[i] == '\r') {
-                        clip[i] = ' ';
-                    }
-                }
-            }
-            /* replace_selection() statt editor_insert_text() direkt: die
+            /* Kein manuelles Saeubern von '\n'/'\r'/'\t' mehr noetig hier -
+             * editor_insert_text() macht das jetzt zentral fuer jeden
+             * einzeiligen Editor (siehe editor_set_single_line() in main(),
+             * editor.h/.c), egal ueber welchen Weg Text eingefuegt wird.
+             * replace_selection() statt editor_insert_text() direkt: die
              * Zwischenablage kann eine gueltige, aber leere Zeichenkette
              * liefern (z.B. wenn sie kein Textformat enthaelt) - dann wuerde
              * editor_insert_text()s len==0-Guard eine bestehende Selektion
@@ -1461,6 +1503,8 @@ int main(void) {
     add_tab(); /* erster, leerer Tab - g_active_doc ist bereits 0 */
     editor_init(&g_search_editor);
     editor_init(&g_replace_editor);
+    editor_set_single_line(&g_search_editor, 1);
+    editor_set_single_line(&g_replace_editor, 1);
 
     btn_app_init();
     /* Bediensprache folgt der Systemeinstellung (kein eigener

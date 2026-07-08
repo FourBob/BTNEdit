@@ -219,7 +219,14 @@ size_t btn_highlight_tokenize(const char *text, size_t len, const BtnLangSpec *l
             size_t start = i;
             i++;
             while (i < len && text[i] != quote) {
-                if (text[i] == '\\' && i + 1 < len) {
+                /* Backtick-Spans (Markdown Inline-Code) kennen anders als
+                 * "/'-Strings kein Backslash-Escaping - ein Backslash direkt
+                 * vor dem schliessenden Backtick ist dort ein ganz normales
+                 * Zeichen, keine Escape-Sequenz. Ohne diese Ausnahme wuerde
+                 * z.B. `C:\` (ein Pfad in einem Code-Span) den schliessenden
+                 * Backtick ueberspringen und den Rest der Zeile mit
+                 * einfaerben. */
+                if (quote != '`' && text[i] == '\\' && i + 1 < len) {
                     i++;
                 }
                 i++;

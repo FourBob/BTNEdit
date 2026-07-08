@@ -136,17 +136,23 @@ void btn_app_close_window(void);
  * auf dem langen Druck-View zu kennen. page_index ist 0-basiert. */
 typedef void (*btn_print_page_callback)(CGContextRef ctx, CGRect page_rect, int page_index);
 
-/* Bedruckbare Seitenflaeche (Papierformat minus Systemraender) der aktuellen
- * Standard-Druckereinstellungen - main.c braucht das VOR dem Aufbau des
- * Zeilenumbruch-Layouts fuers Drucken (btn_layout_build mit Seitenbreite),
- * um die Rows korrekt auf Seiten aufzuteilen. */
-CGSize btn_print_page_size(void);
+/* Liefert die Seitenanzahl fuer eine gegebene bedruckbare Flaeche (Papier-
+ * format minus Systemraender) zurueck - main.c baut darin das Wortumbruch-/
+ * Seiten-Layout (btn_layout_build + btn_rows_per_page) neu auf. Der Shim
+ * ruft das aus BTNPrintView's -knowsPageRange: auf, was AppKit erst
+ * aufruft, WAEHREND/NACHDEM der Nutzer im Systemdruckdialog Papierformat/
+ * Ausrichtung/Raender gewaehlt hat (fuer dessen Live-Vorschau sogar
+ * mehrfach) - anders als eine einmalige Berechnung VOR dem Dialog sieht das
+ * Layout so immer die tatsaechlich gewaehlten Einstellungen. */
+typedef int (*btn_print_layout_callback)(CGSize page_size);
 
-/* Zeigt den System-Druckdialog (NSPrintOperation) und ruft cb fuer jede der
- * page_count Seiten auf (page_size wie von btn_print_page_size() geliefert).
- * Reine Chrome wie die anderen Systemdialoge - kennt weder Editor noch
- * Zeilenumbruch, reicht nur CGContext/Seiten-Rect an main.c/render.c durch. */
-void btn_print_pages(int page_count, CGSize page_size, btn_print_page_callback cb);
+/* Zeigt den System-Druckdialog (NSPrintOperation) und druckt danach.
+ * layout_cb liefert die Seitenanzahl fuer eine gegebene Seitengroesse (siehe
+ * btn_print_layout_callback), draw_cb zeichnet danach jede einzelne Seite
+ * (siehe btn_print_page_callback). Reine Chrome wie die anderen
+ * Systemdialoge - kennt weder Editor noch Zeilenumbruch selbst, reicht nur
+ * Seitengroesse/CGContext/Seiten-Rect an main.c/render.c durch. */
+void btn_print_pages(btn_print_layout_callback layout_cb, btn_print_page_callback draw_cb);
 
 #ifdef __cplusplus
 }

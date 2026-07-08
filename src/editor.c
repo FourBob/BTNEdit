@@ -228,6 +228,7 @@ void editor_init(Editor *ed) {
     ed->desired_col = UNSET_COL;
     ed->edit_seq = 0;
     ed->suppress_coalesce = 0;
+    ed->single_line = 0;
     undo_stack_init(&ed->undo);
 }
 
@@ -236,7 +237,47 @@ void editor_free(Editor *ed) {
     undo_stack_free(&ed->undo);
 }
 
+void editor_set_single_line(Editor *ed, int single_line) {
+    ed->single_line = single_line;
+}
+
+/* Ersetzt '\n'/'\r'/'\t' durch ' ' in einer Kopie von text, falls ed
+ * einzeilig ist - genutzt von editor_insert_text()/editor_set_text(), damit
+ * KEIN Einfuegeweg (Tippen, Einfuegen aus der Zwischenablage, künftige Wege
+ * wie Drag&Drop/IME) das einzeilig-Feld je mit einem echten Zeilenumbruch
+ * oder Tab durcheinanderbringen kann - Tabs wuerden sonst render.c's rein
+ * byte-basierte Cursor-/Selektions-Spaltenrechnung im Suchleisten-Feld
+ * gegenueber CoreTexts eigener Tab-Stop-Darstellung verschieben (dort gibt
+ * es anders als beim Hauptdokument keine expand_tabs_for_display()-
+ * Vorverarbeitung). Gibt NULL zurueck, wenn keine Ersetzung noetig war
+ * (Aufrufer nutzt dann weiter das Original); sonst einen neu allokierten,
+ * gleich langen Puffer (Ersetzung ist immer 1:1, keine Laengenaenderung).
+ */
+static char *sanitize_single_line(const char *text, size_t len) {
+    int needs_sanitizing = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (text[i] == '\n' || text[i] == '\r' || text[i] == '\t') {
+            needs_sanitizing = 1;
+            break;
+        }
+    }
+    if (!needs_sanitizing) {
+        return NULL;
+    }
+    char *out = malloc(len);
+    for (size_t i = 0; i < len; i++) {
+        char c = text[i];
+        out[i] = (c == '\n' || c == '\r' || c == '\t') ? ' ' : c;
+    }
+    return out;
+}
+
 void editor_set_text(Editor *ed, const char *text, size_t len) {
+    char *sanitized = ed->single_line ? sanitize_single_line(text, len) : NULL;
+    if (sanitized) {
+        text = sanitized;
+    }
+
     gb_free(&ed->buffer);
     gb_init(&ed->buffer, len + 64);
     gb_insert(&ed->buffer, 0, text, len);
@@ -249,6 +290,7 @@ void editor_set_text(Editor *ed, const char *text, size_t len) {
 
     undo_stack_free(&ed->undo);
     undo_stack_init(&ed->undo);
+    free(sanitized);
 }
 
 /* ---- Abfragen ---- */
@@ -426,6 +468,16 @@ static int find_matching_quote(Editor *ed, size_t offset, char q, size_t *out_ma
  * eine Klammer/ein Anfuehrungszeichen innerhalb eines String-Literals oder
  * Kommentars kann dadurch in seltenen Faellen einen inhaltlich "falschen",
  * aber stets wohldefinierten Treffer liefern. */
+/* Obergrenze fuer die Verschachtelungstiefen-Suche unten - ohne die wuerde
+ * eine unpaarige/sehr weit entfernte Klammer bei JEDEM Redraw (die
+ * Hervorhebung in render.c laeuft bei jedem Tastendruck) einen Scan bis
+ * zum Puffer-Anfang/-Ende ausloesen. Anfuehrungszeichen brauchen das nicht
+ * (find_matching_quote() bricht ohnehin an Zeilenumbruechen ab). Grosszuegig
+ * genug, um in praktisch jeder echten Datei das tatsaechliche Gegenstueck
+ * noch zu finden, aber klein genug, um den Redraw-Pfad nie spuerbar zu
+ * verlangsamen. */
+#define BTN_BRACKET_MATCH_SCAN_LIMIT 20000
+
 int editor_find_matching_bracket(Editor *ed, size_t offset, size_t *out_match) {
     size_t len = editor_length(ed);
     if (offset >= len) {
@@ -450,8 +502,9 @@ int editor_find_matching_bracket(Editor *ed, size_t offset, size_t *out_match) {
     }
 
     int depth = 0;
+    size_t scanned = 0;
     if (forward) {
-        for (size_t i = offset; i < len; i++) {
+        for (size_t i = offset; i < len && scanned < BTN_BRACKET_MATCH_SCAN_LIMIT; i++, scanned++) {
             char ch = gb_char_at(&ed->buffer, i);
             if (ch == open_c) {
                 depth++;
@@ -464,7 +517,7 @@ int editor_find_matching_bracket(Editor *ed, size_t offset, size_t *out_match) {
             }
         }
     } else {
-        for (size_t i = offset; ; ) {
+        for (size_t i = offset; scanned < BTN_BRACKET_MATCH_SCAN_LIMIT; scanned++) {
             char ch = gb_char_at(&ed->buffer, i);
             if (ch == close_c) {
                 depth++;
@@ -531,6 +584,11 @@ void editor_insert_text(Editor *ed, const char *text, size_t len) {
         editor_delete_selection(ed);
     }
 
+    char *sanitized = ed->single_line ? sanitize_single_line(text, len) : NULL;
+    if (sanitized) {
+        text = sanitized;
+    }
+
     size_t pos = ed->cursor;
     gb_insert(&ed->buffer, pos, text, len);
     undo_push_insert(ed, pos, text, len);
@@ -539,6 +597,36 @@ void editor_insert_text(Editor *ed, const char *text, size_t len) {
     ed->anchor = ed->cursor;
     ed->desired_col = UNSET_COL;
     ed->edit_seq++;
+    free(sanitized);
+}
+
+/* Ersetzt die aktuelle Selektion durch open_c...close_c mit dem bisherigen
+ * Selektionsinhalt dazwischen (z.B. Selektion "abc" + Klammer "(" wird zu
+ * "(abc)") und laesst den neuen Inneninhalt weiterhin selektiert. Gemeinsame
+ * Logik fuer Anfuehrungszeichen (open_c == close_c) und echte Klammern
+ * (open_c != close_c) - beide Faelle unterschieden sich vorher nur in dieser
+ * einen Konstante, waren aber als zwei fast identische ~14-Zeilen-Kopien
+ * ausgeschrieben. */
+static void wrap_selection_with(Editor *ed, char open_c, char close_c) {
+    size_t start = editor_selection_start(ed);
+    char *sel = editor_get_selection_text(ed);
+    size_t sel_len = strlen(sel);
+    editor_delete_selection(ed);
+    editor_insert_text(ed, &open_c, 1);
+    editor_insert_text(ed, sel, sel_len);
+    editor_insert_text(ed, &close_c, 1);
+    free(sel);
+    ed->anchor = start + 1;
+    ed->cursor = start + 1 + sel_len;
+}
+
+/* Fuegt das leere Paar open_c/close_c ein (keine Selektion) und platziert
+ * den Cursor dazwischen. */
+static void insert_empty_pair(Editor *ed, char open_c, char close_c) {
+    char pair[2] = { open_c, close_c };
+    editor_insert_text(ed, pair, 2);
+    ed->cursor--;
+    ed->anchor = ed->cursor;
 }
 
 /* Fuegt eine Klammer ODER ein Anfuehrungszeichen ein: bei einer oeffnenden
@@ -548,11 +636,15 @@ void editor_insert_text(Editor *ed, const char *text, size_t len) {
  * bestehender Ausdruck nachtraeglich in Klammern/Anfuehrungszeichen setzen).
  * Bei einer schliessenden Klammer wird nur darueber weggerueckt (Typdurch-
  * lauf), wenn genau diese schon direkt am Cursor steht (typischerweise weil
- * sie gerade automatisch eingefuegt wurde) - sonst normal eingefuegt.
- * Anfuehrungszeichen haben kein eigenes schliessendes Zeichen (oeffnend ==
- * schliessend), brauchen den Typdurchlauf-Check deshalb VOR statt nach der
- * "oeffnend einfuegen"-Logik. Rueckgabe: 1 = behandelt (Aufrufer braucht
- * selbst kein editor_insert_text() mehr), 0 = c war keine unterstuetzte Art. */
+ * sie gerade automatisch eingefuegt wurde) UND keine Selektion besteht -
+ * mit aktiver Selektion soll ein getipptes schliessendes Zeichen sie ganz
+ * normal ersetzen (der Aufrufer faellt dafuer auf editor_insert_text()
+ * zurueck, siehe Rueckgabewert 0). Anfuehrungszeichen haben kein eigenes
+ * schliessendes Zeichen (oeffnend == schliessend), brauchen den
+ * Typdurchlauf-Check deshalb VOR statt nach der "oeffnend einfuegen"-Logik.
+ * Rueckgabe: 1 = behandelt (Aufrufer braucht selbst kein editor_insert_text()
+ * mehr), 0 = c war keine unterstuetzte Art (oder eine Selektion stand einem
+ * Typdurchlauf im Weg - Aufrufer soll normal einfuegen). */
 int editor_handle_bracket_key(Editor *ed, char c) {
     if (is_quote_char(c)) {
         if (!editor_has_selection(ed) && ed->cursor < editor_length(ed) &&
@@ -562,21 +654,9 @@ int editor_handle_bracket_key(Editor *ed, char c) {
             return 1;
         }
         if (editor_has_selection(ed)) {
-            size_t start = editor_selection_start(ed);
-            char *sel = editor_get_selection_text(ed);
-            size_t sel_len = strlen(sel);
-            editor_delete_selection(ed);
-            editor_insert_text(ed, &c, 1);
-            editor_insert_text(ed, sel, sel_len);
-            editor_insert_text(ed, &c, 1);
-            free(sel);
-            ed->anchor = start + 1;
-            ed->cursor = start + 1 + sel_len;
+            wrap_selection_with(ed, c, c);
         } else {
-            char pair[2] = { c, c };
-            editor_insert_text(ed, pair, 2);
-            ed->cursor--;
-            ed->anchor = ed->cursor;
+            insert_empty_pair(ed, c, c);
         }
         return 1;
     }
@@ -584,25 +664,13 @@ int editor_handle_bracket_key(Editor *ed, char c) {
     char close_c = matching_close_for(c);
     if (close_c) {
         if (editor_has_selection(ed)) {
-            size_t start = editor_selection_start(ed);
-            char *sel = editor_get_selection_text(ed);
-            size_t sel_len = strlen(sel);
-            editor_delete_selection(ed);
-            editor_insert_text(ed, &c, 1);
-            editor_insert_text(ed, sel, sel_len);
-            editor_insert_text(ed, &close_c, 1);
-            free(sel);
-            ed->anchor = start + 1;
-            ed->cursor = start + 1 + sel_len;
+            wrap_selection_with(ed, c, close_c);
         } else {
-            char pair[2] = { c, close_c };
-            editor_insert_text(ed, pair, 2);
-            ed->cursor--;
-            ed->anchor = ed->cursor;
+            insert_empty_pair(ed, c, close_c);
         }
         return 1;
     }
-    if (is_closing_bracket(c) && ed->cursor < editor_length(ed) &&
+    if (!editor_has_selection(ed) && is_closing_bracket(c) && ed->cursor < editor_length(ed) &&
         gb_char_at(&ed->buffer, ed->cursor) == c) {
         ed->cursor++;
         ed->anchor = ed->cursor;
@@ -625,21 +693,29 @@ void editor_delete_backward(Editor *ed) {
      * - sonst bliebe ein verwaistes schliessendes Zeichen stehen, das man
      * sonst separat loeschen muesste. Bei Anfuehrungszeichen ist "erwartetes
      * schliessendes Zeichen" einfach dasselbe Zeichen (kein eigenes Gegen-
-     * stueck wie bei echten Klammern). */
-    char before = gb_char_at(&ed->buffer, ed->cursor - 1);
-    char expected_close = is_quote_char(before) ? before : matching_close_for(before);
-    if (expected_close && ed->cursor < editor_length(ed) &&
-        gb_char_at(&ed->buffer, ed->cursor) == expected_close) {
-        size_t pos = ed->cursor - 1;
-        char *deleted = gb_copy_range(&ed->buffer, pos, 2);
-        gb_delete(&ed->buffer, pos, 2);
-        undo_push_delete_block(ed, pos, deleted, 2);
-        free(deleted);
-        ed->cursor = pos;
-        ed->anchor = pos;
-        ed->desired_col = UNSET_COL;
-        ed->edit_seq++;
-        return;
+     * stueck wie bei echten Klammern). Nur fuers Dokument (!single_line):
+     * ein einzeiliges Feld (Suchen/Ersetzen) bekommt automatisch geschlossene
+     * Paare nie ueber editor_handle_bracket_key() (das ruft nur main.c's
+     * Dokument-Tastatur-Pfad auf), also ist dort JEDES benachbarte Paar von
+     * Hand Zeichen-fuer-Zeichen getippt worden - die Heuristik kann das
+     * strukturell nicht von einem echten Auto-Paar unterscheiden und wuerde
+     * sonst faelschlich beide Zeichen auf einmal loeschen. */
+    if (!ed->single_line) {
+        char before = gb_char_at(&ed->buffer, ed->cursor - 1);
+        char expected_close = is_quote_char(before) ? before : matching_close_for(before);
+        if (expected_close && ed->cursor < editor_length(ed) &&
+            gb_char_at(&ed->buffer, ed->cursor) == expected_close) {
+            size_t pos = ed->cursor - 1;
+            char *deleted = gb_copy_range(&ed->buffer, pos, 2);
+            gb_delete(&ed->buffer, pos, 2);
+            undo_push_delete_block(ed, pos, deleted, 2);
+            free(deleted);
+            ed->cursor = pos;
+            ed->anchor = pos;
+            ed->desired_col = UNSET_COL;
+            ed->edit_seq++;
+            return;
+        }
     }
     size_t n = utf8_backward_len(ed, ed->cursor);
     size_t pos = ed->cursor - n;

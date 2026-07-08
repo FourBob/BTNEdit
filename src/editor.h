@@ -49,6 +49,18 @@ typedef struct {
      * an dieselbe Stelle faelschlich mit einem viel frueheren Undo-Schritt
      * zusammengefasst (coalesced) wird. */
     int suppress_coalesce;
+    /* 1 = dieser Editor darf nie ein '\n' enthalten (Suchen/Ersetzen-Feld,
+     * siehe editor_set_single_line()) - zentral hier statt an jeder
+     * Einfuege-Stelle einzeln zu pruefen, damit kein neuer Einfuegeweg
+     * (Drag&Drop, IME) die Regel vergessen kann. editor_insert_text()/
+     * editor_set_text() ersetzen '\n'/'\r'/'\t' durch ' ', bevor sie
+     * einfuegen; editor_delete_backward() lässt dafuer die "leeres
+     * Klammerpaar auf einen Schlag loeschen"-Sonderbehandlung aus, weil
+     * ein einzeiliges Feld nie ueber editor_handle_bracket_key() (das
+     * NUR vom Dokument aufgerufen wird) automatisch geschlossene Paare
+     * bekommt - ein zufaellig benachbartes Klammernpaar dort wurde immer
+     * Zeichen fuer Zeichen einzeln getippt. */
+    int single_line;
 } Editor;
 
 /* Auf/Ab, Pos1/Ende und Cmd+Links/Rechts fehlen hier bewusst: die haengen
@@ -68,8 +80,17 @@ void editor_init(Editor *ed);
 void editor_free(Editor *ed);
 
 /* Ersetzt den gesamten Inhalt (z.B. beim Laden einer Datei), setzt Cursor
- * und Undo-Verlauf zurueck - das Laden selbst ist nicht rueckgaengig machbar. */
+ * und Undo-Verlauf zurueck - das Laden selbst ist nicht rueckgaengig machbar.
+ * Ist single_line gesetzt (siehe editor_set_single_line()), werden '\n'/
+ * '\r'/'\t' in text durch ' ' ersetzt. */
 void editor_set_text(Editor *ed, const char *text, size_t len);
+
+/* Markiert ed als einzeiliges Feld (Suchen/Ersetzen-Leiste) - siehe den
+ * single_line-Kommentar am Editor-Struct oben. main.c ruft das einmal
+ * direkt nach editor_init() fuer die beiden Suchleisten-Editoren auf; ein
+ * per editor_init() neu angelegter Editor hat single_line == 0 (normales
+ * Dokument). */
+void editor_set_single_line(Editor *ed, int single_line);
 
 size_t editor_length(Editor *ed);
 size_t editor_line_count(Editor *ed);

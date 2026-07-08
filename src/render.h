@@ -117,9 +117,26 @@ double btn_print_text_width(double page_width);
 /* Zeichnet eine einzelne Druckseite: Rows [first_row, first_row +
  * btn_rows_per_page(page_rect.height)) mit Syntax-Hervorhebung wie am
  * Bildschirm, aber ohne Gutter/Cursor/Selektion/Statuszeile. page_rect ist
- * wie bei btn_draw_callback nicht geflippt (Ursprung unten links). */
+ * wie bei btn_draw_callback nicht geflippt (Ursprung unten links).
+ * start_comment_state ist der Kommentar-Zustand VOR first_row (siehe
+ * btn_compute_line_comment_states()) - wird bewusst vom Aufrufer
+ * hereingereicht statt hier selbst von Zeile 0 an neu gescannt: die
+ * Druckvorschau des Systemdialogs zeichnet Seiten nicht zwingend
+ * aufsteigend (der Nutzer kann in der Vorschau zu einer beliebigen Seite
+ * springen), ein Vorwaertsscan pro Seite waere sonst O(Seiten * Zeichen)
+ * statt O(Zeichen) fuers gesamte Dokument. */
 void btn_render_print_page(CGContextRef ctx, CGRect page_rect, Editor *ed, const BtnLangSpec *lang,
-                            const BtnRow *rows, size_t row_count, size_t first_row);
+                            const BtnRow *rows, size_t row_count, size_t first_row,
+                            int start_comment_state);
+
+/* Berechnet fuer JEDE logische Zeile den Kommentar-Zustand VOR ihr, in einem
+ * einzigen O(Zeichen)-Vorwaertsdurchlauf (wie comment_state_before_line()
+ * intern fuer eine einzelne Zielzeile, hier aber fuer alle auf einmal).
+ * out_states muss vom Aufrufer mit mindestens editor_line_count(ed) Eintraegen
+ * allokiert sein (out_states[i] = Zustand vor logischer Zeile i). main.c
+ * ruft das einmal pro Druckvorgang auf (siehe btn_render_print_page()), statt
+ * den Zustand pro Seite einzeln nachzuscannen. */
+void btn_compute_line_comment_states(Editor *ed, const BtnLangSpec *lang, int *out_states);
 
 #ifdef __cplusplus
 }

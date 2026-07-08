@@ -584,6 +584,39 @@ static int comment_state_before_line(Editor *ed, const BtnLangSpec *lang, size_t
     return state;
 }
 
+void btn_compute_line_comment_states(Editor *ed, const BtnLangSpec *lang, int *out_states) {
+    size_t line_count = editor_line_count(ed);
+    if (line_count == 0) {
+        return;
+    }
+    out_states[0] = 0;
+    if (!lang) {
+        for (size_t i = 1; i < line_count; i++) {
+            out_states[i] = 0;
+        }
+        return;
+    }
+
+    int state = 0;
+    size_t total_len = editor_length(ed);
+    size_t li = 0;
+    size_t line_start = 0;
+
+    for (size_t i = 0; i <= total_len && li + 1 < line_count; i++) {
+        if (i == total_len || gb_char_at(&ed->buffer, i) == '\n') {
+            size_t line_len = i - line_start;
+            char *text = gb_copy_range(&ed->buffer, line_start, line_len);
+            int ends;
+            btn_highlight_tokenize(text, line_len, lang, state, &ends, NULL, 0);
+            free(text);
+            state = ends;
+            li++;
+            line_start = i + 1;
+            out_states[li] = state;
+        }
+    }
+}
+
 /* Tokenisiert (falls lang != NULL, mit Zeilen-Cache ueber cached_line) und
  * zeichnet genau eine Row als CTLine bei (x, top_y) - der Kern von
  * btn_render_frame()s Zeilenschleife, ausgelagert, damit btn_render_print_page()
@@ -814,7 +847,8 @@ double btn_print_text_width(double page_width) {
  * dass hier stets bei (0,0) beginnende Seitenkoordinaten ankommen (siehe
  * btn_print_pages() in shim.m). */
 void btn_render_print_page(CGContextRef ctx, CGRect page_rect, Editor *ed, const BtnLangSpec *lang,
-                            const BtnRow *rows, size_t row_count, size_t first_row) {
+                            const BtnRow *rows, size_t row_count, size_t first_row,
+                            int start_comment_state) {
     CGContextSetRGBFillColor(ctx, 1.0, 1.0, 1.0, 1.0);
     CGContextFillRect(ctx, page_rect);
 
@@ -826,10 +860,7 @@ void btn_render_print_page(CGContextRef ctx, CGRect page_rect, Editor *ed, const
     size_t cached_line_start = 0;
     BtnToken tokens[BTN_MAX_TOKENS_PER_LINE];
     size_t token_count = 0;
-    int comment_state = 0;
-    if (lang && first_row < row_count) {
-        comment_state = comment_state_before_line(ed, lang, rows[first_row].logical_line);
-    }
+    int comment_state = start_comment_state;
 
     double x = page_rect.origin.x + PRINT_MARGIN;
     size_t r = first_row;
