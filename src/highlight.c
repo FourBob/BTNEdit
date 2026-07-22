@@ -12,18 +12,24 @@
 struct BtnLangSpec {
     const char *const *keywords; /* NULL-terminiertes Array */
     int line_comment_slash;      /* // */
-    int line_comment_hash;       /* # als Kommentar (Python/Shell) */
+    int line_comment_hash;       /* # als Kommentar (Python/Shell/INI) */
     int block_comment;           /* Blockkommentare wie in C */
-    int preprocessor_hash;       /* # am Zeilenanfang = Praeprozessor (C);
-                                   * fuer Markdown zweckentfremdet fuer
-                                   * Ueberschriften ("# ..."), die genau
-                                   * dieselbe Form haben (ganze Zeile, ein
-                                   * Token, muss am Zeilenanfang stehen). */
+    /* 0 = aus, sonst das Zeichen, das (nach optionalem fuehrenden
+     * Leerraum) die GANZE restliche Zeile zu einem einzigen
+     * BTN_TOK_PREPROCESSOR-Token macht - C-Praeprozessor ('#'), Markdown-
+     * Ueberschrift ('#', gleiche Form: ganze Zeile, ein Token, muss am
+     * Zeilenanfang stehen) und INI-Abschnitt ('[') nutzen denselben
+     * Mechanismus, nur mit unterschiedlichem Ausloeser-Zeichen. */
+    char line_prefix_char;
     int quote_backtick;          /* ` zusaetzlich zu "/' als String-Anfuehrungs-
                                    * zeichen behandeln (Markdown Inline-Code
                                    * wie `code`) - fuer alle anderen Sprachen 0,
                                    * die per Aggregat-Initialisierung ohne
                                    * dieses letzte Feld unveraendert bleiben. */
+    int line_comment_semicolon;  /* ; als Kommentar (INI) - eigenes Feld statt
+                                   * line_comment_hash zu verallgemeinern, weil
+                                   * manche INI-Dialekte BEIDE ';' und '#'
+                                   * gleichzeitig als Kommentar akzeptieren. */
 };
 
 static const char *const C_KEYWORDS[] = {
@@ -36,7 +42,7 @@ static const char *const C_KEYWORDS[] = {
     "id", "nil", "BOOL", "YES", "NO", "self", "super",
     NULL
 };
-static const BtnLangSpec C_LANG = { C_KEYWORDS, 1, 0, 1, 1, 0 };
+static const BtnLangSpec C_LANG = { C_KEYWORDS, 1, 0, 1, '#', 0, 0 };
 
 static const char *const PY_KEYWORDS[] = {
     "and", "as", "assert", "async", "await", "break", "class", "continue", "def",
@@ -45,14 +51,14 @@ static const char *const PY_KEYWORDS[] = {
     "return", "try", "while", "with", "yield", "None", "True", "False", "self",
     NULL
 };
-static const BtnLangSpec PY_LANG = { PY_KEYWORDS, 0, 1, 0, 0, 0 };
+static const BtnLangSpec PY_LANG = { PY_KEYWORDS, 0, 1, 0, 0, 0, 0 };
 
 static const char *const SHELL_KEYWORDS[] = {
     "if", "then", "else", "elif", "fi", "for", "while", "do", "done", "case", "esac",
     "function", "return", "exit", "local", "export", "echo", "in",
     NULL
 };
-static const BtnLangSpec SHELL_LANG = { SHELL_KEYWORDS, 0, 1, 0, 0, 0 };
+static const BtnLangSpec SHELL_LANG = { SHELL_KEYWORDS, 0, 1, 0, 0, 0, 0 };
 
 static const char *const JS_KEYWORDS[] = {
     "break", "case", "catch", "class", "const", "continue", "debugger", "default",
@@ -62,7 +68,7 @@ static const char *const JS_KEYWORDS[] = {
     "true", "false", "null", "undefined",
     NULL
 };
-static const BtnLangSpec JS_LANG = { JS_KEYWORDS, 1, 0, 1, 0, 0 };
+static const BtnLangSpec JS_LANG = { JS_KEYWORDS, 1, 0, 1, 0, 0, 0 };
 
 static const char *const SWIFT_KEYWORDS[] = {
     "associatedtype", "class", "deinit", "enum", "extension", "fileprivate", "func",
@@ -74,14 +80,37 @@ static const char *const SWIFT_KEYWORDS[] = {
     "true", "try",
     NULL
 };
-static const BtnLangSpec SWIFT_LANG = { SWIFT_KEYWORDS, 1, 0, 1, 0, 0 };
+static const BtnLangSpec SWIFT_LANG = { SWIFT_KEYWORDS, 1, 0, 1, 0, 0, 0 };
 
 /* Kein eigener Tokenizer-Zustand fuer Markdown - reine Zweckentfremdung
- * bestehender Mechanismen (siehe Kommentare bei preprocessor_hash/
+ * bestehender Mechanismen (siehe Kommentare bei line_prefix_char/
  * quote_backtick oben): "# Ueberschrift" faellt in dieselbe Form wie ein
  * C-Praeprozessor-Statement (ganze Zeile, muss am Anfang stehen), "`code`"
  * in dieselbe Form wie ein String. Keine Keywords, keine Kommentare. */
-static const BtnLangSpec MD_LANG = { NULL, 0, 0, 0, 1, 1 };
+static const BtnLangSpec MD_LANG = { NULL, 0, 0, 0, '#', 1, 0 };
+
+static const char *const STL_KEYWORDS[] = {
+    "solid", "facet", "normal", "outer", "loop", "vertex",
+    "endloop", "endfacet", "endsolid",
+    NULL
+};
+/* Nur das ASCII-STL-Format ist Text (Binaer-STL ist ein binaeres Format und
+ * wuerde wie jede andere Binaerdatei als Rohbytes angezeigt - das ist eine
+ * allgemeine Einschraenkung eines reinen Text-Editors, keine STL-
+ * Besonderheit). Keine Kommentare im Format, Zahlen (Koordinaten) werden
+ * bereits vom generischen, sprachunabhaengigen Zahlen-Scan erfasst. */
+static const BtnLangSpec STL_LANG = { STL_KEYWORDS, 0, 0, 0, 0, 0, 0 };
+
+/* INI/generische Config-Dateien: '[Abschnitt]' nutzt denselben "ganze Zeile
+ * ein Token"-Mechanismus wie C-Praeprozessor/Markdown-Ueberschrift (siehe
+ * line_prefix_char oben), nur mit '[' statt '#' als Ausloeser. Kommentare
+ * akzeptieren grosszuegig sowohl ';' (klassisches INI) als auch '#' (von
+ * vielen Parsern, z.B. Pythons configparser, ebenfalls unterstuetzt).
+ * '.config' wird mangels eines XML-Tokenizers hier mit angehaengt - passt
+ * fuer einfache Key=Value-Configs, nicht fuer XML-basierte .config-Dateien
+ * (die zeigen dann einfach unformatierten Text wie bisher, keine
+ * Verschlechterung). */
+static const BtnLangSpec INI_LANG = { NULL, 0, 1, 0, '[', 0, 1 };
 
 static int ends_with_ci(const char *s, const char *suffix) {
     size_t ls = strlen(s), lsuf = strlen(suffix);
@@ -112,6 +141,8 @@ const BtnLangSpec *btn_highlight_lang_for_path(const char *path) {
         { ".js", &JS_LANG }, { ".ts", &JS_LANG }, { ".jsx", &JS_LANG }, { ".tsx", &JS_LANG },
         { ".swift", &SWIFT_LANG },
         { ".md", &MD_LANG }, { ".markdown", &MD_LANG },
+        { ".stl", &STL_LANG },
+        { ".ini", &INI_LANG }, { ".config", &INI_LANG },
     };
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
         if (ends_with_ci(path, table[i].ext)) {
@@ -173,12 +204,12 @@ size_t btn_highlight_tokenize(const char *text, size_t len, const BtnLangSpec *l
         }
     }
 
-    if (lang->preprocessor_hash) {
+    if (lang->line_prefix_char) {
         size_t j = i;
         while (j < len && (text[j] == ' ' || text[j] == '\t')) {
             j++;
         }
-        if (j < len && text[j] == '#') {
+        if (j < len && text[j] == lang->line_prefix_char) {
             BTN_EMIT(BTN_TOK_PREPROCESSOR, i, len);
             return count;
         }
@@ -188,6 +219,10 @@ size_t btn_highlight_tokenize(const char *text, size_t len, const BtnLangSpec *l
         char c = text[i];
 
         if (lang->line_comment_hash && c == '#') {
+            BTN_EMIT(BTN_TOK_COMMENT, i, len);
+            break;
+        }
+        if (lang->line_comment_semicolon && c == ';') {
             BTN_EMIT(BTN_TOK_COMMENT, i, len);
             break;
         }
