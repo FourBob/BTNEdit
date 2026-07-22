@@ -23,7 +23,8 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Find:", "Replace:", "Not found",
         "%d replaced",
         "Help", "Keyboard Shortcuts...", "Keyboard Shortcuts",
-        "⌘N — New\n⌘O — Open\n⌘S — Save\n⇧⌘S — Save As\n⌘W — Close\n⌘Z — Undo\n⇧⌘Z — Redo\n⌘X — Cut\n⌘C — Copy\n⌘V — Paste\n⌘A — Select All\n⌘F — Find & Replace\n⌥←/→ — Jump by word\n⌘←/→ — Line start/end\nEsc — Close find bar\nReturn (search field) — Next match\n⇧Return (search field) — Previous match\nReturn (replace field) — Replace + Next\n⌘Return (replace field) — Replace All"
+        "⌘N — New\n⌘O — Open\n⌘S — Save\n⇧⌘S — Save As\n⌘W — Close\n⌘Z — Undo\n⇧⌘Z — Redo\n⌘X — Cut\n⌘C — Copy\n⌘V — Paste\n⌘A — Select All\n⌘F — Find & Replace\n⌥←/→ — Jump by word\n⌘←/→ — Line start/end\nEsc — Close find bar\nReturn (search field) — Next match\n⇧Return (search field) — Previous match\nReturn (replace field) — Replace + Next\n⌘Return (replace field) — Replace All",
+        "Replace All"
     },
     /* BTN_LANG_DE */
     {
@@ -39,7 +40,8 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Suchen:", "Ersetzen:", "Nicht gefunden",
         "%d ersetzt",
         "Hilfe", "Tastenkürzel...", "Tastenkürzel",
-        "⌘N — Neu\n⌘O — Öffnen\n⌘S — Sichern\n⇧⌘S — Sichern unter\n⌘W — Schließen\n⌘Z — Widerrufen\n⇧⌘Z — Wiederholen\n⌘X — Ausschneiden\n⌘C — Kopieren\n⌘V — Einfügen\n⌘A — Alles auswählen\n⌘F — Suchen und Ersetzen\n⌥←/→ — Wortsprung\n⌘←/→ — Zeilenanfang/-ende\nEsc — Suchleiste schließen\nReturn (Suchfeld) — Nächster Treffer\n⇧Return (Suchfeld) — Voriger Treffer\nReturn (Ersetzen-Feld) — Ersetzen + Weiter\n⌘Return (Ersetzen-Feld) — Alle ersetzen"
+        "⌘N — Neu\n⌘O — Öffnen\n⌘S — Sichern\n⇧⌘S — Sichern unter\n⌘W — Schließen\n⌘Z — Widerrufen\n⇧⌘Z — Wiederholen\n⌘X — Ausschneiden\n⌘C — Kopieren\n⌘V — Einfügen\n⌘A — Alles auswählen\n⌘F — Suchen und Ersetzen\n⌥←/→ — Wortsprung\n⌘←/→ — Zeilenanfang/-ende\nEsc — Suchleiste schließen\nReturn (Suchfeld) — Nächster Treffer\n⇧Return (Suchfeld) — Voriger Treffer\nReturn (Ersetzen-Feld) — Ersetzen + Weiter\n⌘Return (Ersetzen-Feld) — Alle ersetzen",
+        "Alle ersetzen"
     },
     /* BTN_LANG_FR */
     {
@@ -55,7 +57,8 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Rechercher :", "Remplacer :", "Introuvable",
         "%d remplacement(s)",
         "Aide", "Raccourcis clavier...", "Raccourcis clavier",
-        "⌘N — Nouveau\n⌘O — Ouvrir\n⌘S — Enregistrer\n⇧⌘S — Enregistrer sous\n⌘W — Fermer\n⌘Z — Annuler\n⇧⌘Z — Rétablir\n⌘X — Couper\n⌘C — Copier\n⌘V — Coller\n⌘A — Tout sélectionner\n⌘F — Rechercher et remplacer\n⌥←/→ — Saut de mot\n⌘←/→ — Début/fin de ligne\nÉchap — Fermer la barre de recherche\nRetour (champ de recherche) — Occurrence suivante\n⇧Retour (champ de recherche) — Occurrence précédente\nRetour (champ de remplacement) — Remplacer + suivant\n⌘Retour (champ de remplacement) — Tout remplacer"
+        "⌘N — Nouveau\n⌘O — Ouvrir\n⌘S — Enregistrer\n⇧⌘S — Enregistrer sous\n⌘W — Fermer\n⌘Z — Annuler\n⇧⌘Z — Rétablir\n⌘X — Couper\n⌘C — Copier\n⌘V — Coller\n⌘A — Tout sélectionner\n⌘F — Rechercher et remplacer\n⌥←/→ — Saut de mot\n⌘←/→ — Début/fin de ligne\nÉchap — Fermer la barre de recherche\nRetour (champ de recherche) — Occurrence suivante\n⇧Retour (champ de recherche) — Occurrence précédente\nRetour (champ de remplacement) — Remplacer + suivant\n⌘Retour (champ de remplacement) — Tout remplacer",
+        "Tout remplacer"
     },
     /* BTN_LANG_ES */
     {
@@ -71,7 +74,8 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Buscar:", "Reemplazar:", "No encontrado",
         "%d reemplazos",
         "Ayuda", "Atajos de teclado...", "Atajos de teclado",
-        "⌘N — Nuevo\n⌘O — Abrir\n⌘S — Guardar\n⇧⌘S — Guardar como\n⌘W — Cerrar\n⌘Z — Deshacer\n⇧⌘Z — Rehacer\n⌘X — Cortar\n⌘C — Copiar\n⌘V — Pegar\n⌘A — Seleccionar todo\n⌘F — Buscar y reemplazar\n⌥←/→ — Salto de palabra\n⌘←/→ — Inicio/fin de línea\nEsc — Cerrar barra de búsqueda\nIntro (campo de búsqueda) — Siguiente coincidencia\n⇧Intro (campo de búsqueda) — Coincidencia anterior\nIntro (campo de reemplazo) — Reemplazar + siguiente\n⌘Intro (campo de reemplazo) — Reemplazar todo"
+        "⌘N — Nuevo\n⌘O — Abrir\n⌘S — Guardar\n⇧⌘S — Guardar como\n⌘W — Cerrar\n⌘Z — Deshacer\n⇧⌘Z — Rehacer\n⌘X — Cortar\n⌘C — Copiar\n⌘V — Pegar\n⌘A — Seleccionar todo\n⌘F — Buscar y reemplazar\n⌥←/→ — Salto de palabra\n⌘←/→ — Inicio/fin de línea\nEsc — Cerrar barra de búsqueda\nIntro (campo de búsqueda) — Siguiente coincidencia\n⇧Intro (campo de búsqueda) — Coincidencia anterior\nIntro (campo de reemplazo) — Reemplazar + siguiente\n⌘Intro (campo de reemplazo) — Reemplazar todo",
+        "Reemplazar todo"
     },
     /* BTN_LANG_ZH (Simplified) */
     {
@@ -90,7 +94,8 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "查找:", "替换:", "未找到",
         "已替换 %d 处",
         "帮助", "键盘快捷键…", "键盘快捷键",
-        "⌘N — 新建\n⌘O — 打开\n⌘S — 存储\n⇧⌘S — 存储为\n⌘W — 关闭\n⌘Z — 撤销\n⇧⌘Z — 重做\n⌘X — 剪切\n⌘C — 拷贝\n⌘V — 粘贴\n⌘A — 全选\n⌘F — 查找和替换\n⌥←/→ — 按词跳转\n⌘←/→ — 行首/行尾\nEsc — 关闭查找栏\n回车（查找框）— 下一个匹配项\n⇧回车（查找框）— 上一个匹配项\n回车（替换框）— 替换并查找下一个\n⌘回车（替换框）— 全部替换"
+        "⌘N — 新建\n⌘O — 打开\n⌘S — 存储\n⇧⌘S — 存储为\n⌘W — 关闭\n⌘Z — 撤销\n⇧⌘Z — 重做\n⌘X — 剪切\n⌘C — 拷贝\n⌘V — 粘贴\n⌘A — 全选\n⌘F — 查找和替换\n⌥←/→ — 按词跳转\n⌘←/→ — 行首/行尾\nEsc — 关闭查找栏\n回车（查找框）— 下一个匹配项\n⇧回车（查找框）— 上一个匹配项\n回车（替换框）— 替换并查找下一个\n⌘回车（替换框）— 全部替换",
+        "全部替换"
     }
 };
 

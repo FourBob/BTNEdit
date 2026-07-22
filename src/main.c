@@ -976,6 +976,7 @@ static void on_draw(CGContextRef ctx, CGRect bounds) {
         int focus_field = (g_focus == BTN_FOCUS_SEARCH) ? 1 : (g_focus == BTN_FOCUS_REPLACE) ? 2 : 0;
         btn_render_find_bar(ctx, bounds, btn_tr(BTN_STR_FIND_SEARCH_LABEL), &g_search_editor,
                              btn_tr(BTN_STR_FIND_REPLACE_LABEL), &g_replace_editor,
+                             btn_tr(BTN_STR_REPLACE_ALL_BUTTON),
                              g_search_regex, focus_field, g_search_status);
     }
 
@@ -1022,12 +1023,19 @@ static void handle_find_bar_click(double x) {
     double regex_x = search_field_x + BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING;
     double replace_label_x = regex_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING * 2.0;
     double replace_field_x = replace_label_x + BTN_FIND_LABEL_WIDTH;
+    double replace_all_x = replace_field_x + BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING;
 
     if (x >= regex_x && x < regex_x + BTN_FIND_REGEX_WIDTH) {
         g_search_regex = !g_search_regex;
     } else if (x >= search_field_x && x < regex_x) {
         g_focus = BTN_FOCUS_SEARCH;
-    } else if (x >= replace_field_x) {
+    } else if (x >= replace_all_x && x < replace_all_x + BTN_FIND_REPLACE_ALL_WIDTH) {
+        /* "Alle ersetzen"-Knopf - dieselbe Aktion wie Cmd+Return im
+         * Ersetzen-Feld (siehe handle_find_bar_key()), jetzt zusaetzlich per
+         * Klick erreichbar. Bewusst VOR dem breiteren replace_field_x-Zweig
+         * unten geprueft, da der Knopf rechts vom Ersetzen-Feld sitzt. */
+        perform_replace_all();
+    } else if (x >= replace_field_x && x < replace_all_x) {
         g_focus = BTN_FOCUS_REPLACE;
     }
 }

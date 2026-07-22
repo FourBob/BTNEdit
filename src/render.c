@@ -501,6 +501,7 @@ static void draw_find_field(CGContextRef ctx, Editor *ed, double field_x, double
 
 void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_label, Editor *search_ed,
                           const char *replace_label, Editor *replace_ed,
+                          const char *replace_all_label,
                           int regex_mode, int focus_field, const char *status) {
     double bar_top = bounds.size.height - BTN_TAB_BAR_HEIGHT - BTN_FIND_BAR_HEIGHT;
     double text_y = bar_top + (BTN_FIND_BAR_HEIGHT - FONT_SIZE) / 2.0 + 3.0;
@@ -522,7 +523,8 @@ void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_lab
     double regex_x = search_field_x + BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING;
     double replace_label_x = regex_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING * 2.0;
     double replace_field_x = replace_label_x + BTN_FIND_LABEL_WIDTH;
-    double status_x = replace_field_x + BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING * 2.0;
+    double replace_all_x = replace_field_x + BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING;
+    double status_x = replace_all_x + BTN_FIND_REPLACE_ALL_WIDTH + BTN_FIND_BAR_PADDING * 2.0;
 
     draw_text_at(ctx, search_label, search_label_x, text_y, dimAttrs);
     draw_find_field(ctx, search_ed, search_field_x, text_y, bar_top, attrs, char_width, focus_field == 1);
@@ -535,6 +537,18 @@ void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_lab
 
     draw_text_at(ctx, replace_label, replace_label_x, text_y, dimAttrs);
     draw_find_field(ctx, replace_ed, replace_field_x, text_y, bar_top, attrs, char_width, focus_field == 2);
+
+    /* "Alle ersetzen"-Knopf - main.c testet dieselbe Position (replace_all_x,
+     * Breite BTN_FIND_REPLACE_ALL_WIDTH) beim Mausklick, siehe
+     * handle_find_bar_click(). Bisher nur per Cmd+Return im Ersetzen-Feld
+     * erreichbar - dieser Knopf macht die Aktion zusaetzlich sichtbar/
+     * klickbar. */
+    CGContextSetRGBFillColor(ctx, 0.80, 0.80, 0.80, 1.0);
+    CGContextFillRect(ctx, CGRectMake(replace_all_x, bar_top + 4.0, BTN_FIND_REPLACE_ALL_WIDTH, BTN_FIND_BAR_HEIGHT - 8.0));
+    CGContextSetRGBStrokeColor(ctx, 0.55, 0.55, 0.55, 1.0);
+    CGContextSetLineWidth(ctx, 1.0);
+    CGContextStrokeRect(ctx, CGRectMake(replace_all_x, bar_top + 4.0, BTN_FIND_REPLACE_ALL_WIDTH, BTN_FIND_BAR_HEIGHT - 8.0));
+    draw_text_at(ctx, replace_all_label, replace_all_x + 6.0, text_y, attrs);
 
     if (status && status[0] != '\0') {
         draw_text_at(ctx, status, status_x, text_y, dimAttrs);

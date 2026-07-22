@@ -97,6 +97,20 @@ static BTNContentView *g_view = nil;
     return YES;
 }
 
+/* Bringt die App zuverlaessig in den Vordergrund, wenn sie per Doppelklick/
+ * "Oeffnen mit" auf eine Datei kaltgestartet wurde - ein einzelner
+ * activateIgnoringOtherApps:-Aufruf VOR [NSApp run] (siehe btn_app_run())
+ * kommt bei diesem Startweg manchmal zu frueh, um noch zu wirken, weil die
+ * App zu dem Zeitpunkt aus Sicht des Systems ihren Start noch nicht
+ * abgeschlossen hat. Dies hier ist der von Apple dafuer vorgesehene
+ * Zeitpunkt; application:openURLs: (siehe unten) aktiviert zusaetzlich noch
+ * einmal fuer den Fall, dass die Datei erst nach dem Start-Ereignis eintrifft. */
+- (void)applicationDidFinishLaunching:(NSNotification *)notification {
+    (void)notification;
+    [NSApp activateIgnoringOtherApps:YES];
+    [g_window makeKeyAndOrderFront:nil];
+}
+
 - (BOOL)windowShouldClose:(id)sender {
     (void)sender;
     if (g_should_close_cb) {

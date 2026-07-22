@@ -56,6 +56,10 @@ typedef enum {
     /* Mehrzeilige Liste aller Tastenkuerzel (echte '\n', kein Format-String)
      * fuer den NSAlert der Hilfe-Uebersicht. */
     BTN_STR_HELP_BODY,
+    /* Beschriftung des klickbaren "Alle ersetzen"-Knopfs in der Suchleiste -
+     * dieselbe Aktion wie Cmd+Return im Ersetzen-Feld, jetzt zusaetzlich
+     * sichtbar/klickbar statt nur per Tastenkuerzel erreichbar. */
+    BTN_STR_REPLACE_ALL_BUTTON,
     BTN_STR_COUNT
 } BtnStringId;
 

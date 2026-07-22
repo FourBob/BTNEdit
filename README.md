@@ -69,6 +69,6 @@ Kein Xcode-Projekt nötig - ein einfaches `Makefile` reicht (`clang`,
 | Alles auswählen | `⌘A` |
 | Suchen und Ersetzen öffnen | `⌘F` |
 | In der Suchleiste: nächster/vorheriger Treffer | `Return` / `⇧Return` |
-| In der Suchleiste: Ersetzen+Weiter / Alle ersetzen | `Return` (im Ersetzen-Feld) / `⌘Return` |
+| In der Suchleiste: Ersetzen+Weiter / Alle ersetzen | `Return` (im Ersetzen-Feld) / `⌘Return` oder Klick auf den "Alle ersetzen"-Knopf |
 | Suchleiste schließen | `Esc` |
 | Wort-/Zeilensprung, Zeilenanfang/-ende | `⌥←/→`, `⌘←/→`, Pos1/Ende |

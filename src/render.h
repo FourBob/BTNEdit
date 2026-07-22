@@ -33,6 +33,7 @@ extern "C" {
 #define BTN_FIND_LABEL_WIDTH 70.0
 #define BTN_FIND_FIELD_WIDTH 200.0
 #define BTN_FIND_REGEX_WIDTH 26.0
+#define BTN_FIND_REPLACE_ALL_WIDTH 120.0
 
 /* Eine visuelle Zeile (Row) nach Wortumbruch: [start, start+len) im
  * Puffer. logical_line ist die zugehoerige "echte" Zeile (fuer die
@@ -78,16 +79,21 @@ double btn_tab_width_for(int count, double window_width);
 void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labels, int count, int active);
 
 /* Zeichnet die Suchen/Ersetzen-Leiste direkt unter der Tableiste (Hoehe
- * BTN_FIND_BAR_HEIGHT). search_label/replace_label kommen von main.c
- * (uebersetzt via strings.h) - render.c selbst kennt wie beim Rest der App
- * keine Bediensprache. search_ed/replace_ed sind die beiden Feld-Editoren
- * (siehe editor.h) - liefern Inhalt, Cursor und Selektion in einem. Beide
- * sind garantiert einzeilig (main.c fuegt nie '\n' ein), deshalb genuegt
- * hier reine Byte-Spalten-Mathematik ohne Wortumbruch/Zeilen-Konzept.
- * focus_field: 0 = keins der beiden Felder fokussiert (nur Inhalt zeigen,
- * kein Cursor), 1 = Suchfeld, 2 = Ersetzen-Feld. status darf leer sein. */
+ * BTN_FIND_BAR_HEIGHT). search_label/replace_label/replace_all_label kommen
+ * von main.c (uebersetzt via strings.h) - render.c selbst kennt wie beim
+ * Rest der App keine Bediensprache. search_ed/replace_ed sind die beiden
+ * Feld-Editoren (siehe editor.h) - liefern Inhalt, Cursor und Selektion in
+ * einem. Beide sind garantiert einzeilig (main.c fuegt nie '\n' ein),
+ * deshalb genuegt hier reine Byte-Spalten-Mathematik ohne Wortumbruch/
+ * Zeilen-Konzept. focus_field: 0 = keins der beiden Felder fokussiert (nur
+ * Inhalt zeigen, kein Cursor), 1 = Suchfeld, 2 = Ersetzen-Feld. Der "Alle
+ * ersetzen"-Knopf sitzt bei derselben x-Position (replace_field_x +
+ * BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING, Breite
+ * BTN_FIND_REPLACE_ALL_WIDTH), die main.c beim Mausklick testet (siehe
+ * handle_find_bar_click()). status darf leer sein. */
 void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_label, Editor *search_ed,
                           const char *replace_label, Editor *replace_ed,
+                          const char *replace_all_label,
                           int regex_mode, int focus_field, const char *status);
 
 /* Zeichnet einen Frame: Hintergrund, Selektion, Text (optional per lang
