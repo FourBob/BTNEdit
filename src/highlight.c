@@ -112,6 +112,42 @@ static const BtnLangSpec STL_LANG = { STL_KEYWORDS, 0, 0, 0, 0, 0, 0 };
  * Verschlechterung). */
 static const BtnLangSpec INI_LANG = { NULL, 0, 1, 0, '[', 0, 1 };
 
+/* Kein XML-Tokenizer vorhanden - "Keywords" sind hier haeufige Element-/
+ * Attributnamen statt echter Sprach-Schluesselwoerter (aehnliche
+ * Zweckentfremdung wie bei STL: gibt der Datei sichtbare Struktur, ohne
+ * einen vollen XML-Parser zu brauchen). Attributwerte in Anfuehrungszeichen
+ * werden bereits vom generischen, sprachunabhaengigen Anfuehrungszeichen-
+ * Scan erfasst; XML-Kommentare werden bewusst nicht erkannt (block_comment
+ * ist fest auf die C-Kommentarmarken verdrahtet, nicht konfigurierbar -
+ * fuer diese einfache Wortliste nicht den Aufwand wert). */
+static const char *const SVG_KEYWORDS[] = {
+    "svg", "path", "circle", "rect", "ellipse", "line", "polyline", "polygon",
+    "g", "defs", "use", "symbol", "clipPath", "mask", "pattern", "linearGradient",
+    "radialGradient", "stop", "text", "tspan", "image", "filter",
+    "d", "fill", "stroke", "stroke-width", "transform", "viewBox", "xmlns",
+    "width", "height", "cx", "cy", "r", "rx", "ry", "x", "y", "x1", "y1", "x2", "y2",
+    "points", "id", "class", "style", "opacity",
+    NULL
+};
+static const BtnLangSpec SVG_LANG = { SVG_KEYWORDS, 0, 0, 0, 0, 0, 0 };
+
+/* ASCII-DXF (die verbreitete Textvariante, kein Binaer-DXF) - "Keywords"
+ * sind Abschnitts-/Entitaetsnamen. Der eigentliche Code/Wert-Aufbau (jede
+ * zweite Zeile eine Gruppencode-Zahl) braucht keine eigene Logik: Zahlen
+ * werden schon vom generischen Zahlen-Scan erfasst. Keine Kommentare
+ * (Gruppencode 999 fuer Kommentarzeilen wird hier nicht extra behandelt -
+ * selten genug fuer diese einfache Wortliste). */
+static const char *const DXF_KEYWORDS[] = {
+    "SECTION", "ENDSEC", "EOF", "HEADER", "CLASSES", "TABLES", "BLOCKS",
+    "ENTITIES", "OBJECTS", "TABLE", "ENDTAB", "BLOCK", "ENDBLK",
+    "LINE", "CIRCLE", "ARC", "TEXT", "MTEXT", "POINT", "POLYLINE", "LWPOLYLINE",
+    "VERTEX", "SEQEND", "INSERT", "SOLID", "3DFACE", "SPLINE", "ELLIPSE",
+    "DIMENSION", "HATCH", "LAYER", "LTYPE", "STYLE", "VIEW", "UCS", "APPID",
+    "DIMSTYLE", "BLOCK_RECORD",
+    NULL
+};
+static const BtnLangSpec DXF_LANG = { DXF_KEYWORDS, 0, 0, 0, 0, 0, 0 };
+
 static int ends_with_ci(const char *s, const char *suffix) {
     size_t ls = strlen(s), lsuf = strlen(suffix);
     if (lsuf > ls) {
@@ -143,6 +179,8 @@ const BtnLangSpec *btn_highlight_lang_for_path(const char *path) {
         { ".md", &MD_LANG }, { ".markdown", &MD_LANG },
         { ".stl", &STL_LANG },
         { ".ini", &INI_LANG }, { ".config", &INI_LANG },
+        { ".svg", &SVG_LANG },
+        { ".dxf", &DXF_LANG },
     };
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
         if (ends_with_ci(path, table[i].ext)) {

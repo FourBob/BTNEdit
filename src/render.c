@@ -676,10 +676,26 @@ static void draw_row_line(CGContextRef ctx, Editor *ed, const BtnLangSpec *lang,
     CFStringRef lineStr = CFStringCreateWithBytes(NULL, (const UInt8 *)disp,
                                                    (CFIndex)disp_len, kCFStringEncodingUTF8, false);
     if (!lineStr) {
-        /* Verteidigung in der Tiefe: sollte disp trotz des seq_start-Fixes
-         * in btn_layout_build() doch einmal keine gueltige UTF-8-Sequenz
-         * sein, lieber diese Zeile ohne Text ueberspringen als mit NULL
-         * weiterzurechnen (Absturz). */
+        /* disp ist keine gueltige UTF-8-Sequenz - kommt vor, wenn eine
+         * Binaerdatei als Text geoeffnet wird (z.B. eine Binaer-STL-Datei
+         * ganz ohne Zeilenumbruch: dann ist praktisch das gesamte Dokument
+         * bis auf einen etwaigen ASCII-Kopf eine einzige riesige "Zeile"
+         * voller beliebiger Bytes). Ohne Fallback wuerde diese Zeile
+         * komplett uebersprungen (unsichtbar) - bei einer solchen Datei
+         * blieb dadurch quasi nur die allererste, noch gueltige Zeile
+         * sichtbar. ISO-8859-1 bildet JEDEN Byte-Wert 0-255 auf einen
+         * gueltigen Codepoint ab (kann nie fehlschlagen) und zeigt so
+         * wenigstens irgendetwas an, statt die Zeile verschwinden zu
+         * lassen - Speichern bleibt davon unberuehrt (schreibt weiterhin
+         * die rohen Bytes, nicht diese Anzeige-Kodierung). */
+        lineStr = CFStringCreateWithBytes(NULL, (const UInt8 *)disp,
+                                           (CFIndex)disp_len, kCFStringEncodingISOLatin1, false);
+    }
+    if (!lineStr) {
+        /* Verteidigung in der Tiefe: ISO-8859-1 kann fuer eine Byte-Folge
+         * dieser Laenge eigentlich nie fehlschlagen, aber lieber diese
+         * Zeile ohne Text ueberspringen als mit NULL weiterzurechnen
+         * (Absturz). */
         free(disp);
         return;
     }

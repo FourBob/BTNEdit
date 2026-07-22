@@ -17,7 +17,7 @@ Graphics/Core Text gezeichnet.
 - Zuletzt geöffnet (persistiert über Neustarts hinweg)
 - Wortumbruch, Zeilennummern-Gutter, Statuszeile (Zeilen/Wörter/Zeichen)
 - Syntax-Highlighting: C/C++/Objective-C/Java, Python, Shell, JavaScript/
-  TypeScript, Swift, Markdown, STL (ASCII), INI/Config
+  TypeScript, Swift, Markdown, STL (ASCII), INI/Config, SVG, DXF (ASCII)
 - Suchen/Ersetzen mit regulären Ausdrücken (POSIX ERE), Ersetzen/Alle ersetzen
 - Undo/Redo mit Coalescing aufeinanderfolgender Tastendrücke
 - Klammern und Anführungszeichen: Auto-Vervollständigung/Typdurchlauf für
