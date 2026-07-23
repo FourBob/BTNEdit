@@ -760,7 +760,8 @@ static void draw_row_line(CGContextRef ctx, Editor *ed, const BtnLangSpec *lang,
     free(disp);
 }
 
-void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_row, const BtnLangSpec *lang) {
+void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_row, const BtnLangSpec *lang,
+                       const size_t *match_starts, const size_t *match_ends, size_t match_count) {
     CGContextSetRGBFillColor(ctx, 1.0, 1.0, 1.0, 1.0);
     CGContextFillRect(ctx, bounds);
 
@@ -777,6 +778,11 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
     int has_sel = editor_has_selection(ed);
     size_t sel_start = has_sel ? editor_selection_start(ed) : 0;
     size_t sel_end = has_sel ? editor_selection_end(ed) : 0;
+
+    /* Wandert nur vorwaerts durch match_starts/match_ends mit, passend zur
+     * ebenfalls aufsteigenden Row-Reihenfolge der Schleife unten -
+     * O(Rows + Treffer) statt O(Rows * Treffer). */
+    size_t match_idx = 0;
 
     /* Klammer-Hervorhebung: nur ohne aktive Selektion (wie beim Cursor
      * selbst weiter unten) - klebt der Cursor an einer Klammer, werden sie
@@ -814,6 +820,28 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
         size_t row_start = rows[r].start;
         size_t row_len = rows[r].len;
         size_t row_end = row_start + row_len;
+
+        if (match_count > 0) {
+            while (match_idx < match_count && match_ends[match_idx] <= row_start) {
+                match_idx++;
+            }
+            for (size_t mi = match_idx; mi < match_count && match_starts[mi] < row_end; mi++) {
+                size_t hi_from = match_starts[mi] > row_start ? match_starts[mi] : row_start;
+                size_t hi_to = match_ends[mi] < row_end ? match_ends[mi] : row_end;
+                if (hi_from >= hi_to) {
+                    continue;
+                }
+                size_t col_from = editor_visual_column_in_range(ed, row_start, hi_from);
+                size_t col_to = editor_visual_column_in_range(ed, row_start, hi_to);
+                double hx = GUTTER_WIDTH + LEFT_PADDING + (double)col_from * char_width;
+                double hw = (double)(col_to - col_from) * char_width;
+                if (hw < 2.0) {
+                    hw = 2.0;
+                }
+                CGContextSetRGBFillColor(ctx, 1.0, 0.85, 0.25, 0.45);
+                CGContextFillRect(ctx, CGRectMake(hx, top_y, hw, LINE_HEIGHT));
+            }
+        }
 
         if (has_sel) {
             size_t hi_from = sel_start > row_start ? sel_start : row_start;

@@ -50,6 +50,10 @@ typedef enum {
     BTN_STR_FIND_NOT_FOUND,
     /* Enthaelt ein "%d" fuer die Trefferanzahl - siehe BTN_STR_SAVE_PROMPT_TITLE_FMT. */
     BTN_STR_FIND_REPLACED_FMT,
+    /* Enthaelt zwei "%d" (Index des aktuellen Treffers, Gesamtanzahl) - siehe
+     * BTN_STR_SAVE_PROMPT_TITLE_FMT. Wird sowohl von der Live-Suche beim
+     * Tippen als auch von Return-gesteuerter Navigation gezeigt. */
+    BTN_STR_FIND_COUNT_FMT,
     BTN_STR_HELP_MENU,
     BTN_STR_HELP_SHORTCUTS,
     BTN_STR_HELP_TITLE,

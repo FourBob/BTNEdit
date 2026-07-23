@@ -66,6 +66,30 @@ static Editor g_replace_editor;
 static int g_search_regex = 0; /* 0 = Literalsuche, 1 = POSIX-Regex (ERE) */
 static char g_search_status[128] = "";
 
+/* Alle Fundstellen der aktuellen Suchanfrage im aktiven Dokument, nach Start
+ * aufsteigend sortiert - fuer die Live-Hervorhebung aller Treffer beim
+ * Tippen (render.c faerbt sie gelb, siehe btn_render_frame()) und fuer den
+ * Trefferzaehler ("3 von 12 Treffern") in der Statusanzeige. Wird bei jeder
+ * Aenderung der Suchanfrage (Tippen, Regex-Umschalter, Ausschneiden/
+ * Einfuegen im Suchfeld) sowie bei jeder Return-gesteuerten Navigation neu
+ * aufgebaut. BTN_MAX_SEARCH_MATCHES deckelt die Kosten pro Tastendruck fuer
+ * pathologisch haeufige Muster - analog zu BTN_MAX_HIGHLIGHT_LINE_LEN in
+ * highlight.c. */
+#define BTN_MAX_SEARCH_MATCHES 5000
+static size_t g_match_starts[BTN_MAX_SEARCH_MATCHES];
+static size_t g_match_ends[BTN_MAX_SEARCH_MATCHES];
+static size_t g_match_count = 0;
+
+/* Ausgangspunkt fuer die naechste Live-Suche (siehe perform_live_search) -
+ * bewusst getrennt von der aktuellen Dokument-Selektion: die Selektion
+ * bewegt sich waehrend des Tippens live zum jeweils naechsten Treffer;
+ * wuerde sie auch als Ausgangspunkt dienen, wuerde ein laenger werdender
+ * Suchbegriff bei jedem Tastendruck ab dem zuletzt gefundenen Treffer
+ * weitersuchen statt konsistent denselben Bereich neu zu pruefen. Wird beim
+ * Oeffnen der Leiste und nach jeder Return-gesteuerten Navigation
+ * aktualisiert. */
+static size_t g_search_anchor = 0;
+
 static Document *active_doc(void) {
     return &g_docs[g_active_doc];
 }
@@ -292,6 +316,10 @@ static void close_find_bar(void) {
     }
     g_find_bar_visible = 0;
     g_focus = BTN_FOCUS_DOCUMENT;
+    /* Sonst blieben die gelben Treffer-Hervorhebungen (siehe
+     * btn_render_frame()) im Dokument sichtbar, obwohl die Leiste, die sie
+     * erklaert, gar nicht mehr offen ist. */
+    g_match_count = 0;
     /* Content-Flaeche wird wieder groesser (siehe content_bounds()) -
      * ohne Neuberechnung koennte der Cursor jetzt in der bisher von der
      * Leiste verdeckten Zeile stehen, ohne dass eine Bewegung stattfand. */
@@ -321,6 +349,10 @@ static void open_find_bar(void) {
     g_find_bar_visible = 1;
     g_focus = BTN_FOCUS_SEARCH;
     g_search_status[0] = '\0';
+    /* Ausgangspunkt fuer die Live-Suche (siehe g_search_anchor-Kommentar
+     * oben) - der Cursor/Selektionsanfang im Dokument, so wie er JETZT
+     * steht, nicht irgendwo mitten in einem spaeteren Live-Treffer. */
+    g_search_anchor = editor_selection_start(ed);
     sync_scroll_to_cursor();
     btn_app_request_redraw();
 }
@@ -516,6 +548,115 @@ static int find_match(const char *text, size_t text_len, size_t from, int forwar
     return found;
 }
 
+/* Sammelt ALLE (nicht ueberlappenden, von links nach rechts gefundenen)
+ * Treffer der aktuellen Suchanfrage in text[0,text_len) - dieselbe
+ * Vorwaerts-Scan-Schleife wie der Rueckwaerts-Zweig von find_match() oben,
+ * hier aber unabhaengig von einer Ausgangsposition und mit Obergrenze
+ * max_out: sowohl fuer die Live-Hervorhebung aller Treffer (render.c) als
+ * auch fuer den Trefferzaehler ("3 von 12 Treffern") reicht dieselbe,
+ * vollstaendige, aufsteigend sortierte Trefferliste - ein zusaetzlicher
+ * find_match()-Aufruf allein fuer den "aktuellen" Treffer waere ein
+ * zweiter, redundanter Regex-Durchlauf ueber denselben Text. */
+static size_t collect_all_matches(const char *text, size_t text_len,
+                                   size_t *out_starts, size_t *out_ends, size_t max_out) {
+    if (editor_length(&g_search_editor) == 0) {
+        return 0;
+    }
+    regex_t re;
+    if (!compile_search_regex(&re)) {
+        return 0;
+    }
+    size_t count = 0;
+    size_t scan = 0;
+    regmatch_t m;
+    while (scan <= text_len && count < max_out) {
+        m.rm_so = (regoff_t)scan;
+        m.rm_eo = (regoff_t)text_len;
+        if (regexec(&re, text, 1, &m, regexec_flags_for(text, scan)) != 0) {
+            break;
+        }
+        size_t ms = (size_t)m.rm_so, me = (size_t)m.rm_eo;
+        out_starts[count] = ms;
+        out_ends[count] = me;
+        count++;
+        scan = (me > ms) ? me : ms + 1; /* Leertreffer: mind. 1 vorruecken */
+    }
+    regfree(&re);
+    return count;
+}
+
+/* Waehlt aus einer bereits gesammelten, nach Start aufsteigend sortierten
+ * Trefferliste den "aktuellen" Treffer aus: den ersten bei/nach anchor,
+ * sonst (Wrap ans Dokumentende) den allerersten - entspricht find_match()s
+ * forward=1,wrap=1-Verhalten, nur ohne erneuten Regex-Durchlauf. Rueckgabe
+ * 0 nur bei count==0 (dann bleibt *out_index unveraendert). */
+static int pick_current_match(const size_t *starts, size_t count, size_t anchor, size_t *out_index) {
+    if (count == 0) {
+        return 0;
+    }
+    for (size_t i = 0; i < count; i++) {
+        if (starts[i] >= anchor) {
+            *out_index = i;
+            return 1;
+        }
+    }
+    *out_index = 0;
+    return 1;
+}
+
+/* Baut den Trefferzaehler-Status ("3 von 12 Treffern") fuer den Treffer bei
+ * match_start in der zuletzt via collect_all_matches() befuellten
+ * g_match_starts/g_match_count. Falls match_start dort nicht vorkommt (nur
+ * im pathologischen Fall eines durch BTN_MAX_SEARCH_MATCHES gekappten
+ * Dokuments mit mehr Treffern als die Obergrenze erlaubt), wird 1 gezeigt -
+ * kosmetisch ungenau fuer diesen Randfall, aber kein Absturz und kein
+ * teurer zweiter Scan nur dafuer. */
+static void set_match_count_status(size_t match_start) {
+    size_t idx = 0;
+    for (size_t i = 0; i < g_match_count; i++) {
+        if (g_match_starts[i] == match_start) {
+            idx = i;
+            break;
+        }
+    }
+    snprintf(g_search_status, sizeof(g_search_status), btn_tr(BTN_STR_FIND_COUNT_FMT),
+             (int)(idx + 1), (int)g_match_count);
+}
+
+/* Live-Suche: wird bei JEDER Aenderung des Suchtexts aufgerufen (Tippen,
+ * Regex-Umschalter, Ausschneiden/Einfuegen/Widerrufen im Suchfeld), nicht
+ * erst bei Return - hebt alle Treffer hervor (siehe btn_render_frame()) und
+ * springt/scrollt bereits zum naechsten Treffer ab g_search_anchor, damit
+ * sich Tippen wie eine echte Live-Suche anfuehlt statt nur nachtraeglich
+ * eingefaerbt zu werden. */
+static void perform_live_search(void) {
+    Document *d = active_doc();
+    Editor *ed = &d->editor;
+
+    if (editor_length(&g_search_editor) == 0) {
+        g_match_count = 0;
+        g_search_status[0] = '\0';
+        btn_app_request_redraw();
+        return;
+    }
+
+    size_t len;
+    char *text = editor_copy_all(ed, &len);
+    g_match_count = collect_all_matches(text, len, g_match_starts, g_match_ends, BTN_MAX_SEARCH_MATCHES);
+
+    size_t idx;
+    if (pick_current_match(g_match_starts, g_match_count, g_search_anchor, &idx)) {
+        editor_set_cursor(ed, g_match_starts[idx], 0);
+        editor_set_cursor(ed, g_match_ends[idx], 1);
+        set_match_count_status(g_match_starts[idx]);
+        sync_scroll_to_cursor();
+    } else {
+        snprintf(g_search_status, sizeof(g_search_status), "%s", btn_tr(BTN_STR_FIND_NOT_FOUND));
+    }
+    free(text);
+    btn_app_request_redraw();
+}
+
 /* Sucht den naechsten/vorigen Treffer ab der aktuellen Selektion (oder dem
  * Cursor, falls keine besteht) und selektiert ihn - editor_set_cursor()
  * zweimal (erst ohne, dann mit extend) baut die neue Selektion sauber auf,
@@ -532,12 +673,19 @@ static int perform_find(int forward) {
     size_t from = forward ? editor_selection_end(ed) : editor_selection_start(ed);
     size_t match_start, match_end;
     int found = find_match(text, len, from, forward, 1, &match_start, &match_end);
+    /* Haelt g_match_starts/g_match_ends (Live-Hervorhebung aller Treffer)
+     * auch bei Return-gesteuerter Navigation auf dem aktuellen Stand - z.B.
+     * wenn die Leiste per Cmd+F mit vorausgefuellter Selektion oeffnet und
+     * der Nutzer sofort Return drueckt, ohne vorher zu tippen (dann hat
+     * perform_live_search() noch nie gelaufen). */
+    g_match_count = collect_all_matches(text, len, g_match_starts, g_match_ends, BTN_MAX_SEARCH_MATCHES);
     free(text);
 
     if (found) {
         editor_set_cursor(ed, match_start, 0);
         editor_set_cursor(ed, match_end, 1);
-        g_search_status[0] = '\0';
+        g_search_anchor = forward ? match_end : match_start;
+        set_match_count_status(match_start);
     } else {
         snprintf(g_search_status, sizeof(g_search_status), "%s", btn_tr(BTN_STR_FIND_NOT_FOUND));
     }
@@ -578,6 +726,13 @@ static void perform_replace_current(void) {
     free(replace_text);
     sync_window_state();
     perform_find(1);
+    /* perform_find() oben ueberschreibt g_search_status bereits (Trefferzaehler
+     * oder "Nicht gefunden") - die Rueckmeldung fuer DIESEN Befehl (dass gerade
+     * ersetzt wurde) ist die eigentliche Antwort auf Return im Ersetzen-Feld
+     * und ueberschreibt sie hier bewusst noch einmal, unabhaengig davon, ob
+     * danach ein weiterer Treffer gefunden wurde. */
+    snprintf(g_search_status, sizeof(g_search_status), btn_tr(BTN_STR_FIND_REPLACED_FMT), 1);
+    btn_app_request_redraw();
 }
 
 static void perform_replace_all(void) {
@@ -621,6 +776,15 @@ static void perform_replace_all(void) {
         count++;
     }
     free(replace_text);
+
+    /* Trefferliste nach dem Ersetzen neu aufbauen - der bisherige Stand
+     * (aus der Live-Suche vor diesem Befehl) bezieht sich auf Byte-Offsets
+     * im inzwischen veraenderten Dokument und waere sonst falsch platziert
+     * oder wuerde laengst ersetzte Treffer weiter gelb hervorheben. */
+    size_t len;
+    char *text = editor_copy_all(ed, &len);
+    g_match_count = collect_all_matches(text, len, g_match_starts, g_match_ends, BTN_MAX_SEARCH_MATCHES);
+    free(text);
 
     snprintf(g_search_status, sizeof(g_search_status), btn_tr(BTN_STR_FIND_REPLACED_FMT), count);
     sync_window_state();
@@ -1008,8 +1172,14 @@ static void on_draw(CGContextRef ctx, CGRect bounds) {
     }
 
     Document *active = active_doc();
+    /* g_match_count ist nur > 0, waehrend die Suchleiste offen ist (siehe
+     * close_find_bar()/switch_to_tab(), die sie beim Schliessen bzw.
+     * Tabwechsel leeren) und bezieht sich dann garantiert auf genau dieses
+     * aktive Dokument (Suche laeuft immer auf active_doc(), siehe
+     * perform_live_search()/perform_find()). */
     btn_render_frame(ctx, content_bounds(), &active->editor, active->scroll_row,
-                      btn_highlight_lang_for_path(active->path));
+                      btn_highlight_lang_for_path(active->path),
+                      g_match_starts, g_match_ends, g_match_count);
 }
 
 /* Klick irgendwo in der Tableiste (y schon vom Aufrufer geprueft): trifft
@@ -1054,6 +1224,10 @@ static void handle_find_bar_click(double x) {
 
     if (x >= regex_x && x < regex_x + BTN_FIND_REGEX_WIDTH) {
         g_search_regex = !g_search_regex;
+        /* Aendert, wie der bestehende Suchtext interpretiert wird - die
+         * Live-Hervorhebung/der Trefferzaehler muessen dieselbe neue
+         * Interpretation zeigen, nicht erst beim naechsten Tastendruck. */
+        perform_live_search();
     } else if (x >= search_field_x && x < regex_x) {
         g_focus = BTN_FOCUS_SEARCH;
     } else if (x >= replace_all_x && x < replace_all_x + BTN_FIND_REPLACE_ALL_WIDTH) {
@@ -1110,8 +1284,12 @@ static void handle_find_bar_key(const char *characters, unsigned short keycode, 
             return;
         case KEYCODE_FORWARD_DELETE:
             editor_delete_forward(ed);
-            g_search_status[0] = '\0';
-            btn_app_request_redraw();
+            if (g_focus == BTN_FOCUS_SEARCH) {
+                perform_live_search();
+            } else {
+                g_search_status[0] = '\0';
+                btn_app_request_redraw();
+            }
             return;
         default:
             break;
@@ -1155,8 +1333,12 @@ static void handle_find_bar_key(const char *characters, unsigned short keycode, 
     } else {
         return;
     }
-    g_search_status[0] = '\0';
-    btn_app_request_redraw();
+    if (g_focus == BTN_FOCUS_SEARCH) {
+        perform_live_search();
+    } else {
+        g_search_status[0] = '\0';
+        btn_app_request_redraw();
+    }
 }
 
 static void on_key(const char *characters, unsigned short keycode, unsigned long modifierFlags) {
@@ -1533,6 +1715,18 @@ static void on_menu(int tag) {
             break;
         default:
             break;
+    }
+    /* Deckt sowohl textaendernde Menuebefehle im Suchfeld ab (Widerrufen/
+     * Wiederholen/Ausschneiden/Einfuegen - Tippen selbst laeuft bereits
+     * ueber handle_find_bar_key(), nicht hierueber) als auch das Oeffnen
+     * der Leiste per Cmd+F (BTN_MENU_FIND, siehe open_find_bar() oben):
+     * fuer eine vorausgefuellte Selektion muss der Trefferzaehler/die
+     * Live-Hervorhebung sofort stimmen, nicht erst nach dem naechsten
+     * Tastendruck. Fuer Befehle, die den Suchtext gar nicht aendern (z.B.
+     * Kopieren, Alles auswaehlen), ist der erneute Aufruf ein guenstiger,
+     * folgenloser No-Op. */
+    if (g_focus == BTN_FOCUS_SEARCH) {
+        perform_live_search();
     }
     sync_window_state();
     sync_scroll_to_cursor();

@@ -99,11 +99,19 @@ void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_lab
                           const char *replace_all_label,
                           int regex_mode, int focus_field, const char *status);
 
-/* Zeichnet einen Frame: Hintergrund, Selektion, Text (optional per lang
- * syntax-hervorgehoben), Cursor, Zeilennummern-Gutter und die
- * Statusleiste. scroll_row ist der (0-basierte) oberste sichtbare
- * Row-Index; lang darf NULL sein (keine Hervorhebung). */
-void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_row, const BtnLangSpec *lang);
+/* Zeichnet einen Frame: Hintergrund, Suchtreffer-Hervorhebung, Selektion,
+ * Text (optional per lang syntax-hervorgehoben), Cursor, Zeilennummern-
+ * Gutter und die Statusleiste. scroll_row ist der (0-basierte) oberste
+ * sichtbare Row-Index; lang darf NULL sein (keine Hervorhebung).
+ * match_starts/match_ends sind match_count nach Start aufsteigend
+ * sortierte, nicht ueberlappende Byte-Bereiche (siehe main.c's
+ * collect_all_matches()) - werden gelb hervorgehoben, VOR der eigentlichen
+ * Selektion gezeichnet, damit ein aktuell selektierter Treffer weiterhin in
+ * der gewohnten Selektionsfarbe darueber erscheint. match_count darf 0 sein
+ * (dann werden match_starts/match_ends nicht gelesen, duerfen also auch
+ * NULL sein). */
+void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_row, const BtnLangSpec *lang,
+                       const size_t *match_starts, const size_t *match_ends, size_t match_count);
 
 /* Bildet einen View-Punkt (Ursprung unten links, wie bei einer
  * nicht geflippten NSView) auf einen logischen Buffer-Offset ab,

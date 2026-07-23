@@ -3,16 +3,6 @@
 Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
 (nicht nur abgehakt liegen gelassen).
 
-## Gewünschte Verbesserungen
-
-- Suchen: Anzeige der Anzahl der Fundstellen (z.B. "3 von 12 Treffern"
-  in der Statusanzeige der Suchleiste).
-- Suchen/Ersetzen: Anzeige des Ergebnisses des Ersetzens der ersten
-  Fundstelle (Rückmeldung, dass/was ersetzt wurde), nicht nur bei
-  "Alle ersetzen".
-- Suchen: Treffer sollen dynamisch beim Tippen im Suchfeld hervorgehoben
-  werden (Live-Suche), statt erst nach Return.
-
 ## Bekannte Einschränkungen (bewusst zurückgestellt, kein akuter Bug)
 
 - Cursor-/Selektions-/Hit-Testing-Spaltenrechnung (`editor_visual_column_in_range`

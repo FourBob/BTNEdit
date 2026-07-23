@@ -38,6 +38,122 @@
                 <string>public.text</string>
             </array>
         </dict>
+        <!--
+          Zweiter Eintrag zusaetzlich zu "public.text" oben: "public.text"
+          deckt nur Dateien ab, deren UTI im System (oder von einer anderen
+          installierten App) bereits als textkonform DEKLARIERT ist. Fuer
+          Dateien mit unbekannter/undeklarierter Endung weist macOS
+          stattdessen eine generische "dyn.*"-UTI zu, die NICHT zu
+          public.text konform ist, selbst wenn der Inhalt eindeutig Text
+          ist - BTNEdit wuerde dann trotz "bietet sich fuer alle
+          textbasierten Dateiformate an" nicht in "Oeffnen mit" auftauchen.
+          CFBundleTypeExtensions umgeht diese UTI-Kette komplett und matcht
+          direkt auf die Dateiendung, deckt also zusaetzlich sowohl
+          System-unbekannte Endungen als auch BTNEdit-eigene Formate ab, fuer
+          die es (anders als z.B. public.json) keine vom System deklarierte
+          UTI gibt (allen voran die eigene Hervorhebung aus highlight.c:
+          .stl, .dxf, .ini, .config, .svg). Bewusst NICHT "public.data"
+          oder "*" - das wuerde die App faelschlich auch fuer Binaerdateien
+          (Bilder, Archive, ausfuehrbare Dateien) anbieten, obwohl main.c's
+          looks_binary()-Warnung ausdruecklich zeigt, dass sie dafuer nicht
+          gedacht ist.
+        -->
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Text</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>txt</string>
+                <string>text</string>
+                <string>log</string>
+                <string>md</string>
+                <string>markdown</string>
+                <string>rst</string>
+                <string>asc</string>
+                <string>me</string>
+                <string>c</string>
+                <string>h</string>
+                <string>cpp</string>
+                <string>cc</string>
+                <string>cxx</string>
+                <string>hpp</string>
+                <string>hh</string>
+                <string>m</string>
+                <string>mm</string>
+                <string>java</string>
+                <string>py</string>
+                <string>rb</string>
+                <string>js</string>
+                <string>jsx</string>
+                <string>mjs</string>
+                <string>cjs</string>
+                <string>ts</string>
+                <string>tsx</string>
+                <string>swift</string>
+                <string>go</string>
+                <string>rs</string>
+                <string>kt</string>
+                <string>kts</string>
+                <string>lua</string>
+                <string>pl</string>
+                <string>pm</string>
+                <string>php</string>
+                <string>sql</string>
+                <string>sh</string>
+                <string>bash</string>
+                <string>zsh</string>
+                <string>fish</string>
+                <string>r</string>
+                <string>scala</string>
+                <string>dart</string>
+                <string>cs</string>
+                <string>fs</string>
+                <string>hs</string>
+                <string>ex</string>
+                <string>exs</string>
+                <string>jl</string>
+                <string>vim</string>
+                <string>bat</string>
+                <string>ps1</string>
+                <string>html</string>
+                <string>htm</string>
+                <string>xhtml</string>
+                <string>css</string>
+                <string>scss</string>
+                <string>sass</string>
+                <string>less</string>
+                <string>xml</string>
+                <string>svg</string>
+                <string>json</string>
+                <string>yaml</string>
+                <string>yml</string>
+                <string>toml</string>
+                <string>ini</string>
+                <string>cfg</string>
+                <string>conf</string>
+                <string>config</string>
+                <string>properties</string>
+                <string>env</string>
+                <string>gradle</string>
+                <string>cmake</string>
+                <string>mk</string>
+                <string>gitignore</string>
+                <string>gitattributes</string>
+                <string>editorconfig</string>
+                <string>csv</string>
+                <string>tsv</string>
+                <string>diff</string>
+                <string>patch</string>
+                <string>tex</string>
+                <string>bib</string>
+                <string>stl</string>
+                <string>dxf</string>
+            </array>
+        </dict>
     </array>
 </dict>
 </plist>

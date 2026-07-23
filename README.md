@@ -18,7 +18,9 @@ Graphics/Core Text gezeichnet.
 - Wortumbruch, Zeilennummern-Gutter, Statuszeile (Zeilen/Wörter/Zeichen)
 - Syntax-Highlighting: C/C++/Objective-C/Java, Python, Shell, JavaScript/
   TypeScript, Swift, Markdown, STL (ASCII), INI/Config, SVG, DXF (ASCII)
-- Suchen/Ersetzen mit regulären Ausdrücken (POSIX ERE), Ersetzen/Alle ersetzen
+- Suchen/Ersetzen mit regulären Ausdrücken (POSIX ERE), Ersetzen/Alle ersetzen;
+  Live-Hervorhebung aller Treffer beim Tippen samt Trefferzähler ("3 von 12
+  Treffern"), Rückmeldung nach Ersetzen einzelner Treffer
 - Undo/Redo mit Coalescing aufeinanderfolgender Tastendrücke
 - Klammern und Anführungszeichen: Auto-Vervollständigung/Typdurchlauf für
   `()`, `[]`, `{}`, `""`, `''`, sowie Hervorhebung des zusammengehörigen Paars
@@ -28,6 +30,10 @@ Graphics/Core Text gezeichnet.
 - Hilfe-Menü mit Tastenkürzel-Übersicht
 - Drucken (über den System-Druckdialog, mit Syntax-Highlighting, seitenweise
   umgebrochen)
+- Bietet sich in Finders "Öffnen mit" für so gut wie jedes textbasierte
+  Dateiformat an (per Info.plist `CFBundleDocumentTypes`), nicht nur für die
+  oben genannten Highlighting-Sprachen - Warnung vor dem Öffnen einer
+  vermutlich binären Datei schützt trotzdem vor versehentlichem Bearbeiten
 
 Was noch fehlt bzw. bekannte Einschränkungen: siehe [TODO.md](TODO.md).
 
