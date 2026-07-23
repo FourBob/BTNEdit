@@ -83,6 +83,16 @@ static NSMenu *g_recentMenu = nil;
     [self setNeedsDisplay:YES];
 }
 
+/* Wird von AppKit gerufen, wenn sich das Erscheinungsbild AUCH OHNE
+ * Nutzeraktion in dieser App aendert (z.B. automatischer Hell/Dunkel-Wechsel
+ * bei Sonnenuntergang, waehrend die App im Hintergrund ist) - main.c fragt
+ * btn_app_is_dark_mode() sonst nur bei jedem Redraw ab, der durch Tippen/
+ * Groessenaenderung ausgeloest wird; ohne diesen Hook wuerde die Farbe erst
+ * beim naechsten Tastendruck nachziehen. */
+- (void)viewDidChangeEffectiveAppearance {
+    [self setNeedsDisplay:YES];
+}
+
 @end
 
 static BTNContentView *g_view = nil;
@@ -200,6 +210,14 @@ BtnUiLang btn_app_detect_system_language(void) {
     }
 }
 
+int btn_app_is_dark_mode(void) {
+    @autoreleasepool {
+        NSAppearance *appearance = [NSApp effectiveAppearance];
+        NSAppearanceName match = [appearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]];
+        return [match isEqualToString:NSAppearanceNameDarkAqua] ? 1 : 0;
+    }
+}
+
 void btn_app_init(void) {
     @autoreleasepool {
         [NSApplication sharedApplication];
@@ -285,7 +303,16 @@ void btn_app_build_menu(void) {
         add_item(editMenu, trs(BTN_STR_SELECT_ALL), @"a", BTN_MENU_SELECT_ALL);
         [editMenu addItem:[NSMenuItem separatorItem]];
         add_item(editMenu, trs(BTN_STR_FIND), @"f", BTN_MENU_FIND);
+        add_item(editMenu, trs(BTN_STR_GOTO_LINE), @"l", BTN_MENU_GOTO_LINE);
         [editMenuItem setSubmenu:editMenu];
+
+        NSMenuItem *viewMenuItem = [NSMenuItem new];
+        [menubar addItem:viewMenuItem];
+        NSMenu *viewMenu = [[NSMenu alloc] initWithTitle:trs(BTN_STR_VIEW_MENU)];
+        add_item(viewMenu, trs(BTN_STR_ZOOM_IN), @"=", BTN_MENU_ZOOM_IN);
+        add_item(viewMenu, trs(BTN_STR_ZOOM_OUT), @"-", BTN_MENU_ZOOM_OUT);
+        add_item(viewMenu, trs(BTN_STR_ZOOM_RESET), @"0", BTN_MENU_ZOOM_RESET);
+        [viewMenuItem setSubmenu:viewMenu];
 
         NSMenuItem *helpMenuItem = [NSMenuItem new];
         [menubar addItem:helpMenuItem];
@@ -323,7 +350,11 @@ void btn_app_request_redraw(void) {
 
 void btn_app_run(void) {
     @autoreleasepool {
-        NSRect frame = NSMakeRect(200, 200, 900, 600);
+        /* Breite 1080 passend zur untenstehenden setMinSize: (AppKit wuerde
+         * ein kleiner angefordertes Fenster ohnehin sofort auf die
+         * Mindestbreite hochziehen, aber ein Startwert UNTER der eigenen
+         * Mindestgroesse waere irrefuehrend zu lesen). */
+        NSRect frame = NSMakeRect(200, 200, 1080, 600);
         NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                                    NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable;
         g_window = [[NSWindow alloc] initWithContentRect:frame
@@ -331,14 +362,15 @@ void btn_app_run(void) {
                                                   backing:NSBackingStoreBuffered
                                                     defer:NO];
         [g_window setTitle:trs(BTN_STR_UNTITLED)];
-        /* Breite 800 statt z.B. 400: die Suchen/Ersetzen-Leiste (render.c)
-         * braucht bei sichtbarem "Alle ersetzen"-Knopf ueber 750pt, bevor
+        /* Breite 1080 statt z.B. 400: die Suchen/Ersetzen-Leiste (render.c)
+         * braucht bei sichtbarem "Alle ersetzen"-Knopf samt den drei
+         * Umschaltern (".*"/"Aa"/"\b") und Statustext ueber 1000pt, bevor
          * ueberhaupt der Statustext anfaengt - bei einer kleineren Mindest-
          * breite waeren Knopf und/oder Statustext im schmalsten Fenster
          * abgeschnitten. shim.m kennt render.h's Layout-Konstanten bewusst
          * nicht (reine Chrome), daher hier als grosszuegig bemessener,
          * eigener Wert statt eines Verweises auf sie. */
-        [g_window setMinSize:NSMakeSize(800, 300)];
+        [g_window setMinSize:NSMakeSize(1080, 300)];
 
         g_view = [[BTNContentView alloc] initWithFrame:frame];
         [g_window setContentView:g_view];
@@ -463,6 +495,42 @@ int btn_show_binary_file_warning(const char *display_name) {
         [alert addButtonWithTitle:trs(BTN_STR_BTN_CANCEL)];
         NSModalResponse resp = [alert runModal];
         return resp == NSAlertFirstButtonReturn ? 1 : 0;
+    }
+}
+
+int btn_show_goto_line_dialog(long max_line, long *out_line) {
+    @autoreleasepool {
+        char info[128];
+        snprintf(info, sizeof(info), btn_tr(BTN_STR_GOTO_LINE_INFO_FMT), (int)max_line);
+
+        NSAlert *alert = [[NSAlert alloc] init];
+        [alert setMessageText:trs(BTN_STR_GOTO_LINE)];
+        [alert setInformativeText:[NSString stringWithUTF8String:info]];
+        [alert addButtonWithTitle:trs(BTN_STR_BTN_OK)];
+        [alert addButtonWithTitle:trs(BTN_STR_BTN_CANCEL)];
+
+        /* Zahlen-Eingabefeld als Accessory View - wie die anderen Alerts
+         * hier ein reiner Systemdialog, kein eigenstaendiges Content-Fenster
+         * (siehe Architektur-Kommentar oben in dieser Datei). */
+        NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 200, 24)];
+        [[field cell] setPlaceholderString:@"1"];
+        [alert setAccessoryView:field];
+        [alert setInitialFirstResponder:field];
+
+        NSModalResponse resp = [alert runModal];
+        int ok = (resp == NSAlertFirstButtonReturn);
+        if (ok) {
+            long line = [[field stringValue] integerValue];
+            if (line < 1) {
+                line = 1;
+            }
+            if (max_line > 0 && line > max_line) {
+                line = max_line;
+            }
+            *out_line = line;
+        }
+        [field release];
+        return ok;
     }
 }
 

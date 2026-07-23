@@ -20,7 +20,12 @@ Graphics/Core Text gezeichnet.
   TypeScript, Swift, Markdown, STL (ASCII), INI/Config, SVG, DXF (ASCII)
 - Suchen/Ersetzen mit regulären Ausdrücken (POSIX ERE), Ersetzen/Alle ersetzen;
   Live-Hervorhebung aller Treffer beim Tippen samt Trefferzähler ("3 von 12
-  Treffern"), Rückmeldung nach Ersetzen einzelner Treffer
+  Treffern"), Rückmeldung nach Ersetzen einzelner Treffer; Umschalter für
+  Groß-/Kleinschreibung und ganzes Wort; Rückreferenzen im Ersetzen-Feld
+  (`$1`/`\1` bzw. `$0`/`\0` für den kompletten Treffer) im Regex-Modus
+- Gehe zu Zeile (`⌘L`)
+- Dark Mode - folgt automatisch dem System-Erscheinungsbild
+- Schriftgröße anpassen (`⌘+`/`⌘-`/`⌘0` für Zurücksetzen)
 - Undo/Redo mit Coalescing aufeinanderfolgender Tastendrücke
 - Klammern und Anführungszeichen: Auto-Vervollständigung/Typdurchlauf für
   `()`, `[]`, `{}`, `""`, `''`, sowie Hervorhebung des zusammengehörigen Paars
@@ -77,4 +82,6 @@ Kein Xcode-Projekt nötig - ein einfaches `Makefile` reicht (`clang`,
 | In der Suchleiste: nächster/vorheriger Treffer | `Return` / `⇧Return` |
 | In der Suchleiste: Ersetzen+Weiter / Alle ersetzen | `Return` (im Ersetzen-Feld) / `⌘Return` oder Klick auf den "Alle ersetzen"-Knopf |
 | Suchleiste schließen | `Esc` |
+| Gehe zu Zeile | `⌘L` |
+| Vergrößern / Verkleinern / Tatsächliche Größe | `⌘+` / `⌘-` / `⌘0` |
 | Wort-/Zeilensprung, Zeilenanfang/-ende | `⌥←/→`, `⌘←/→`, Pos1/Ende |

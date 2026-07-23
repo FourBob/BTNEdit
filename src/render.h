@@ -32,6 +32,10 @@ extern "C" {
 #define BTN_FIND_BAR_PADDING 8.0
 #define BTN_FIND_LABEL_WIDTH 70.0
 #define BTN_FIND_FIELD_WIDTH 200.0
+/* Breite des ".*"-Regex-Umschalters UND der beiden neuen Umschalter direkt
+ * daneben ("Aa" Gross-/Kleinschreibung, "\b" ganzes Wort) - alle drei sind
+ * kurze, nicht uebersetzte Icon-Beschriftungen (2 Zeichen, wie ".*" schon
+ * bisher) und teilen sich deshalb dieselbe feste Breite. */
 #define BTN_FIND_REGEX_WIDTH 26.0
 /* Muss auch die laengste uebersetzte Beschriftung bequem fassen - "Reemplazar
  * todo" (ES, 16 Zeichen) ist bei Menlo 13pt (~7.8pt/Zeichen) ca. 125pt breit;
@@ -49,6 +53,34 @@ typedef struct {
     size_t logical_line;
     int is_continuation;
 } BtnRow;
+
+/* Legt fest, ob nachfolgende Zeichenaufrufe die Dark- oder die Light-Mode-
+ * Farbpalette verwenden. main.c fragt den aktuellen Modus (siehe
+ * btn_app_is_dark_mode() in shim.h) bei JEDEM Redraw frisch ab und reicht
+ * ihn hier rein, bevor btn_render_frame()/btn_render_tab_bar()/
+ * btn_render_find_bar() gerufen werden - kein Notification-Mechanismus
+ * noetig, weil ohnehin bei jedem Tastendruck/Resize neu gezeichnet wird.
+ * Aendert sich der Modus, werden die gecachten Token-Farben verworfen
+ * (siehe g_token_colors in render.c), damit sie nicht in der alten
+ * Helligkeit haengen bleiben. */
+void btn_render_set_dark_mode(int dark);
+
+/* Schriftgroesse fuer Editor-Text/Gutter/Statuszeile/Tab-/Suchleiste (nicht
+ * fuers Drucken - ein Ausdruck soll unabhaengig von der Bildschirm-Zoomstufe
+ * immer dieselbe Papiergroesse ergeben). Aendert sich die Groesse, werden
+ * Font/Zeichenbreite-Caches (siehe g_font/g_char_width in render.c)
+ * verworfen und bei Bedarf neu vermessen. size wird auf
+ * [BTN_MIN_FONT_SIZE, BTN_MAX_FONT_SIZE] geklemmt. */
+#define BTN_MIN_FONT_SIZE 8.0
+#define BTN_MAX_FONT_SIZE 32.0
+#define BTN_DEFAULT_FONT_SIZE 13.0
+void btn_render_set_font_size(double size);
+double btn_render_get_font_size(void);
+/* Kurzformen fuer Cmd+/Cmd-/Cmd+0 (main.c's Zoom-Menuepunkte) - je 1pt
+ * Schritt, Reset auf BTN_DEFAULT_FONT_SIZE. */
+void btn_render_zoom_in(void);
+void btn_render_zoom_out(void);
+void btn_render_zoom_reset(void);
 
 /* Verfuegbare Breite fuer Text (Fensterbreite minus Gutter/Polsterung). */
 double btn_layout_text_width(CGRect bounds);
@@ -89,15 +121,19 @@ void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labe
  * einem. Beide sind garantiert einzeilig (main.c fuegt nie '\n' ein),
  * deshalb genuegt hier reine Byte-Spalten-Mathematik ohne Wortumbruch/
  * Zeilen-Konzept. focus_field: 0 = keins der beiden Felder fokussiert (nur
- * Inhalt zeigen, kein Cursor), 1 = Suchfeld, 2 = Ersetzen-Feld. Der "Alle
- * ersetzen"-Knopf sitzt bei derselben x-Position (replace_field_x +
+ * Inhalt zeigen, kein Cursor), 1 = Suchfeld, 2 = Ersetzen-Feld.
+ * regex_mode/case_sensitive/whole_word steuern die drei Umschalter-Knoepfe
+ * (".*"/"Aa"/"\b") direkt rechts vom Suchfeld, in genau dieser Reihenfolge -
+ * main.c's handle_find_bar_click() testet dieselben drei Positionen. Der
+ * "Alle ersetzen"-Knopf sitzt bei derselben x-Position (replace_field_x +
  * BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING, Breite
  * BTN_FIND_REPLACE_ALL_WIDTH), die main.c beim Mausklick testet (siehe
  * handle_find_bar_click()). status darf leer sein. */
 void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_label, Editor *search_ed,
                           const char *replace_label, Editor *replace_ed,
                           const char *replace_all_label,
-                          int regex_mode, int focus_field, const char *status);
+                          int regex_mode, int case_sensitive, int whole_word,
+                          int focus_field, const char *status);
 
 /* Zeichnet einen Frame: Hintergrund, Suchtreffer-Hervorhebung, Selektion,
  * Text (optional per lang syntax-hervorgehoben), Cursor, Zeilennummern-

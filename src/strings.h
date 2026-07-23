@@ -68,6 +68,18 @@ typedef enum {
     BTN_STR_BINARY_WARNING_TITLE_FMT,
     BTN_STR_BINARY_WARNING_INFO,
     BTN_STR_BTN_OPEN_ANYWAY,
+    /* Menuepunkt UND Alert-Titel des "Gehe zu Zeile..."-Dialogs (siehe
+     * btn_show_goto_line_dialog() in shim.h) - bewusst dieselbe Zeichenkette
+     * fuer beides, macOS-ueblich mit "..."-Suffix auch im Alert-Titel. */
+    BTN_STR_GOTO_LINE,
+    /* Enthaelt ein "%d" fuer die hoechste gueltige Zeilennummer - siehe
+     * BTN_STR_SAVE_PROMPT_TITLE_FMT. */
+    BTN_STR_GOTO_LINE_INFO_FMT,
+    BTN_STR_BTN_OK,
+    BTN_STR_VIEW_MENU,
+    BTN_STR_ZOOM_IN,
+    BTN_STR_ZOOM_OUT,
+    BTN_STR_ZOOM_RESET,
     BTN_STR_COUNT
 } BtnStringId;
 

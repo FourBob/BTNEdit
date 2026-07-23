@@ -16,47 +16,170 @@
 
 #define GUTTER_WIDTH 44.0
 #define LINE_HEIGHT BTN_LINE_HEIGHT
-#define FONT_SIZE 13.0
 #define LEFT_PADDING 8.0
 #define TOP_PADDING 8.0
 #define BTN_MAX_TOKENS_PER_LINE 512
 #define PRINT_MARGIN 24.0
 
+/* FONT_SIZE war frueher ein fixes #define - main.c braucht jetzt eine
+ * Laufzeit-Schriftgroesse fuer Cmd+/Cmd-/Cmd+0 (siehe btn_render_set_font_size()
+ * in render.h), deshalb eine gecachte Variable statt eines Makros. */
+static double g_font_size = BTN_DEFAULT_FONT_SIZE;
 static CTFontRef g_font = NULL;
 static double g_char_width = 0.0;
 static CGColorRef g_token_colors[6] = { NULL, NULL, NULL, NULL, NULL, NULL };
 
+/* 0 = Light Mode, 1 = Dark Mode - main.c setzt das bei jedem Redraw frisch
+ * (siehe btn_render_set_dark_mode() in render.h). */
+static int g_dark_mode = 0;
+
+typedef struct { double r, g, b, a; } BtnColor;
+
+/* Kompakter Weg, ohne fuer jede der ~20 semantischen Farben unten eine
+ * eigene if/else-Funktion zu schreiben: ein Light/Dark-Wertepaar rein,
+ * passend zu g_dark_mode raus. Alle Farbrollen (Hintergrund, Text, Trenn-
+ * linien, Hervorhebungen, ...) sind als kleine Funktionen direkt darunter
+ * definiert, die diesen Helfer mit ihrem jeweiligen Wertepaar aufrufen -
+ * ein Farbwechsel betrifft so nur EINE Zeile statt vieler verstreuter
+ * CGContextSetRGB*Color-Aufrufe wie vor dem Dark-Mode-Support. */
+static BtnColor pick_color(double lr, double lg, double lb, double la,
+                            double dr, double dg, double db, double da) {
+    BtnColor c;
+    if (g_dark_mode) {
+        c.r = dr; c.g = dg; c.b = db; c.a = da;
+    } else {
+        c.r = lr; c.g = lg; c.b = lb; c.a = la;
+    }
+    return c;
+}
+
+static void set_fill(CGContextRef ctx, BtnColor c) {
+    CGContextSetRGBFillColor(ctx, c.r, c.g, c.b, c.a);
+}
+
+static void set_stroke(CGContextRef ctx, BtnColor c) {
+    CGContextSetRGBStrokeColor(ctx, c.r, c.g, c.b, c.a);
+}
+
+static CGColorRef create_cg_color(BtnColor c) {
+    return CGColorCreateGenericRGB(c.r, c.g, c.b, c.a);
+}
+
+/* ---- Farbpalette: je eine Funktion pro semantischer Rolle, Light-Werte
+ * sind die vor dem Dark-Mode-Support fest verdrahteten Original-Werte
+ * (unveraendert), Dark-Werte sind neu gewaehlt fuer ausreichend Kontrast
+ * auf dunklem Grund. ---- */
+static BtnColor col_bg(void)              { return pick_color(1.0, 1.0, 1.0, 1.0,   0.12, 0.12, 0.13, 1.0); }
+static BtnColor col_text(void)            { return pick_color(0.1, 0.1, 0.1, 1.0,   0.88, 0.88, 0.88, 1.0); }
+static BtnColor col_dim(void)             { return pick_color(0.45, 0.45, 0.45, 1.0, 0.62, 0.62, 0.64, 1.0); }
+static BtnColor col_divider(void)         { return pick_color(0.8, 0.8, 0.8, 1.0,   0.30, 0.30, 0.33, 1.0); }
+static BtnColor col_gutter_bg(void)       { return pick_color(0.92, 0.92, 0.92, 1.0, 0.16, 0.16, 0.18, 1.0); }
+static BtnColor col_gutter_text(void)     { return pick_color(0.55, 0.55, 0.55, 1.0, 0.55, 0.55, 0.58, 1.0); }
+static BtnColor col_footer_bg(void)       { return pick_color(0.94, 0.94, 0.94, 1.0, 0.16, 0.16, 0.18, 1.0); }
+static BtnColor col_footer_text(void)     { return pick_color(0.35, 0.35, 0.35, 1.0, 0.65, 0.65, 0.68, 1.0); }
+static BtnColor col_tab_bar_bg(void)      { return pick_color(0.80, 0.80, 0.80, 1.0, 0.18, 0.18, 0.20, 1.0); }
+static BtnColor col_tab_active_bg(void)   { return pick_color(0.97, 0.97, 0.97, 1.0, 0.24, 0.24, 0.27, 1.0); }
+static BtnColor col_tab_divider(void)     { return pick_color(0.65, 0.65, 0.65, 1.0, 0.30, 0.30, 0.33, 1.0); }
+static BtnColor col_find_bar_bg(void)     { return pick_color(0.90, 0.90, 0.90, 1.0, 0.18, 0.18, 0.20, 1.0); }
+static BtnColor col_accent(void)          { return pick_color(0.20, 0.40, 0.85, 1.0, 0.40, 0.60, 0.98, 1.0); }
+static BtnColor col_toggle_bg(int active) {
+    return active ? pick_color(0.80, 0.85, 0.97, 1.0, 0.25, 0.33, 0.48, 1.0)
+                  : pick_color(0.90, 0.90, 0.90, 1.0, 0.18, 0.18, 0.20, 1.0);
+}
+static BtnColor col_button_bg(void)       { return pick_color(0.80, 0.80, 0.80, 1.0, 0.22, 0.22, 0.25, 1.0); }
+static BtnColor col_field_selection(void) { return pick_color(0.68, 0.82, 1.0, 0.55, 0.25, 0.42, 0.68, 0.55); }
+static BtnColor col_cursor(void)          { return pick_color(0.1, 0.1, 0.1, 1.0,   0.92, 0.92, 0.92, 1.0); }
+static BtnColor col_match_highlight(void) { return pick_color(1.0, 0.85, 0.25, 0.45, 0.60, 0.48, 0.08, 0.55); }
+static BtnColor col_selection(void)       { return pick_color(0.68, 0.82, 1.0, 0.55, 0.25, 0.42, 0.68, 0.55); }
+static BtnColor col_bracket(void)         { return pick_color(0.75, 0.85, 1.0, 0.6,  0.30, 0.45, 0.68, 0.6); }
+
 static CGColorRef get_token_color(BtnTokenKind kind) {
     if (!g_token_colors[kind]) {
+        BtnColor c;
         switch (kind) {
             case BTN_TOK_KEYWORD:
-                g_token_colors[kind] = CGColorCreateGenericRGB(0.64, 0.11, 0.57, 1.0);
+                c = pick_color(0.64, 0.11, 0.57, 1.0,  0.94, 0.50, 0.85, 1.0);
                 break;
             case BTN_TOK_STRING:
-                g_token_colors[kind] = CGColorCreateGenericRGB(0.77, 0.10, 0.09, 1.0);
+                c = pick_color(0.77, 0.10, 0.09, 1.0,  0.98, 0.55, 0.52, 1.0);
                 break;
             case BTN_TOK_COMMENT:
-                g_token_colors[kind] = CGColorCreateGenericRGB(0.24, 0.50, 0.26, 1.0);
+                c = pick_color(0.24, 0.50, 0.26, 1.0,  0.45, 0.78, 0.48, 1.0);
                 break;
             case BTN_TOK_NUMBER:
-                g_token_colors[kind] = CGColorCreateGenericRGB(0.11, 0.0, 0.87, 1.0);
+                c = pick_color(0.11, 0.0, 0.87, 1.0,   0.60, 0.60, 1.0, 1.0);
                 break;
             case BTN_TOK_PREPROCESSOR:
-                g_token_colors[kind] = CGColorCreateGenericRGB(0.50, 0.28, 0.09, 1.0);
+                c = pick_color(0.50, 0.28, 0.09, 1.0,  0.90, 0.62, 0.38, 1.0);
                 break;
             default:
-                g_token_colors[kind] = CGColorCreateGenericRGB(0.1, 0.1, 0.1, 1.0);
+                c = col_text();
                 break;
         }
+        g_token_colors[kind] = create_cg_color(c);
     }
     return g_token_colors[kind];
 }
 
+/* Verwirft gecachte Ressourcen, die von Schriftgroesse/Modus abhaengen -
+ * gemeinsam genutzt von btn_render_set_dark_mode() (Token-Farben) und
+ * btn_render_set_font_size() (Font/Zeichenbreite). */
+static void invalidate_token_color_cache(void) {
+    for (int i = 0; i < 6; i++) {
+        if (g_token_colors[i]) {
+            CGColorRelease(g_token_colors[i]);
+            g_token_colors[i] = NULL;
+        }
+    }
+}
+
+void btn_render_set_dark_mode(int dark) {
+    int new_dark = dark ? 1 : 0;
+    if (new_dark != g_dark_mode) {
+        g_dark_mode = new_dark;
+        invalidate_token_color_cache();
+    }
+}
+
 static CTFontRef get_font(void) {
     if (!g_font) {
-        g_font = CTFontCreateWithName(CFSTR("Menlo"), FONT_SIZE, NULL);
+        g_font = CTFontCreateWithName(CFSTR("Menlo"), g_font_size, NULL);
     }
     return g_font;
+}
+
+void btn_render_set_font_size(double size) {
+    if (size < BTN_MIN_FONT_SIZE) {
+        size = BTN_MIN_FONT_SIZE;
+    }
+    if (size > BTN_MAX_FONT_SIZE) {
+        size = BTN_MAX_FONT_SIZE;
+    }
+    if (size == g_font_size) {
+        return;
+    }
+    g_font_size = size;
+    if (g_font) {
+        CFRelease(g_font);
+        g_font = NULL;
+    }
+    g_char_width = 0.0; /* neu vermessen bei naechstem get_char_width() */
+}
+
+double btn_render_get_font_size(void) {
+    return g_font_size;
+}
+
+void btn_render_zoom_in(void) {
+    btn_render_set_font_size(g_font_size + 1.0);
+}
+
+void btn_render_zoom_out(void) {
+    btn_render_set_font_size(g_font_size - 1.0);
+}
+
+void btn_render_zoom_reset(void) {
+    btn_render_set_font_size(BTN_DEFAULT_FONT_SIZE);
 }
 
 static CFDictionaryRef make_attrs(CTFontRef font, CGColorRef color) {
@@ -244,15 +367,15 @@ size_t btn_layout_row_for_offset(const BtnRow *rows, size_t row_count, size_t of
 
 static void draw_gutter(CGContextRef ctx, CGRect bounds, const BtnRow *rows, size_t row_count,
                          long scroll_row, CTFontRef font) {
-    CGContextSetRGBFillColor(ctx, 0.92, 0.92, 0.92, 1.0);
+    set_fill(ctx, col_gutter_bg());
     CGContextFillRect(ctx, CGRectMake(0, BTN_FOOTER_HEIGHT, GUTTER_WIDTH, bounds.size.height - BTN_FOOTER_HEIGHT));
 
-    CGContextSetRGBStrokeColor(ctx, 0.8, 0.8, 0.8, 1.0);
+    set_stroke(ctx, col_divider());
     CGContextSetLineWidth(ctx, 1.0);
     CGPoint divider[2] = { { GUTTER_WIDTH, BTN_FOOTER_HEIGHT }, { GUTTER_WIDTH, bounds.size.height } };
     CGContextStrokeLineSegments(ctx, divider, 2);
 
-    CGColorRef gray = CGColorCreateGenericRGB(0.55, 0.55, 0.55, 1.0);
+    CGColorRef gray = create_cg_color(col_gutter_text());
     CFDictionaryRef attrs = make_attrs(font, gray);
 
     for (size_t r = (size_t)scroll_row; r < row_count; r++) {
@@ -288,15 +411,15 @@ static void draw_gutter(CGContextRef ctx, CGRect bounds, const BtnRow *rows, siz
 }
 
 static void draw_footer(CGContextRef ctx, CGRect bounds, Editor *ed) {
-    CGContextSetRGBFillColor(ctx, 0.94, 0.94, 0.94, 1.0);
+    set_fill(ctx, col_footer_bg());
     CGContextFillRect(ctx, CGRectMake(0, 0, bounds.size.width, BTN_FOOTER_HEIGHT));
 
-    CGContextSetRGBStrokeColor(ctx, 0.8, 0.8, 0.8, 1.0);
+    set_stroke(ctx, col_divider());
     CGContextSetLineWidth(ctx, 1.0);
     CGPoint divider[2] = { { 0, BTN_FOOTER_HEIGHT }, { bounds.size.width, BTN_FOOTER_HEIGHT } };
     CGContextStrokeLineSegments(ctx, divider, 2);
 
-    CGColorRef gray = CGColorCreateGenericRGB(0.35, 0.35, 0.35, 1.0);
+    CGColorRef gray = create_cg_color(col_footer_text());
     CFDictionaryRef attrs = make_attrs(get_font(), gray);
 
     size_t cur_line = editor_offset_to_line(ed, ed->cursor);
@@ -309,7 +432,7 @@ static void draw_footer(CGContextRef ctx, CGRect bounds, Editor *ed) {
     snprintf(right, sizeof(right), "%zu Zeilen | %zu Woerter | %zu Zeichen | UTF-8",
              editor_line_count(ed), editor_word_count(ed), editor_length(ed));
 
-    double text_y = (BTN_FOOTER_HEIGHT - FONT_SIZE) / 2.0 + 3.0;
+    double text_y = (BTN_FOOTER_HEIGHT - g_font_size) / 2.0 + 3.0;
 
     CFStringRef leftStr = CFStringCreateWithCString(NULL, left, kCFStringEncodingUTF8);
     CFAttributedStringRef leftAttrStr = CFAttributedStringCreate(NULL, leftStr, attrs);
@@ -393,15 +516,15 @@ double btn_tab_width_for(int count, double window_width) {
 
 void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labels, int count, int active) {
     double bar_top = bounds.size.height - BTN_TAB_BAR_HEIGHT;
-    double text_y = bar_top + (BTN_TAB_BAR_HEIGHT - FONT_SIZE) / 2.0 + 3.0;
+    double text_y = bar_top + (BTN_TAB_BAR_HEIGHT - g_font_size) / 2.0 + 3.0;
     double tab_width = btn_tab_width_for(count, bounds.size.width);
 
-    CGContextSetRGBFillColor(ctx, 0.80, 0.80, 0.80, 1.0);
+    set_fill(ctx, col_tab_bar_bg());
     CGContextFillRect(ctx, CGRectMake(0, bar_top, bounds.size.width, BTN_TAB_BAR_HEIGHT));
 
     CTFontRef font = get_font();
-    CGColorRef textColor = CGColorCreateGenericRGB(0.15, 0.15, 0.15, 1.0);
-    CGColorRef dimColor = CGColorCreateGenericRGB(0.45, 0.45, 0.45, 1.0);
+    CGColorRef textColor = create_cg_color(col_text());
+    CGColorRef dimColor = create_cg_color(col_dim());
     CFDictionaryRef attrs = make_attrs(font, textColor);
     CFDictionaryRef dimAttrs = make_attrs(font, dimColor);
 
@@ -409,11 +532,10 @@ void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labe
         double tab_x = (double)i * tab_width;
         int is_active = (i == active);
 
-        CGContextSetRGBFillColor(ctx, is_active ? 0.97 : 0.80, is_active ? 0.97 : 0.80,
-                                  is_active ? 0.97 : 0.80, 1.0);
+        set_fill(ctx, is_active ? col_tab_active_bg() : col_tab_bar_bg());
         CGContextFillRect(ctx, CGRectMake(tab_x, bar_top, tab_width, BTN_TAB_BAR_HEIGHT));
 
-        CGContextSetRGBStrokeColor(ctx, 0.65, 0.65, 0.65, 1.0);
+        set_stroke(ctx, col_tab_divider());
         CGContextSetLineWidth(ctx, 1.0);
         CGPoint divider[2] = { { tab_x, bar_top }, { tab_x, bar_top + BTN_TAB_BAR_HEIGHT } };
         CGContextStrokeLineSegments(ctx, divider, 2);
@@ -455,7 +577,7 @@ void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labe
     double new_x = (double)count * tab_width;
     draw_text_at(ctx, "+", new_x + (BTN_TAB_NEW_WIDTH - get_char_width()) / 2.0, text_y, dimAttrs);
 
-    CGContextSetRGBStrokeColor(ctx, 0.55, 0.55, 0.55, 1.0);
+    set_stroke(ctx, col_tab_divider());
     CGContextSetLineWidth(ctx, 1.0);
     CGPoint bottom_divider[2] = { { 0, bar_top }, { bounds.size.width, bar_top } };
     CGContextStrokeLineSegments(ctx, bottom_divider, 2);
@@ -483,7 +605,7 @@ static void draw_find_field(CGContextRef ctx, Editor *ed, double field_x, double
         if (sw < 2.0) {
             sw = 2.0;
         }
-        CGContextSetRGBFillColor(ctx, 0.68, 0.82, 1.0, 0.55);
+        set_fill(ctx, col_field_selection());
         CGContextFillRect(ctx, CGRectMake(sx, bar_top + 4.0, sw, BTN_FIND_BAR_HEIGHT - 8.0));
     }
 
@@ -494,26 +616,40 @@ static void draw_find_field(CGContextRef ctx, Editor *ed, double field_x, double
 
     if (focused && !has_sel) {
         double cx = field_x + (double)ed->cursor * char_width;
-        CGContextSetRGBFillColor(ctx, 0.15, 0.15, 0.15, 1.0);
+        set_fill(ctx, col_cursor());
         CGContextFillRect(ctx, CGRectMake(cx, bar_top + 6.0, 1.4, BTN_FIND_BAR_HEIGHT - 12.0));
     }
+}
+
+/* Zeichnet einen der drei kurzen Umschalter-Knoepfe (".*"/"Aa"/"\b") an
+ * derselben Position, die main.c beim Mausklick testet (siehe
+ * handle_find_bar_click()) - gemeinsamer Helfer statt dreifacher
+ * Kopie, da alle drei bis auf Position/Beschriftung/Zustand identisch
+ * aussehen. */
+static void draw_toggle_button(CGContextRef ctx, double x, double bar_top, double text_y,
+                                const char *label, int active,
+                                CFDictionaryRef dimAttrs, CFDictionaryRef accentAttrs) {
+    set_fill(ctx, col_toggle_bg(active));
+    CGContextFillRect(ctx, CGRectMake(x, bar_top + 4.0, BTN_FIND_REGEX_WIDTH, BTN_FIND_BAR_HEIGHT - 8.0));
+    draw_text_at(ctx, label, x + 3.0, text_y, active ? accentAttrs : dimAttrs);
 }
 
 void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_label, Editor *search_ed,
                           const char *replace_label, Editor *replace_ed,
                           const char *replace_all_label,
-                          int regex_mode, int focus_field, const char *status) {
+                          int regex_mode, int case_sensitive, int whole_word,
+                          int focus_field, const char *status) {
     double bar_top = bounds.size.height - BTN_TAB_BAR_HEIGHT - BTN_FIND_BAR_HEIGHT;
-    double text_y = bar_top + (BTN_FIND_BAR_HEIGHT - FONT_SIZE) / 2.0 + 3.0;
+    double text_y = bar_top + (BTN_FIND_BAR_HEIGHT - g_font_size) / 2.0 + 3.0;
 
-    CGContextSetRGBFillColor(ctx, 0.90, 0.90, 0.90, 1.0);
+    set_fill(ctx, col_find_bar_bg());
     CGContextFillRect(ctx, CGRectMake(0, bar_top, bounds.size.width, BTN_FIND_BAR_HEIGHT));
 
     CTFontRef font = get_font();
     double char_width = get_char_width();
-    CGColorRef textColor = CGColorCreateGenericRGB(0.15, 0.15, 0.15, 1.0);
-    CGColorRef dimColor = CGColorCreateGenericRGB(0.45, 0.45, 0.45, 1.0);
-    CGColorRef accentColor = CGColorCreateGenericRGB(0.20, 0.40, 0.85, 1.0);
+    CGColorRef textColor = create_cg_color(col_text());
+    CGColorRef dimColor = create_cg_color(col_dim());
+    CGColorRef accentColor = create_cg_color(col_accent());
     CFDictionaryRef attrs = make_attrs(font, textColor);
     CFDictionaryRef dimAttrs = make_attrs(font, dimColor);
     CFDictionaryRef accentAttrs = make_attrs(font, accentColor);
@@ -521,7 +657,9 @@ void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_lab
     double search_label_x = BTN_FIND_BAR_PADDING;
     double search_field_x = search_label_x + BTN_FIND_LABEL_WIDTH;
     double regex_x = search_field_x + BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING;
-    double replace_label_x = regex_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING * 2.0;
+    double case_x = regex_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING;
+    double word_x = case_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING;
+    double replace_label_x = word_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING * 2.0;
     double replace_field_x = replace_label_x + BTN_FIND_LABEL_WIDTH;
     double replace_all_x = replace_field_x + BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING;
     double status_x = replace_all_x + BTN_FIND_REPLACE_ALL_WIDTH + BTN_FIND_BAR_PADDING * 2.0;
@@ -529,11 +667,12 @@ void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_lab
     draw_text_at(ctx, search_label, search_label_x, text_y, dimAttrs);
     draw_find_field(ctx, search_ed, search_field_x, text_y, bar_top, attrs, char_width, focus_field == 1);
 
-    /* ".*"-Umschalter fuer Regex-Modus - main.c testet dieselbe Position
-     * (regex_x, Breite BTN_FIND_REGEX_WIDTH) beim Mausklick. */
-    CGContextSetRGBFillColor(ctx, regex_mode ? 0.80 : 0.90, regex_mode ? 0.85 : 0.90, regex_mode ? 0.97 : 0.90, 1.0);
-    CGContextFillRect(ctx, CGRectMake(regex_x, bar_top + 4.0, BTN_FIND_REGEX_WIDTH, BTN_FIND_BAR_HEIGHT - 8.0));
-    draw_text_at(ctx, ".*", regex_x + 3.0, text_y, regex_mode ? accentAttrs : dimAttrs);
+    /* Drei Umschalter fuer die Suche - main.c testet dieselben Positionen
+     * (regex_x/case_x/word_x, je Breite BTN_FIND_REGEX_WIDTH) beim
+     * Mausklick, siehe handle_find_bar_click(). */
+    draw_toggle_button(ctx, regex_x, bar_top, text_y, ".*", regex_mode, dimAttrs, accentAttrs);
+    draw_toggle_button(ctx, case_x, bar_top, text_y, "Aa", case_sensitive, dimAttrs, accentAttrs);
+    draw_toggle_button(ctx, word_x, bar_top, text_y, "\\b", whole_word, dimAttrs, accentAttrs);
 
     draw_text_at(ctx, replace_label, replace_label_x, text_y, dimAttrs);
     draw_find_field(ctx, replace_ed, replace_field_x, text_y, bar_top, attrs, char_width, focus_field == 2);
@@ -543,9 +682,9 @@ void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_lab
      * handle_find_bar_click(). Bisher nur per Cmd+Return im Ersetzen-Feld
      * erreichbar - dieser Knopf macht die Aktion zusaetzlich sichtbar/
      * klickbar. */
-    CGContextSetRGBFillColor(ctx, 0.80, 0.80, 0.80, 1.0);
+    set_fill(ctx, col_button_bg());
     CGContextFillRect(ctx, CGRectMake(replace_all_x, bar_top + 4.0, BTN_FIND_REPLACE_ALL_WIDTH, BTN_FIND_BAR_HEIGHT - 8.0));
-    CGContextSetRGBStrokeColor(ctx, 0.55, 0.55, 0.55, 1.0);
+    set_stroke(ctx, col_divider());
     CGContextSetLineWidth(ctx, 1.0);
     CGContextStrokeRect(ctx, CGRectMake(replace_all_x, bar_top + 4.0, BTN_FIND_REPLACE_ALL_WIDTH, BTN_FIND_BAR_HEIGHT - 8.0));
     draw_text_at(ctx, replace_all_label, replace_all_x + 6.0, text_y, attrs);
@@ -554,7 +693,7 @@ void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_lab
         draw_text_at(ctx, status, status_x, text_y, dimAttrs);
     }
 
-    CGContextSetRGBStrokeColor(ctx, 0.55, 0.55, 0.55, 1.0);
+    set_stroke(ctx, col_divider());
     CGContextSetLineWidth(ctx, 1.0);
     CGPoint bottom_divider[2] = { { 0, bar_top }, { bounds.size.width, bar_top } };
     CGContextStrokeLineSegments(ctx, bottom_divider, 2);
@@ -762,13 +901,13 @@ static void draw_row_line(CGContextRef ctx, Editor *ed, const BtnLangSpec *lang,
 
 void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_row, const BtnLangSpec *lang,
                        const size_t *match_starts, const size_t *match_ends, size_t match_count) {
-    CGContextSetRGBFillColor(ctx, 1.0, 1.0, 1.0, 1.0);
+    set_fill(ctx, col_bg());
     CGContextFillRect(ctx, bounds);
 
     CTFontRef font = get_font();
     double char_width = get_char_width();
 
-    CGColorRef black = CGColorCreateGenericRGB(0.1, 0.1, 0.1, 1.0);
+    CGColorRef black = create_cg_color(col_text());
     CFDictionaryRef attrs = make_attrs(font, black);
 
     double text_width = btn_layout_text_width(bounds);
@@ -838,7 +977,7 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
                 if (hw < 2.0) {
                     hw = 2.0;
                 }
-                CGContextSetRGBFillColor(ctx, 1.0, 0.85, 0.25, 0.45);
+                set_fill(ctx, col_match_highlight());
                 CGContextFillRect(ctx, CGRectMake(hx, top_y, hw, LINE_HEIGHT));
             }
         }
@@ -862,7 +1001,7 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
                 if (hw < 2.0) {
                     hw = 2.0;
                 }
-                CGContextSetRGBFillColor(ctx, 0.68, 0.82, 1.0, 0.55);
+                set_fill(ctx, col_selection());
                 CGContextFillRect(ctx, CGRectMake(hx, top_y, hw, LINE_HEIGHT));
             }
         }
@@ -873,7 +1012,7 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
                 if (pos >= row_start && pos < row_end) {
                     size_t col = editor_visual_column_in_range(ed, row_start, pos);
                     double bx = GUTTER_WIDTH + LEFT_PADDING + (double)col * char_width;
-                    CGContextSetRGBFillColor(ctx, 0.75, 0.85, 1.0, 0.6);
+                    set_fill(ctx, col_bracket());
                     CGContextFillRect(ctx, CGRectMake(bx, top_y, char_width, LINE_HEIGHT));
                 }
             }
@@ -889,7 +1028,7 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
             size_t col = editor_visual_column_in_range(ed, rows[cur_row].start, ed->cursor);
             double cx = GUTTER_WIDTH + LEFT_PADDING + (double)col * char_width;
             double cy = bounds.size.height - TOP_PADDING - (double)(cur_row - (size_t)scroll_row + 1) * LINE_HEIGHT;
-            CGContextSetRGBFillColor(ctx, 0.1, 0.1, 0.1, 1.0);
+            set_fill(ctx, col_cursor());
             CGContextFillRect(ctx, CGRectMake(cx, cy, 1.4, LINE_HEIGHT - 2));
         }
     }
@@ -923,6 +1062,19 @@ double btn_print_text_width(double page_width) {
 void btn_render_print_page(CGContextRef ctx, CGRect page_rect, Editor *ed, const BtnLangSpec *lang,
                             const BtnRow *rows, size_t row_count, size_t first_row,
                             int start_comment_state) {
+    /* Eine Druckseite ist immer weisses Papier/schwarze Tinte, unabhaengig
+     * vom aktuellen Bildschirm-Erscheinungsbild - Hintergrund/Textfarbe
+     * unten sind schon immer fest verdrahtet, aber get_token_color() haengt
+     * am globalen g_dark_mode und wuerde im Dark Mode seine fuer dunklen
+     * Bildschirmhintergrund gedachten, hellen Varianten auf weissem Papier
+     * zeichnen (schlechter Kontrast). Fuer die Dauer dieser Funktion auf
+     * Light Mode zwingen, danach wiederherstellen. */
+    int saved_dark_mode = g_dark_mode;
+    if (g_dark_mode) {
+        g_dark_mode = 0;
+        invalidate_token_color_cache();
+    }
+
     CGContextSetRGBFillColor(ctx, 1.0, 1.0, 1.0, 1.0);
     CGContextFillRect(ctx, page_rect);
 
@@ -949,6 +1101,11 @@ void btn_render_print_page(CGContextRef ctx, CGRect page_rect, Editor *ed, const
 
     CFRelease(attrs);
     CGColorRelease(black);
+
+    if (saved_dark_mode) {
+        g_dark_mode = 1;
+        invalidate_token_color_cache();
+    }
 }
 
 size_t btn_hit_test(Editor *ed, CGRect bounds, double x, double y, long scroll_row) {

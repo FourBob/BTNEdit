@@ -24,7 +24,11 @@ enum {
     BTN_MENU_COPY,
     BTN_MENU_PASTE,
     BTN_MENU_SELECT_ALL,
-    BTN_MENU_HELP
+    BTN_MENU_HELP,
+    BTN_MENU_GOTO_LINE,
+    BTN_MENU_ZOOM_IN,
+    BTN_MENU_ZOOM_OUT,
+    BTN_MENU_ZOOM_RESET
 };
 
 /* Tags fuer die dynamischen "Zuletzt geoeffnet"-Menuepunkte liegen ab hier,
@@ -126,6 +130,24 @@ int btn_show_unsaved_changes_alert(const char *display_name);
  * mit Cmd+S ueberschreiben. Rueckgabe: 1 = trotzdem oeffnen, 0 = abbrechen
  * (main.c laedt die Datei dann nicht). */
 int btn_show_binary_file_warning(const char *display_name);
+
+/* Zeigt einen Systemdialog (NSAlert mit einem Zahlen-Eingabefeld als
+ * Accessory View, wie die anderen Alerts hier reine Chrome) zum Springen an
+ * eine bestimmte Zeile. Rueckgabe: 1 = bestaetigt (dann steht die
+ * eingegebene, auf [1, max_line] geklemmte Zeilennummer in *out_line), 0 =
+ * abgebrochen (dann bleibt *out_line unveraendert). */
+int btn_show_goto_line_dialog(long max_line, long *out_line);
+
+/* Liefert 1, wenn die App aktuell im Dark-Mode-Erscheinungsbild dargestellt
+ * wird (System- oder App-Einstellung), sonst 0. main.c fragt das bei jedem
+ * Redraw ab und reicht es an render.c weiter (siehe btn_render_set_dark_mode()
+ * in render.h) - kein Notification-Mechanismus noetig, weil ohnehin bei
+ * jedem Tastendruck/Resize neu gezeichnet wird; BTNContentViews
+ * -viewDidChangeEffectiveAppearance sorgt zusaetzlich fuer einen Redraw, wenn
+ * sich das Erscheinungsbild AUCH OHNE Nutzeraktion aendert (z.B.
+ * automatischer Wechsel bei Sonnenuntergang, waehrend die App im
+ * Hintergrund ist). */
+int btn_app_is_dark_mode(void);
 
 /* Zeigt die Tastenkuerzel-Uebersicht (Hilfe-Menue) als NSAlert - wie die
  * anderen Systemdialoge reine Chrome, kein eigenes Content-Fenster noetig

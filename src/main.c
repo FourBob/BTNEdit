@@ -7,6 +7,7 @@
 #include "editor.h"
 #include "strings.h"
 
+#include <ctype.h>
 #include <regex.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -64,6 +65,14 @@ static BtnFocus g_focus = BTN_FOCUS_DOCUMENT;
 static Editor g_search_editor;
 static Editor g_replace_editor;
 static int g_search_regex = 0; /* 0 = Literalsuche, 1 = POSIX-Regex (ERE) */
+/* Default 0 (Gross-/Kleinschreibung wird ignoriert) - entspricht der
+ * Voreinstellung praktisch aller anderen Mac-Sucheingaben (Safari, Xcode,
+ * VS Code); der "Aa"-Umschalter schaltet auf exakte Gross-/Kleinschreibung
+ * um. */
+static int g_search_case_sensitive = 0;
+/* Default 0 (Teiltreffer erlaubt) - der "\b"-Umschalter grenzt Treffer auf
+ * ganze Woerter ein (siehe compile_search_regex()). */
+static int g_search_whole_word = 0;
 static char g_search_status[128] = "";
 
 /* Alle Fundstellen der aktuellen Suchanfrage im aktiven Dokument, nach Start
@@ -449,8 +458,25 @@ static int compile_search_regex(regex_t *re) {
         regex_escape_literal(query, pattern, cap);
     }
     free(query);
-    int ok = regcomp(re, pattern, REG_EXTENDED) == 0;
-    free(pattern);
+
+    char *final_pattern = pattern;
+    if (g_search_whole_word) {
+        /* [[:<:]]/[[:>:]] sind wie REG_STARTEND oben eine BSD/Darwin-
+         * Erweiterung fuer nullbreite Wortgrenzen-Anker - anders als ein
+         * Wrap mit Zeichenklassen wie "(^|[^[:alnum:]_])...($|[^[:alnum:]_])"
+         * aendern sie NICHT den eigentlichen Treffer-Bereich selbst
+         * (wichtig, weil dieser Bereich 1:1 fuers Hervorheben/Ersetzen
+         * verwendet wird - ein Wrap wuerde die angrenzenden Trennzeichen
+         * mit in den Treffer ziehen). */
+        size_t plen = strlen(pattern);
+        final_pattern = malloc(plen + 16);
+        snprintf(final_pattern, plen + 16, "[[:<:]]%s[[:>:]]", pattern);
+        free(pattern);
+    }
+
+    int cflags = REG_EXTENDED | (g_search_case_sensitive ? 0 : REG_ICASE);
+    int ok = regcomp(re, final_pattern, cflags) == 0;
+    free(final_pattern);
     return ok;
 }
 
@@ -707,6 +733,72 @@ static void replace_selection(Editor *ed, const char *text, size_t len) {
     }
 }
 
+#define BTN_MAX_REGEX_GROUPS 10
+
+/* Baut den tatsaechlichen Ersetzungstext aus g_replace_editor auf: im
+ * Literal-Modus (g_search_regex == 0) unveraendert, im Regex-Modus mit
+ * $1..$9 (bzw. \1..\9) ersetzt durch die jeweilige Erfassungsgruppe des
+ * Treffers bei [match_start, ...) in text ($0/\0 = kompletter Treffer).
+ * Der Treffer wird hier erneut per regexec() ab exakt match_start gesucht
+ * (statt match_end als Parameter zu verlangen) - deterministisch dieselbe
+ * Fundstelle wie beim ersten Mal, liefert aber zusaetzlich die einzelnen
+ * Gruppen-Bereiche, die find_match()/collect_all_matches() (nur Gruppe 0)
+ * nicht mit herausreichen. Nicht existierende oder nicht getroffene Gruppen
+ * werden durch einen leeren String ersetzt (wie in den meisten Editoren/
+ * sed -E ueblich). Caller muss free() aufrufen. */
+static char *expand_replacement(const char *text, size_t text_len, size_t match_start, size_t *out_len) {
+    size_t raw_len;
+    char *raw = editor_copy_all(&g_replace_editor, &raw_len);
+    if (!g_search_regex) {
+        *out_len = raw_len;
+        return raw;
+    }
+
+    regex_t re;
+    if (!compile_search_regex(&re)) {
+        *out_len = raw_len;
+        return raw;
+    }
+    regmatch_t groups[BTN_MAX_REGEX_GROUPS];
+    groups[0].rm_so = (regoff_t)match_start;
+    groups[0].rm_eo = (regoff_t)text_len;
+    int ok = regexec(&re, text, BTN_MAX_REGEX_GROUPS, groups, regexec_flags_for(text, match_start)) == 0;
+    regfree(&re);
+    if (!ok) {
+        *out_len = raw_len;
+        return raw;
+    }
+
+    size_t cap = raw_len + 1;
+    char *out = malloc(cap);
+    size_t o = 0;
+    for (size_t i = 0; i < raw_len; i++) {
+        char c = raw[i];
+        if ((c == '$' || c == '\\') && i + 1 < raw_len && isdigit((unsigned char)raw[i + 1])) {
+            int g = raw[i + 1] - '0';
+            i++;
+            if (g < BTN_MAX_REGEX_GROUPS && groups[g].rm_so >= 0) {
+                size_t glen = (size_t)(groups[g].rm_eo - groups[g].rm_so);
+                if (o + glen + 1 > cap) {
+                    cap = o + glen + 1;
+                    out = realloc(out, cap);
+                }
+                memcpy(out + o, text + groups[g].rm_so, glen);
+                o += glen;
+            }
+            continue;
+        }
+        if (o + 2 > cap) {
+            cap += 16;
+            out = realloc(out, cap);
+        }
+        out[o++] = c;
+    }
+    free(raw);
+    *out_len = o;
+    return out;
+}
+
 /* Ersetzt den aktuellen Treffer (sucht erst einen, falls gerade keiner
  * selektiert ist) und springt direkt zum naechsten weiter. */
 static void perform_replace_current(void) {
@@ -720,8 +812,12 @@ static void perform_replace_current(void) {
             return;
         }
     }
+    size_t doc_len;
+    char *doc_text = editor_copy_all(ed, &doc_len);
+    size_t match_start = editor_selection_start(ed);
     size_t replace_len;
-    char *replace_text = editor_copy_all(&g_replace_editor, &replace_len);
+    char *replace_text = expand_replacement(doc_text, doc_len, match_start, &replace_len);
+    free(doc_text);
     replace_selection(ed, replace_text, replace_len);
     free(replace_text);
     sync_window_state();
@@ -741,8 +837,6 @@ static void perform_replace_all(void) {
     if (editor_length(&g_search_editor) == 0) {
         return;
     }
-    size_t replace_len;
-    char *replace_text = editor_copy_all(&g_replace_editor, &replace_len);
     size_t from = 0;
     int count = 0;
 
@@ -758,10 +852,17 @@ static void perform_replace_all(void) {
          * Dokumentende erreicht, wieder vorne anfangen und bereits
          * ersetzte Treffer erneut finden - eine Endlosschleife. */
         int found = find_match(text, len, from, 1, 0, &match_start, &match_end);
-        free(text);
         if (!found) {
+            free(text);
             break;
         }
+        /* Pro Treffer neu aufgebaut statt einmal vor der Schleife: bei
+         * Rueckreferenzen ($1/\1, siehe expand_replacement()) unterscheidet
+         * sich der tatsaechliche Ersetzungstext von Treffer zu Treffer, je
+         * nachdem was die jeweiligen Erfassungsgruppen gefangen haben. */
+        size_t replace_len;
+        char *replace_text = expand_replacement(text, len, match_start, &replace_len);
+        free(text);
         editor_set_cursor(ed, match_start, 0);
         editor_set_cursor(ed, match_end, 1);
         replace_selection(ed, replace_text, replace_len);
@@ -774,8 +875,8 @@ static void perform_replace_all(void) {
         }
         from = match_start + advance;
         count++;
+        free(replace_text);
     }
-    free(replace_text);
 
     /* Trefferliste nach dem Ersetzen neu aufbauen - der bisherige Stand
      * (aus der Live-Suche vor diesem Befehl) bezieht sich auf Byte-Offsets
@@ -1150,6 +1251,12 @@ static int should_close(void) {
 static void on_draw(CGContextRef ctx, CGRect bounds) {
     g_bounds = bounds;
 
+    /* Bei jedem Redraw frisch abgefragt (kein Notification-Mechanismus
+     * noetig, siehe btn_render_set_dark_mode()-Kommentar in render.h) -
+     * MUSS vor jedem render.c-Zeichenaufruf unten stehen, sonst zeichnen
+     * Tableiste/Suchleiste/Frame mit dem alten Modus. */
+    btn_render_set_dark_mode(btn_app_is_dark_mode());
+
     const char *labels[MAX_TABS];
     char label_bufs[MAX_TABS][300];
     for (int i = 0; i < g_doc_count; i++) {
@@ -1168,7 +1275,8 @@ static void on_draw(CGContextRef ctx, CGRect bounds) {
         btn_render_find_bar(ctx, bounds, btn_tr(BTN_STR_FIND_SEARCH_LABEL), &g_search_editor,
                              btn_tr(BTN_STR_FIND_REPLACE_LABEL), &g_replace_editor,
                              btn_tr(BTN_STR_REPLACE_ALL_BUTTON),
-                             g_search_regex, focus_field, g_search_status);
+                             g_search_regex, g_search_case_sensitive, g_search_whole_word,
+                             focus_field, g_search_status);
     }
 
     Document *active = active_doc();
@@ -1211,14 +1319,16 @@ static void handle_tab_bar_click(double x) {
 }
 
 /* Klick irgendwo in der Suchen-Leiste (y schon vom Aufrufer geprueft):
- * trifft entweder den ".*"-Regex-Umschalter oder eines der beiden Felder
- * (setzt den Fokus dorthin) - dieselben x-Positionen wie
+ * trifft entweder einen der drei Umschalter (".*"/"Aa"/"\b") oder eines der
+ * beiden Felder (setzt den Fokus dorthin) - dieselben x-Positionen wie
  * btn_render_find_bar()'s Zeichnung in render.c, aus denselben render.h-
  * Konstanten berechnet. */
 static void handle_find_bar_click(double x) {
     double search_field_x = BTN_FIND_BAR_PADDING + BTN_FIND_LABEL_WIDTH;
     double regex_x = search_field_x + BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING;
-    double replace_label_x = regex_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING * 2.0;
+    double case_x = regex_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING;
+    double word_x = case_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING;
+    double replace_label_x = word_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING * 2.0;
     double replace_field_x = replace_label_x + BTN_FIND_LABEL_WIDTH;
     double replace_all_x = replace_field_x + BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING;
 
@@ -1227,6 +1337,12 @@ static void handle_find_bar_click(double x) {
         /* Aendert, wie der bestehende Suchtext interpretiert wird - die
          * Live-Hervorhebung/der Trefferzaehler muessen dieselbe neue
          * Interpretation zeigen, nicht erst beim naechsten Tastendruck. */
+        perform_live_search();
+    } else if (x >= case_x && x < case_x + BTN_FIND_REGEX_WIDTH) {
+        g_search_case_sensitive = !g_search_case_sensitive;
+        perform_live_search();
+    } else if (x >= word_x && x < word_x + BTN_FIND_REGEX_WIDTH) {
+        g_search_whole_word = !g_search_whole_word;
         perform_live_search();
     } else if (x >= search_field_x && x < regex_x) {
         g_focus = BTN_FOCUS_SEARCH;
@@ -1615,6 +1731,22 @@ static void perform_print(void) {
     g_print_row_count = 0;
 }
 
+/* Zeigt den "Gehe zu Zeile..."-Dialog (Systemdialog, siehe shim.h) und
+ * springt bei Bestaetigung an den Anfang der eingegebenen (1-basierten)
+ * Zeile - editor_line_bounds() liefert denselben Zeilenanfang, den auch
+ * render.c fuers Zeichnen einer logischen Zeile nutzt. */
+static void perform_goto_line(void) {
+    Editor *ed = &active_doc()->editor;
+    long max_line = (long)editor_line_count(ed);
+    long line;
+    if (!btn_show_goto_line_dialog(max_line, &line)) {
+        return;
+    }
+    size_t start, len;
+    editor_line_bounds(ed, (size_t)(line - 1), &start, &len);
+    editor_set_cursor(ed, start, 0);
+}
+
 /* "Oeffnen mit"/Doppelklick auf eine registrierte Dateiendung/Drag&Drop
  * aufs Dock-Icon (siehe btn_app_set_open_file_callback() in shim.h) - nutzt
  * dieselbe Tab-Auswahl/Lade-Logik wie Datei > Oeffnen..., damit eine schon
@@ -1707,11 +1839,23 @@ static void on_menu(int tag) {
         case BTN_MENU_FIND:
             open_find_bar();
             break;
+        case BTN_MENU_GOTO_LINE:
+            perform_goto_line();
+            break;
         case BTN_MENU_PRINT:
             perform_print();
             break;
         case BTN_MENU_HELP:
             btn_show_help_alert();
+            break;
+        case BTN_MENU_ZOOM_IN:
+            btn_render_zoom_in();
+            break;
+        case BTN_MENU_ZOOM_OUT:
+            btn_render_zoom_out();
+            break;
+        case BTN_MENU_ZOOM_RESET:
+            btn_render_zoom_reset();
             break;
         default:
             break;
