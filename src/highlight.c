@@ -42,7 +42,9 @@ static const char *const C_KEYWORDS[] = {
     "id", "nil", "BOOL", "YES", "NO", "self", "super",
     NULL
 };
-static const BtnLangSpec C_LANG = { C_KEYWORDS, 1, 0, 1, '#', 0, 0 };
+static const BtnLangSpec C_LANG = {
+    .keywords = C_KEYWORDS, .line_comment_slash = 1, .block_comment = 1, .line_prefix_char = '#'
+};
 
 static const char *const PY_KEYWORDS[] = {
     "and", "as", "assert", "async", "await", "break", "class", "continue", "def",
@@ -51,14 +53,14 @@ static const char *const PY_KEYWORDS[] = {
     "return", "try", "while", "with", "yield", "None", "True", "False", "self",
     NULL
 };
-static const BtnLangSpec PY_LANG = { PY_KEYWORDS, 0, 1, 0, 0, 0, 0 };
+static const BtnLangSpec PY_LANG = { .keywords = PY_KEYWORDS, .line_comment_hash = 1 };
 
 static const char *const SHELL_KEYWORDS[] = {
     "if", "then", "else", "elif", "fi", "for", "while", "do", "done", "case", "esac",
     "function", "return", "exit", "local", "export", "echo", "in",
     NULL
 };
-static const BtnLangSpec SHELL_LANG = { SHELL_KEYWORDS, 0, 1, 0, 0, 0, 0 };
+static const BtnLangSpec SHELL_LANG = { .keywords = SHELL_KEYWORDS, .line_comment_hash = 1 };
 
 static const char *const JS_KEYWORDS[] = {
     "break", "case", "catch", "class", "const", "continue", "debugger", "default",
@@ -68,7 +70,7 @@ static const char *const JS_KEYWORDS[] = {
     "true", "false", "null", "undefined",
     NULL
 };
-static const BtnLangSpec JS_LANG = { JS_KEYWORDS, 1, 0, 1, 0, 0, 0 };
+static const BtnLangSpec JS_LANG = { .keywords = JS_KEYWORDS, .line_comment_slash = 1, .block_comment = 1 };
 
 static const char *const SWIFT_KEYWORDS[] = {
     "associatedtype", "class", "deinit", "enum", "extension", "fileprivate", "func",
@@ -80,14 +82,14 @@ static const char *const SWIFT_KEYWORDS[] = {
     "true", "try",
     NULL
 };
-static const BtnLangSpec SWIFT_LANG = { SWIFT_KEYWORDS, 1, 0, 1, 0, 0, 0 };
+static const BtnLangSpec SWIFT_LANG = { .keywords = SWIFT_KEYWORDS, .line_comment_slash = 1, .block_comment = 1 };
 
 /* Kein eigener Tokenizer-Zustand fuer Markdown - reine Zweckentfremdung
  * bestehender Mechanismen (siehe Kommentare bei line_prefix_char/
  * quote_backtick oben): "# Ueberschrift" faellt in dieselbe Form wie ein
  * C-Praeprozessor-Statement (ganze Zeile, muss am Anfang stehen), "`code`"
  * in dieselbe Form wie ein String. Keine Keywords, keine Kommentare. */
-static const BtnLangSpec MD_LANG = { NULL, 0, 0, 0, '#', 1, 0 };
+static const BtnLangSpec MD_LANG = { .line_prefix_char = '#', .quote_backtick = 1 };
 
 static const char *const STL_KEYWORDS[] = {
     "solid", "facet", "normal", "outer", "loop", "vertex",
@@ -99,7 +101,7 @@ static const char *const STL_KEYWORDS[] = {
  * allgemeine Einschraenkung eines reinen Text-Editors, keine STL-
  * Besonderheit). Keine Kommentare im Format, Zahlen (Koordinaten) werden
  * bereits vom generischen, sprachunabhaengigen Zahlen-Scan erfasst. */
-static const BtnLangSpec STL_LANG = { STL_KEYWORDS, 0, 0, 0, 0, 0, 0 };
+static const BtnLangSpec STL_LANG = { .keywords = STL_KEYWORDS };
 
 /* INI/generische Config-Dateien: '[Abschnitt]' nutzt denselben "ganze Zeile
  * ein Token"-Mechanismus wie C-Praeprozessor/Markdown-Ueberschrift (siehe
@@ -110,7 +112,9 @@ static const BtnLangSpec STL_LANG = { STL_KEYWORDS, 0, 0, 0, 0, 0, 0 };
  * fuer einfache Key=Value-Configs, nicht fuer XML-basierte .config-Dateien
  * (die zeigen dann einfach unformatierten Text wie bisher, keine
  * Verschlechterung). */
-static const BtnLangSpec INI_LANG = { NULL, 0, 1, 0, '[', 0, 1 };
+static const BtnLangSpec INI_LANG = {
+    .line_comment_hash = 1, .line_prefix_char = '[', .line_comment_semicolon = 1
+};
 
 /* Kein XML-Tokenizer vorhanden - "Keywords" sind hier haeufige Element-/
  * Attributnamen statt echter Sprach-Schluesselwoerter (aehnliche
@@ -129,7 +133,7 @@ static const char *const SVG_KEYWORDS[] = {
     "points", "id", "class", "style", "opacity",
     NULL
 };
-static const BtnLangSpec SVG_LANG = { SVG_KEYWORDS, 0, 0, 0, 0, 0, 0 };
+static const BtnLangSpec SVG_LANG = { .keywords = SVG_KEYWORDS };
 
 /* ASCII-DXF (die verbreitete Textvariante, kein Binaer-DXF) - "Keywords"
  * sind Abschnitts-/Entitaetsnamen. Der eigentliche Code/Wert-Aufbau (jede
@@ -146,7 +150,7 @@ static const char *const DXF_KEYWORDS[] = {
     "DIMSTYLE", "BLOCK_RECORD",
     NULL
 };
-static const BtnLangSpec DXF_LANG = { DXF_KEYWORDS, 0, 0, 0, 0, 0, 0 };
+static const BtnLangSpec DXF_LANG = { .keywords = DXF_KEYWORDS };
 
 static int ends_with_ci(const char *s, const char *suffix) {
     size_t ls = strlen(s), lsuf = strlen(suffix);
@@ -203,6 +207,15 @@ static int is_keyword(const BtnLangSpec *lang, const char *word, size_t len) {
     return 0;
 }
 
+/* Obergrenze fuer die Zeilenlaenge, die noch tokenisiert wird - ohne die
+ * wuerde eine pathologisch lange "Zeile" (z.B. eine SVG mit megabyteweise
+ * Pfaddaten auf einer einzigen Zeile, oder eine Binaerdatei ganz ohne
+ * Zeilenumbruch) bei JEDEM Redraw (dieses Projekt zeichnet bei jedem
+ * Tastendruck neu, siehe render.c) komplett neu kopiert und tokenisiert.
+ * Ab dieser Groesse bringt Hervorhebung ohnehin kaum noch etwas, also
+ * lieber unformatiert lassen als jeden Tastendruck spuerbar zu bremsen. */
+#define BTN_MAX_HIGHLIGHT_LINE_LEN 100000
+
 size_t btn_highlight_tokenize(const char *text, size_t len, const BtnLangSpec *lang,
                                int starts_in_comment, int *ends_in_comment,
                                BtnToken *out_tokens, size_t max_tokens) {
@@ -211,6 +224,13 @@ size_t btn_highlight_tokenize(const char *text, size_t len, const BtnLangSpec *l
     *ends_in_comment = 0;
 
     if (!lang) {
+        return 0;
+    }
+    if (len > BTN_MAX_HIGHLIGHT_LINE_LEN) {
+        /* Kommentar-Zustand unveraendert durchreichen statt zu scannen -
+         * konservative Annahme, dass eine derart lange Zeile hoechst selten
+         * wirklich innerhalb eines noch offenen Blockkommentars endet. */
+        *ends_in_comment = starts_in_comment;
         return 0;
     }
 

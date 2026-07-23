@@ -119,6 +119,14 @@ char *btn_show_save_panel(const char *suggested_path);
 /* Rueckgabe: 0 = Abbrechen, 1 = Sichern, 2 = Nicht sichern. */
 int btn_show_unsaved_changes_alert(const char *display_name);
 
+/* Warnt vor dem Laden einer vermutlich binaeren Datei (main.c erkennt das
+ * grob anhand eingebetteter NUL-Bytes, siehe looks_binary() dort) - der
+ * Editor hat keine Erkennung/keinen Nur-Lese-Modus fuer solchen Inhalt,
+ * ohne diese Warnung koennte ein Nutzer ihn versehentlich bearbeiten und
+ * mit Cmd+S ueberschreiben. Rueckgabe: 1 = trotzdem oeffnen, 0 = abbrechen
+ * (main.c laedt die Datei dann nicht). */
+int btn_show_binary_file_warning(const char *display_name);
+
 /* Zeigt die Tastenkuerzel-Uebersicht (Hilfe-Menue) als NSAlert - wie die
  * anderen Systemdialoge reine Chrome, kein eigenes Content-Fenster noetig
  * fuer eine simple, statische Liste. */

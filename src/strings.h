@@ -60,6 +60,10 @@ typedef enum {
      * dieselbe Aktion wie Cmd+Return im Ersetzen-Feld, jetzt zusaetzlich
      * sichtbar/klickbar statt nur per Tastenkuerzel erreichbar. */
     BTN_STR_REPLACE_ALL_BUTTON,
+    /* Enthaelt ein "%s" fuer den Dateinamen - siehe BTN_STR_SAVE_PROMPT_TITLE_FMT. */
+    BTN_STR_BINARY_WARNING_TITLE_FMT,
+    BTN_STR_BINARY_WARNING_INFO,
+    BTN_STR_BTN_OPEN_ANYWAY,
     BTN_STR_COUNT
 } BtnStringId;
 

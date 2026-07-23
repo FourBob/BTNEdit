@@ -675,6 +675,11 @@ static void draw_row_line(CGContextRef ctx, Editor *ed, const BtnLangSpec *lang,
 
     CFStringRef lineStr = CFStringCreateWithBytes(NULL, (const UInt8 *)disp,
                                                    (CFIndex)disp_len, kCFStringEncodingUTF8, false);
+    /* Merkt sich, welche Kodierung tatsaechlich verwendet wurde - die
+     * Token-Farbbereiche unten muessen byte->UTF-16-Offsets passend zu
+     * GENAU dieser Kodierung berechnen, nicht blind UTF-8 annehmen (siehe
+     * Kommentar bei used_latin1_fallback weiter unten). */
+    int used_latin1_fallback = 0;
     if (!lineStr) {
         /* disp ist keine gueltige UTF-8-Sequenz - kommt vor, wenn eine
          * Binaerdatei als Text geoeffnet wird (z.B. eine Binaer-STL-Datei
@@ -690,6 +695,7 @@ static void draw_row_line(CGContextRef ctx, Editor *ed, const BtnLangSpec *lang,
          * die rohen Bytes, nicht diese Anzeige-Kodierung). */
         lineStr = CFStringCreateWithBytes(NULL, (const UInt8 *)disp,
                                            (CFIndex)disp_len, kCFStringEncodingISOLatin1, false);
+        used_latin1_fallback = (lineStr != NULL);
     }
     if (!lineStr) {
         /* Verteidigung in der Tiefe: ISO-8859-1 kann fuer eine Byte-Folge
@@ -723,8 +729,18 @@ static void draw_row_line(CGContextRef ctx, Editor *ed, const BtnLangSpec *lang,
         if (col_from >= col_to) {
             continue;
         }
-        CFIndex u16_from = utf16_offset_for_byte_offset(disp, col_from);
-        CFIndex u16_to = utf16_offset_for_byte_offset(disp, col_to);
+        /* utf16_offset_for_byte_offset() dekodiert intern als UTF-8 - passt
+         * nur, wenn lineStr auch tatsaechlich so gebaut wurde. Nach dem
+         * ISO-8859-1-Fallback ist die Abbildung dagegen denkbar einfach:
+         * jedes Byte ist genau ein UTF-16-Codepunkt, der Byte-Offset IST
+         * bereits der UTF-16-Offset. Ohne diese Unterscheidung wuerden
+         * Token-Farben auf einer solchen Zeile an der falschen Stelle
+         * landen (typischerweise Richtung Zeilenanfang verschoben), weil
+         * der interne UTF-8-Dekodierversuch auf denselben ungueltigen
+         * Bytes scheitert, die schon lineStr selbst zum Fallback gezwungen
+         * haben. */
+        CFIndex u16_from = used_latin1_fallback ? (CFIndex)col_from : utf16_offset_for_byte_offset(disp, col_from);
+        CFIndex u16_to = used_latin1_fallback ? (CFIndex)col_to : utf16_offset_for_byte_offset(disp, col_to);
         if (u16_to > utf16_len) {
             u16_to = utf16_len;
         }

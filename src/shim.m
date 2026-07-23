@@ -87,6 +87,15 @@ static NSMenu *g_recentMenu = nil;
 
 static BTNContentView *g_view = nil;
 
+/* Gemeinsamer Aktivierungs-/Vordergrund-Code fuer alle drei Aufrufstellen
+ * (applicationDidFinishLaunching:, application:openURLs: und frueher auch
+ * btn_app_run() selbst - siehe Kommentar bei applicationDidFinishLaunching:
+ * unten, warum Ersteres allein inzwischen genuegt). */
+static void btn_activate_and_focus_window(void) {
+    [NSApp activateIgnoringOtherApps:YES];
+    [g_window makeKeyAndOrderFront:nil];
+}
+
 @interface BTNAppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate>
 @end
 
@@ -98,17 +107,17 @@ static BTNContentView *g_view = nil;
 }
 
 /* Bringt die App zuverlaessig in den Vordergrund, wenn sie per Doppelklick/
- * "Oeffnen mit" auf eine Datei kaltgestartet wurde - ein einzelner
- * activateIgnoringOtherApps:-Aufruf VOR [NSApp run] (siehe btn_app_run())
- * kommt bei diesem Startweg manchmal zu frueh, um noch zu wirken, weil die
- * App zu dem Zeitpunkt aus Sicht des Systems ihren Start noch nicht
- * abgeschlossen hat. Dies hier ist der von Apple dafuer vorgesehene
- * Zeitpunkt; application:openURLs: (siehe unten) aktiviert zusaetzlich noch
- * einmal fuer den Fall, dass die Datei erst nach dem Start-Ereignis eintrifft. */
+ * "Oeffnen mit" auf eine Datei kaltgestartet wurde. Dies ist der von Apple
+ * dafuer vorgesehene Zeitpunkt (im Gegensatz zu einem Aufruf VOR [NSApp run]
+ * in btn_app_run(), der bei diesem Startweg manchmal zu frueh kommt, um noch
+ * zu wirken, weil die App zu dem Zeitpunkt aus Sicht des Systems ihren Start
+ * noch nicht abgeschlossen hat - btn_app_run() verlaesst sich deshalb
+ * ausschliesslich auf diese Methode statt zusaetzlich selbst zu aktivieren);
+ * application:openURLs: (siehe unten) aktiviert zusaetzlich noch einmal fuer
+ * den Fall, dass die Datei erst nach dem Start-Ereignis eintrifft. */
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     (void)notification;
-    [NSApp activateIgnoringOtherApps:YES];
-    [g_window makeKeyAndOrderFront:nil];
+    btn_activate_and_focus_window();
 }
 
 - (BOOL)windowShouldClose:(id)sender {
@@ -147,7 +156,7 @@ static BTNContentView *g_view = nil;
             g_open_file_cb(path);
         }
     }
-    [NSApp activateIgnoringOtherApps:YES];
+    btn_activate_and_focus_window();
 }
 
 @end
@@ -322,7 +331,14 @@ void btn_app_run(void) {
                                                   backing:NSBackingStoreBuffered
                                                     defer:NO];
         [g_window setTitle:trs(BTN_STR_UNTITLED)];
-        [g_window setMinSize:NSMakeSize(400, 300)];
+        /* Breite 800 statt z.B. 400: die Suchen/Ersetzen-Leiste (render.c)
+         * braucht bei sichtbarem "Alle ersetzen"-Knopf ueber 750pt, bevor
+         * ueberhaupt der Statustext anfaengt - bei einer kleineren Mindest-
+         * breite waeren Knopf und/oder Statustext im schmalsten Fenster
+         * abgeschnitten. shim.m kennt render.h's Layout-Konstanten bewusst
+         * nicht (reine Chrome), daher hier als grosszuegig bemessener,
+         * eigener Wert statt eines Verweises auf sie. */
+        [g_window setMinSize:NSMakeSize(800, 300)];
 
         g_view = [[BTNContentView alloc] initWithFrame:frame];
         [g_window setContentView:g_view];
@@ -332,8 +348,10 @@ void btn_app_run(void) {
         [NSApp setDelegate:delegate];
         [g_window setDelegate:delegate];
 
-        [g_window makeKeyAndOrderFront:nil];
-        [NSApp activateIgnoringOtherApps:YES];
+        /* Kein eigener makeKeyAndOrderFront:/activateIgnoringOtherApps:-Aufruf
+         * hier noetig - delegate's applicationDidFinishLaunching: (oben)
+         * erledigt genau das zuverlaessig, sobald [NSApp run] unten den
+         * Start-Vorgang abschliesst. */
         [NSApp run];
     }
 }
@@ -430,6 +448,21 @@ int btn_show_unsaved_changes_alert(const char *display_name) {
             return 2;
         }
         return 0;
+    }
+}
+
+int btn_show_binary_file_warning(const char *display_name) {
+    @autoreleasepool {
+        char msg[512];
+        snprintf(msg, sizeof(msg), btn_tr(BTN_STR_BINARY_WARNING_TITLE_FMT),
+                 display_name ? display_name : btn_tr(BTN_STR_UNTITLED));
+        NSAlert *alert = [[NSAlert alloc] init];
+        [alert setMessageText:[NSString stringWithUTF8String:msg]];
+        [alert setInformativeText:trs(BTN_STR_BINARY_WARNING_INFO)];
+        [alert addButtonWithTitle:trs(BTN_STR_BTN_OPEN_ANYWAY)];
+        [alert addButtonWithTitle:trs(BTN_STR_BTN_CANCEL)];
+        NSModalResponse resp = [alert runModal];
+        return resp == NSAlertFirstButtonReturn ? 1 : 0;
     }
 }
 

@@ -720,6 +720,29 @@ static int write_file_contents(const char *path, const char *data, size_t len) {
     return written == len;
 }
 
+/* Grobe Heuristik: ein eingebettetes NUL-Byte kommt in echten Textdateien
+ * praktisch nie vor, in Binaerdateien (Bilder, Binaer-STL, ausfuehrbare
+ * Dateien, ...) dagegen sehr haeufig - reicht als einfacher, schneller
+ * Anhaltspunkt, ohne eine vollstaendige Content-Type-Erkennung zu brauchen.
+ * Seit render.c bei ungueltigem UTF-8 auf ISO-8859-1 zurueckfaellt (siehe
+ * dortiger Kommentar), sieht eine solche Datei nicht mehr offensichtlich
+ * "kaputt" aus, sondern wie plausibler, wenn auch wirrer Text - ohne diese
+ * Warnung koennte ein Nutzer sie versehentlich bearbeiten und mit Cmd+S
+ * ueberschreiben. Nur die ersten paar KB werden geprueft: reicht als
+ * repraesentative Stichprobe und haelt die Pruefung auch bei sehr grossen
+ * Dateien schnell. */
+#define BTN_BINARY_SNIFF_LEN 8192
+
+static int looks_binary(const char *data, size_t len) {
+    size_t n = len < BTN_BINARY_SNIFF_LEN ? len : BTN_BINARY_SNIFF_LEN;
+    for (size_t i = 0; i < n; i++) {
+        if (data[i] == '\0') {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Gemeinsame Ladelogik fuer Datei > Oeffnen... und Klicks im "Zuletzt
  * geoeffnet"-Untermenue - beide muessen dieselbe Reihenfolge (lesen, Editor
  * fuellen, Pfad/Dirty-Status/Recent-Liste synchronisieren) einhalten. Laedt
@@ -729,6 +752,10 @@ static void open_file_path(Document *d, const char *path) {
     size_t len;
     char *contents = read_file_contents(path, &len);
     if (contents) {
+        if (looks_binary(contents, len) && !btn_show_binary_file_warning(basename_of(path))) {
+            free(contents);
+            return;
+        }
         editor_set_text(&d->editor, contents, len);
         free(contents);
         set_doc_path(d, path);
@@ -1031,11 +1058,16 @@ static void handle_find_bar_click(double x) {
         g_focus = BTN_FOCUS_SEARCH;
     } else if (x >= replace_all_x && x < replace_all_x + BTN_FIND_REPLACE_ALL_WIDTH) {
         /* "Alle ersetzen"-Knopf - dieselbe Aktion wie Cmd+Return im
-         * Ersetzen-Feld (siehe handle_find_bar_key()), jetzt zusaetzlich per
-         * Klick erreichbar. Bewusst VOR dem breiteren replace_field_x-Zweig
-         * unten geprueft, da der Knopf rechts vom Ersetzen-Feld sitzt. */
+         * Ersetzen-Feld (siehe handle_find_bar_key()). Bewusst VOR dem
+         * unbegrenzten replace_field_x-Zweig unten geprueft: der Knopf
+         * sitzt innerhalb von dessen Bereich, die Reihenfolge entscheidet
+         * hier also tatsaechlich, welcher Zweig greift. */
         perform_replace_all();
-    } else if (x >= replace_field_x && x < replace_all_x) {
+    } else if (x >= replace_field_x) {
+        /* Bewusst unbegrenzt nach rechts (nicht auf das Ersetzen-Feld selbst
+         * geklemmt) - ein Klick irgendwo rechts davon (Statustext-Bereich
+         * eingeschlossen) soll wie vor dem "Alle ersetzen"-Knopf weiterhin
+         * das Ersetzen-Feld fokussieren, nicht ins Leere gehen. */
         g_focus = BTN_FOCUS_REPLACE;
     }
 }

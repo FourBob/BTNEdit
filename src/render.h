@@ -33,7 +33,10 @@ extern "C" {
 #define BTN_FIND_LABEL_WIDTH 70.0
 #define BTN_FIND_FIELD_WIDTH 200.0
 #define BTN_FIND_REGEX_WIDTH 26.0
-#define BTN_FIND_REPLACE_ALL_WIDTH 120.0
+/* Muss auch die laengste uebersetzte Beschriftung bequem fassen - "Reemplazar
+ * todo" (ES, 16 Zeichen) ist bei Menlo 13pt (~7.8pt/Zeichen) ca. 125pt breit;
+ * 150pt laesst auf beiden Seiten noch sichtbaren Rand. */
+#define BTN_FIND_REPLACE_ALL_WIDTH 150.0
 
 /* Eine visuelle Zeile (Row) nach Wortumbruch: [start, start+len) im
  * Puffer. logical_line ist die zugehoerige "echte" Zeile (fuer die
