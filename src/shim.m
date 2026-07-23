@@ -515,7 +515,10 @@ int btn_show_goto_line_dialog(long max_line, long *out_line) {
         NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 200, 24)];
         [[field cell] setPlaceholderString:@"1"];
         [alert setAccessoryView:field];
-        [alert setInitialFirstResponder:field];
+        /* initialFirstResponder gehoert zu NSWindow, nicht zu NSAlert selbst -
+         * [alert window] baut/liefert das dahinterliegende Panel (inklusive
+         * layoutetem Accessory View) erst bei diesem Zugriff. */
+        [[alert window] setInitialFirstResponder:field];
 
         NSModalResponse resp = [alert runModal];
         int ok = (resp == NSAlertFirstButtonReturn);
