@@ -80,6 +80,11 @@ typedef enum {
     BTN_STR_ZOOM_IN,
     BTN_STR_ZOOM_OUT,
     BTN_STR_ZOOM_RESET,
+    /* Ersetzt den Trefferzaehler in der Statusanzeige, wenn das aktive
+     * Dokument fuer einen Live-Suche-Vollscan bei jedem Tastendruck zu
+     * gross ist (siehe BTN_LIVE_SEARCH_MAX_DOC_LEN in main.c) - Suchen
+     * funktioniert weiterhin ganz normal per Return. */
+    BTN_STR_FIND_LIVE_SEARCH_TOO_LARGE,
     BTN_STR_COUNT
 } BtnStringId;
 

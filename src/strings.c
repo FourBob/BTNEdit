@@ -35,7 +35,8 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "View",
         "Zoom In",
         "Zoom Out",
-        "Actual Size"
+        "Actual Size",
+        "Document too large for live search - press Return to search"
     },
     /* BTN_LANG_DE */
     {
@@ -63,7 +64,8 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Darstellung",
         "Vergrößern",
         "Verkleinern",
-        "Tatsächliche Größe"
+        "Tatsächliche Größe",
+        "Dokument zu groß für Live-Suche - Return zum Suchen drücken"
     },
     /* BTN_LANG_FR */
     {
@@ -91,7 +93,8 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Présentation",
         "Zoom avant",
         "Zoom arrière",
-        "Taille réelle"
+        "Taille réelle",
+        "Document trop volumineux pour la recherche en direct - Retour pour rechercher"
     },
     /* BTN_LANG_ES */
     {
@@ -119,7 +122,8 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Vista",
         "Acercar",
         "Alejar",
-        "Tamaño real"
+        "Tamaño real",
+        "Documento demasiado grande para la búsqueda en vivo - pulsa Intro para buscar"
     },
     /* BTN_LANG_ZH (Simplified) */
     {
@@ -150,7 +154,8 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "显示",
         "放大",
         "缩小",
-        "实际大小"
+        "实际大小",
+        "文档过大，无法实时搜索 - 按回车键搜索"
     }
 };
 

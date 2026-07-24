@@ -85,9 +85,29 @@ static char g_search_status[128] = "";
  * pathologisch haeufige Muster - analog zu BTN_MAX_HIGHLIGHT_LINE_LEN in
  * highlight.c. */
 #define BTN_MAX_SEARCH_MATCHES 5000
+/* Obergrenze fuer die Dokumentgroesse, bis zu der perform_live_search() noch
+ * bei JEDEM Tastendruck einen vollen Kopie+Regex-Scan macht - anders als die
+ * Trefferanzahl (deren Deckel BTN_MAX_SEARCH_MATCHES oben ist) waechst diese
+ * Kosten mit der Dokumentgroesse selbst, nicht mit der Trefferzahl, und war
+ * vor der Live-Suche schlicht nicht vorhanden (Tippen im Suchfeld war vorher
+ * O(1)). Darueber faellt die Live-Hervorhebung/-Suche aus, Suchen
+ * funktioniert aber weiterhin ganz normal per Return (perform_find() bleibt
+ * unveraendert schnell genug fuer eine einzelne, diskrete Nutzeraktion statt
+ * fuer jeden einzelnen Tastendruck). */
+#define BTN_LIVE_SEARCH_MAX_DOC_LEN (2 * 1024 * 1024)
 static size_t g_match_starts[BTN_MAX_SEARCH_MATCHES];
 static size_t g_match_ends[BTN_MAX_SEARCH_MATCHES];
 static size_t g_match_count = 0;
+/* editor_edit_seq() des aktiven Dokuments zum Zeitpunkt, als g_match_starts/
+ * g_match_ends zuletzt aufgebaut wurden - Klick ins Dokument entzieht der
+ * Suchleiste nur den Fokus (siehe close_find_bar()-Kommentar bei
+ * switch_to_tab()), schliesst sie aber NICHT; tippt der Nutzer danach direkt
+ * im Dokument weiter, veraendern sich die Byte-Offsets im Puffer, ohne dass
+ * irgendein Suchleisten-Pfad das mitbekommt. on_draw() vergleicht das vor
+ * jedem Redraw gegen den aktuellen edit_seq und verwirft veraltete Treffer
+ * (siehe invalidate_matches_if_doc_edited()), statt sie gegen den falschen
+ * (weil laengst verschobenen) Text zu zeichnen. */
+static size_t g_match_edit_seq = 0;
 
 /* Ausgangspunkt fuer die naechste Live-Suche (siehe perform_live_search) -
  * bewusst getrennt von der aktuellen Dokument-Selektion: die Selektion
@@ -469,9 +489,17 @@ static int compile_search_regex(regex_t *re) {
          * verwendet wird - ein Wrap wuerde die angrenzenden Trennzeichen
          * mit in den Treffer ziehen). */
         size_t plen = strlen(pattern);
-        final_pattern = malloc(plen + 16);
-        snprintf(final_pattern, plen + 16, "[[:<:]]%s[[:>:]]", pattern);
-        free(pattern);
+        char *wrapped = malloc(plen + 16);
+        if (wrapped) {
+            snprintf(wrapped, plen + 16, "[[:<:]]%s[[:>:]]", pattern);
+            free(pattern);
+            final_pattern = wrapped;
+        }
+        /* Bei fehlgeschlagener Allokation bleibt final_pattern das
+         * unveraenderte pattern (kein Leck, da wrapped hier NULL ist und
+         * pattern unten regulaer weiterverwendet/freigegeben wird) - die
+         * Suche funktioniert dann weiter, nur ohne Ganzes-Wort-Eingrenzung,
+         * statt mit NULL an snprintf() abzustuerzen. */
     }
 
     int cflags = REG_EXTENDED | (g_search_case_sensitive ? 0 : REG_ICASE);
@@ -630,6 +658,31 @@ static int pick_current_match(const size_t *starts, size_t count, size_t anchor,
     return 1;
 }
 
+/* Wie pick_current_match(), aber fuer beide Richtungen: forward=1 verhaelt
+ * sich identisch dazu, forward=0 waehlt den letzten Treffer VOR anchor
+ * (sonst Wrap zum letzten insgesamt) - entspricht find_match()s
+ * forward=0,wrap=1-Verhalten. Deckt beide Richtungen der Return-
+ * gesteuerten Navigation (perform_find()) aus DERSELBEN, bereits per
+ * collect_all_matches() gesammelten Trefferliste ab, statt dafuer einen
+ * zweiten, unabhaengigen Regex-Durchlauf zu brauchen. */
+static int pick_match_for_navigation(const size_t *starts, size_t count, size_t anchor,
+                                      int forward, size_t *out_index) {
+    if (forward) {
+        return pick_current_match(starts, count, anchor, out_index);
+    }
+    if (count == 0) {
+        return 0;
+    }
+    for (size_t i = count; i > 0; i--) {
+        if (starts[i - 1] < anchor) {
+            *out_index = i - 1;
+            return 1;
+        }
+    }
+    *out_index = count - 1;
+    return 1;
+}
+
 /* Baut den Trefferzaehler-Status ("3 von 12 Treffern") fuer den Treffer bei
  * match_start in der zuletzt via collect_all_matches() befuellten
  * g_match_starts/g_match_count. Falls match_start dort nicht vorkommt (nur
@@ -666,9 +719,22 @@ static void perform_live_search(void) {
         return;
     }
 
+    if (editor_length(ed) > BTN_LIVE_SEARCH_MAX_DOC_LEN) {
+        /* Siehe BTN_LIVE_SEARCH_MAX_DOC_LEN-Kommentar - fuer ein derart
+         * grosses Dokument waere ein voller Kopie+Regex-Scan bei JEDEM
+         * Tastendruck spuerbar langsam. Suche funktioniert weiterhin ganz
+         * normal per Return (perform_find()), nur ohne die Live-Vorschau. */
+        g_match_count = 0;
+        snprintf(g_search_status, sizeof(g_search_status), "%s",
+                 btn_tr(BTN_STR_FIND_LIVE_SEARCH_TOO_LARGE));
+        btn_app_request_redraw();
+        return;
+    }
+
     size_t len;
     char *text = editor_copy_all(ed, &len);
     g_match_count = collect_all_matches(text, len, g_match_starts, g_match_ends, BTN_MAX_SEARCH_MATCHES);
+    g_match_edit_seq = ed->edit_seq;
 
     size_t idx;
     if (pick_current_match(g_match_starts, g_match_count, g_search_anchor, &idx)) {
@@ -697,17 +763,22 @@ static int perform_find(int forward) {
     char *text = editor_copy_all(ed, &len);
 
     size_t from = forward ? editor_selection_end(ed) : editor_selection_start(ed);
-    size_t match_start, match_end;
-    int found = find_match(text, len, from, forward, 1, &match_start, &match_end);
-    /* Haelt g_match_starts/g_match_ends (Live-Hervorhebung aller Treffer)
-     * auch bei Return-gesteuerter Navigation auf dem aktuellen Stand - z.B.
-     * wenn die Leiste per Cmd+F mit vorausgefuellter Selektion oeffnet und
-     * der Nutzer sofort Return drueckt, ohne vorher zu tippen (dann hat
-     * perform_live_search() noch nie gelaufen). */
+    /* Ein einziger Scan liefert sowohl den navigierten Treffer als auch die
+     * komplette Liste fuer Live-Hervorhebung/Trefferzaehler - vorher liefen
+     * hier find_match() UND collect_all_matches() als zwei unabhaengige
+     * Regex-Durchlaeufe ueber denselben Text fuer denselben Tastendruck
+     * (z.B. wenn die Leiste per Cmd+F mit vorausgefuellter Selektion oeffnet
+     * und der Nutzer sofort Return drueckt, ohne vorher zu tippen). */
     g_match_count = collect_all_matches(text, len, g_match_starts, g_match_ends, BTN_MAX_SEARCH_MATCHES);
+    g_match_edit_seq = ed->edit_seq;
     free(text);
 
+    size_t idx;
+    int found = pick_match_for_navigation(g_match_starts, g_match_count, from, forward, &idx);
+
     if (found) {
+        size_t match_start = g_match_starts[idx];
+        size_t match_end = g_match_ends[idx];
         editor_set_cursor(ed, match_start, 0);
         editor_set_cursor(ed, match_end, 1);
         g_search_anchor = forward ? match_end : match_start;
@@ -734,13 +805,38 @@ static void replace_selection(Editor *ed, const char *text, size_t len) {
 }
 
 #define BTN_MAX_REGEX_GROUPS 10
+/* Obergrenze fuer die Groesse des expandierten Ersetzungstexts - ohne die
+ * koennte ein Ersetzungstext mit vielen hintereinander wiederholten
+ * Rueckreferenzen (z.B. "$1$1$1$1$1$1$1$1$1$1" bei einer Suche wie "(.*)",
+ * die praktisch die ganze Zeile faengt) unbegrenzt viel Speicher anfordern.
+ * Analog zu BTN_MAX_SEARCH_MATCHES/BTN_MAX_HIGHLIGHT_LINE_LEN: lieber an
+ * einer grosszuegigen Grenze abbrechen (das teilweise aufgebaute Ergebnis
+ * bis dahin bleibt gueltig und wird verwendet) als unbegrenzt zu wachsen. */
+#define BTN_MAX_EXPANDED_REPLACEMENT_LEN (16 * 1024 * 1024)
+
+/* Erkennt, ob text ueberhaupt $0-$9/\0-\9-Rueckreferenzen enthaelt - eine
+ * billige Byte-fuer-Byte-Pruefung, um expand_replacement()s teuren zweiten
+ * regexec()-Durchlauf (fuer die Gruppen-Bereiche) zu sparen, wenn der
+ * Ersetzungstext trotz aktivem Regex-Modus gar keine Rueckreferenz
+ * verwendet (z.B. Regex-Suche mit rein literalem Ersetzungstext) - in
+ * dem Fall ist der Treffer selbst (match_start/match_end) schon laengst
+ * anderweitig bekannt, seine Gruppen werden schlicht nicht gebraucht. */
+static int replacement_has_backreferences(const char *raw, size_t raw_len) {
+    for (size_t i = 0; i + 1 < raw_len; i++) {
+        if ((raw[i] == '$' || raw[i] == '\\') && isdigit((unsigned char)raw[i + 1])) {
+            return 1;
+        }
+    }
+    return 0;
+}
 
 /* Baut den tatsaechlichen Ersetzungstext aus g_replace_editor auf: im
- * Literal-Modus (g_search_regex == 0) unveraendert, im Regex-Modus mit
- * $1..$9 (bzw. \1..\9) ersetzt durch die jeweilige Erfassungsgruppe des
- * Treffers bei [match_start, ...) in text ($0/\0 = kompletter Treffer).
- * Der Treffer wird hier erneut per regexec() ab exakt match_start gesucht
- * (statt match_end als Parameter zu verlangen) - deterministisch dieselbe
+ * Literal-Modus (g_search_regex == 0) oder ohne Rueckreferenzen (siehe
+ * replacement_has_backreferences() oben) unveraendert, sonst mit $1..$9
+ * (bzw. \1..\9) ersetzt durch die jeweilige Erfassungsgruppe des Treffers
+ * bei [match_start, ...) in text ($0/\0 = kompletter Treffer). Der Treffer
+ * wird hier erneut per regexec() ab exakt match_start gesucht (statt
+ * match_end als Parameter zu verlangen) - deterministisch dieselbe
  * Fundstelle wie beim ersten Mal, liefert aber zusaetzlich die einzelnen
  * Gruppen-Bereiche, die find_match()/collect_all_matches() (nur Gruppe 0)
  * nicht mit herausreichen. Nicht existierende oder nicht getroffene Gruppen
@@ -749,7 +845,7 @@ static void replace_selection(Editor *ed, const char *text, size_t len) {
 static char *expand_replacement(const char *text, size_t text_len, size_t match_start, size_t *out_len) {
     size_t raw_len;
     char *raw = editor_copy_all(&g_replace_editor, &raw_len);
-    if (!g_search_regex) {
+    if (!g_search_regex || !replacement_has_backreferences(raw, raw_len)) {
         *out_len = raw_len;
         return raw;
     }
@@ -771,8 +867,22 @@ static char *expand_replacement(const char *text, size_t text_len, size_t match_
 
     size_t cap = raw_len + 1;
     char *out = malloc(cap);
+    if (!out) {
+        /* Degradiert auf den unveraenderten Ersetzungstext statt mit NULL
+         * abzustuerzen - raw ist an dieser Stelle noch ein gueltiger,
+         * ungenutzter Puffer (wird sonst erst ganz unten freigegeben), der
+         * Aufrufer gibt den zurueckgegebenen Zeiger so oder so per free() frei. */
+        *out_len = raw_len;
+        return raw;
+    }
     size_t o = 0;
     for (size_t i = 0; i < raw_len; i++) {
+        if (o >= BTN_MAX_EXPANDED_REPLACEMENT_LEN) {
+            /* Obergrenze erreicht (siehe BTN_MAX_EXPANDED_REPLACEMENT_LEN) -
+             * das bis hierhin aufgebaute Ergebnis bleibt gueltig und wird
+             * verwendet, der Rest des Ersetzungstexts wird abgeschnitten. */
+            break;
+        }
         char c = raw[i];
         if ((c == '$' || c == '\\') && i + 1 < raw_len && isdigit((unsigned char)raw[i + 1])) {
             int g = raw[i + 1] - '0';
@@ -781,7 +891,13 @@ static char *expand_replacement(const char *text, size_t text_len, size_t match_
                 size_t glen = (size_t)(groups[g].rm_eo - groups[g].rm_so);
                 if (o + glen + 1 > cap) {
                     cap = o + glen + 1;
-                    out = realloc(out, cap);
+                    char *tmp = realloc(out, cap);
+                    if (!tmp) {
+                        free(out);
+                        *out_len = raw_len;
+                        return raw;
+                    }
+                    out = tmp;
                 }
                 memcpy(out + o, text + groups[g].rm_so, glen);
                 o += glen;
@@ -790,7 +906,13 @@ static char *expand_replacement(const char *text, size_t text_len, size_t match_
         }
         if (o + 2 > cap) {
             cap += 16;
-            out = realloc(out, cap);
+            char *tmp = realloc(out, cap);
+            if (!tmp) {
+                free(out);
+                *out_len = raw_len;
+                return raw;
+            }
+            out = tmp;
         }
         out[o++] = c;
     }
@@ -799,11 +921,37 @@ static char *expand_replacement(const char *text, size_t text_len, size_t match_
     return out;
 }
 
+/* Prueft, ob die aktuelle Selektion tatsaechlich exakt dem naechsten
+ * Treffer der aktuellen Suchanfrage ab ihrem eigenen Anfang entspricht -
+ * nicht nur "irgendeine Selektion". Wichtig, weil expand_replacement() im
+ * Regex-Modus intern erneut ab editor_selection_start() sucht, um an die
+ * Erfassungsgruppen zu kommen: regexec() mit REG_STARTEND ist dabei NICHT
+ * an genau diese Position angeankert (dieselbe "Treffer kann spaeter
+ * beginnen"-Semantik wie find_match()s eigener Vorwaertszweig weiter oben)
+ * - bei einer Selektion, die NICHT von einem echten Treffer stammt (z.B.
+ * manuell mit der Maus gewaehlt, waehrend die Suchleiste offen ist), wuerde
+ * diese interne Suche stattdessen den naechsten, ganz woanders liegenden
+ * Treffer finden und dessen Gruppen fuer eine Ersetzung an der falschen
+ * (der eigentlich selektierten) Stelle verwenden - stillschweigend falscher
+ * Inhalt an der falschen Stelle, ohne jede Fehlermeldung. */
+static int selection_is_current_match(Editor *ed) {
+    if (!editor_has_selection(ed)) {
+        return 0;
+    }
+    size_t len;
+    char *text = editor_copy_all(ed, &len);
+    size_t match_start, match_end;
+    int found = find_match(text, len, editor_selection_start(ed), 1, 0, &match_start, &match_end);
+    free(text);
+    return found && match_start == editor_selection_start(ed) && match_end == editor_selection_end(ed);
+}
+
 /* Ersetzt den aktuellen Treffer (sucht erst einen, falls gerade keiner
- * selektiert ist) und springt direkt zum naechsten weiter. */
+ * selektiert ist bzw. die bestehende Selektion nicht wirklich der aktuelle
+ * Treffer ist) und springt direkt zum naechsten weiter. */
 static void perform_replace_current(void) {
     Editor *ed = &active_doc()->editor;
-    if (!editor_has_selection(ed)) {
+    if (!selection_is_current_match(ed)) {
         /* Rueckgabewert von perform_find() statt erneut editor_has_selection()
          * zu pruefen - ein gefundener, aber leerer Regex-Treffer (z.B. "a*")
          * hinterlaesst cursor==anchor und wuerde von editor_has_selection()
@@ -837,6 +985,28 @@ static void perform_replace_all(void) {
     if (editor_length(&g_search_editor) == 0) {
         return;
     }
+
+    /* Nur wenn der Ersetzungstext tatsaechlich Rueckreferenzen enthaelt
+     * (siehe replacement_has_backreferences()), unterscheidet sich der
+     * tatsaechliche Ersetzungstext von Treffer zu Treffer und muss pro
+     * Treffer per expand_replacement() neu aufgebaut werden - sonst reicht
+     * (wie vor der Rueckreferenzen-Funktion) eine einzige Kopie vor der
+     * Schleife, statt sie bei jedem Treffer erneut zu malloc'en/kopieren. */
+    size_t fixed_replace_len = 0;
+    char *fixed_replace_text = NULL;
+    int per_match_expansion;
+    {
+        size_t raw_len;
+        char *raw = editor_copy_all(&g_replace_editor, &raw_len);
+        per_match_expansion = g_search_regex && replacement_has_backreferences(raw, raw_len);
+        if (per_match_expansion) {
+            free(raw);
+        } else {
+            fixed_replace_text = raw;
+            fixed_replace_len = raw_len;
+        }
+    }
+
     size_t from = 0;
     int count = 0;
 
@@ -856,12 +1026,14 @@ static void perform_replace_all(void) {
             free(text);
             break;
         }
-        /* Pro Treffer neu aufgebaut statt einmal vor der Schleife: bei
-         * Rueckreferenzen ($1/\1, siehe expand_replacement()) unterscheidet
-         * sich der tatsaechliche Ersetzungstext von Treffer zu Treffer, je
-         * nachdem was die jeweiligen Erfassungsgruppen gefangen haben. */
         size_t replace_len;
-        char *replace_text = expand_replacement(text, len, match_start, &replace_len);
+        char *replace_text;
+        if (per_match_expansion) {
+            replace_text = expand_replacement(text, len, match_start, &replace_len);
+        } else {
+            replace_text = fixed_replace_text;
+            replace_len = fixed_replace_len;
+        }
         free(text);
         editor_set_cursor(ed, match_start, 0);
         editor_set_cursor(ed, match_end, 1);
@@ -875,8 +1047,11 @@ static void perform_replace_all(void) {
         }
         from = match_start + advance;
         count++;
-        free(replace_text);
+        if (per_match_expansion) {
+            free(replace_text);
+        }
     }
+    free(fixed_replace_text); /* NULL-sicher, No-Op wenn per_match_expansion galt */
 
     /* Trefferliste nach dem Ersetzen neu aufbauen - der bisherige Stand
      * (aus der Live-Suche vor diesem Befehl) bezieht sich auf Byte-Offsets
@@ -885,6 +1060,7 @@ static void perform_replace_all(void) {
     size_t len;
     char *text = editor_copy_all(ed, &len);
     g_match_count = collect_all_matches(text, len, g_match_starts, g_match_ends, BTN_MAX_SEARCH_MATCHES);
+    g_match_edit_seq = ed->edit_seq;
     free(text);
 
     snprintf(g_search_status, sizeof(g_search_status), btn_tr(BTN_STR_FIND_REPLACED_FMT), count);
@@ -1284,10 +1460,17 @@ static void on_draw(CGContextRef ctx, CGRect bounds) {
      * close_find_bar()/switch_to_tab(), die sie beim Schliessen bzw.
      * Tabwechsel leeren) und bezieht sich dann garantiert auf genau dieses
      * aktive Dokument (Suche laeuft immer auf active_doc(), siehe
-     * perform_live_search()/perform_find()). */
+     * perform_live_search()/perform_find()). Klick ins Dokument entzieht
+     * der Suchleiste aber nur den Fokus, schliesst sie NICHT (siehe
+     * on_mouse()) - tippt der Nutzer danach direkt im Dokument weiter, ohne
+     * die Suchleiste erneut zu beruehren, veraltet g_match_starts/g_match_ends
+     * gegenueber den jetzt verschobenen Byte-Offsets. g_match_edit_seq
+     * (siehe dortiger Kommentar) faengt das ab: weicht es vom aktuellen
+     * edit_seq ab, werden 0 Treffer statt der veralteten Bereiche gezeichnet. */
+    size_t render_match_count = (g_match_edit_seq == active->editor.edit_seq) ? g_match_count : 0;
     btn_render_frame(ctx, content_bounds(), &active->editor, active->scroll_row,
                       btn_highlight_lang_for_path(active->path),
-                      g_match_starts, g_match_ends, g_match_count);
+                      g_match_starts, g_match_ends, render_match_count);
 }
 
 /* Klick irgendwo in der Tableiste (y schon vom Aufrufer geprueft): trifft
@@ -1866,10 +2049,14 @@ static void on_menu(int tag) {
      * der Leiste per Cmd+F (BTN_MENU_FIND, siehe open_find_bar() oben):
      * fuer eine vorausgefuellte Selektion muss der Trefferzaehler/die
      * Live-Hervorhebung sofort stimmen, nicht erst nach dem naechsten
-     * Tastendruck. Fuer Befehle, die den Suchtext gar nicht aendern (z.B.
-     * Kopieren, Alles auswaehlen), ist der erneute Aufruf ein guenstiger,
-     * folgenloser No-Op. */
-    if (g_focus == BTN_FOCUS_SEARCH) {
+     * Tastendruck. Bewusst auf genau diese Tags eingegrenzt (statt bei
+     * JEDEM Befehl zu feuern, solange das Suchfeld fokussiert ist) - ein
+     * voller Dokument-Kopie+Regex-Scan (siehe perform_live_search()) als
+     * Nebeneffekt von z.B. Zoomen oder Drucken waere bei grossen Dokumenten
+     * spuerbar und mit diesen Befehlen inhaltlich nicht verwandt. */
+    if (g_focus == BTN_FOCUS_SEARCH &&
+        (tag == BTN_MENU_FIND || tag == BTN_MENU_UNDO || tag == BTN_MENU_REDO ||
+         tag == BTN_MENU_CUT || tag == BTN_MENU_PASTE)) {
         perform_live_search();
     }
     sync_window_state();
