@@ -25,7 +25,8 @@ Graphics/Core Text gezeichnet.
   (`$1`/`\1` bzw. `$0`/`\0` für den kompletten Treffer) im Regex-Modus
 - Gehe zu Zeile (`⌘L`)
 - Dark Mode - folgt automatisch dem System-Erscheinungsbild
-- Schriftgröße anpassen (`⌘+`/`⌘-`/`⌘0` für Zurücksetzen)
+- Schriftgröße anpassen (`⌘+`/`⌘-`/`⌘0` für Zurücksetzen) - wird über
+  Neustarts hinweg gemerkt
 - Undo/Redo mit Coalescing aufeinanderfolgender Tastendrücke
 - Klammern und Anführungszeichen: Auto-Vervollständigung/Typdurchlauf für
   `()`, `[]`, `{}`, `""`, `''`, sowie Hervorhebung des zusammengehörigen Paars

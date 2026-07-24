@@ -239,6 +239,54 @@ static void load_recent_files(void) {
     fclose(f);
 }
 
+/* Persistiert die per Cmd+/Cmd-/Cmd+0 eingestellte Schriftgroesse als
+ * einzelne Zahl unter ~/.btnedit_prefs - aus denselben Gruenden wie
+ * ~/.btnedit_recent oben (siehe recent_file_list_path()) eine eigene Datei
+ * statt NSUserDefaults, damit main.c Cocoa-frei bleibt. Ohne das wuerde
+ * jeder Neustart wieder bei BTN_DEFAULT_FONT_SIZE (13pt) anfangen, egal
+ * welchen Zoom der Nutzer zuletzt eingestellt hatte. */
+static char *prefs_file_path(void) {
+    const char *home = getenv("HOME");
+    if (!home) {
+        return NULL;
+    }
+    size_t len = strlen(home) + strlen("/.btnedit_prefs") + 1;
+    char *path = malloc(len);
+    snprintf(path, len, "%s/.btnedit_prefs", home);
+    return path;
+}
+
+static void save_font_size_pref(void) {
+    char *path = prefs_file_path();
+    if (!path) {
+        return;
+    }
+    FILE *f = fopen(path, "w");
+    free(path);
+    if (!f) {
+        return;
+    }
+    fprintf(f, "%.1f\n", btn_render_get_font_size());
+    fclose(f);
+}
+
+static void load_font_size_pref(void) {
+    char *path = prefs_file_path();
+    if (!path) {
+        return;
+    }
+    FILE *f = fopen(path, "r");
+    free(path);
+    if (!f) {
+        return;
+    }
+    double size;
+    if (fscanf(f, "%lf", &size) == 1) {
+        btn_render_set_font_size(size);
+    }
+    fclose(f);
+}
+
 static void add_recent_file(const char *path) {
     for (int i = 0; i < g_recent_count; i++) {
         if (strcmp(g_recent_paths[i], path) == 0) {
@@ -2033,12 +2081,15 @@ static void on_menu(int tag) {
             break;
         case BTN_MENU_ZOOM_IN:
             btn_render_zoom_in();
+            save_font_size_pref();
             break;
         case BTN_MENU_ZOOM_OUT:
             btn_render_zoom_out();
+            save_font_size_pref();
             break;
         case BTN_MENU_ZOOM_RESET:
             btn_render_zoom_reset();
+            save_font_size_pref();
             break;
         default:
             break;
@@ -2087,6 +2138,10 @@ int main(void) {
     btn_app_build_menu();
     load_recent_files();
     recent_files_refresh_menu();
+    /* Muss vor btn_app_run() stehen, damit der allererste Redraw schon mit
+     * der zuletzt eingestellten Schriftgroesse zeichnet, statt kurz bei
+     * BTN_DEFAULT_FONT_SIZE aufzublitzen. */
+    load_font_size_pref();
     btn_app_run();
 
     for (int i = 0; i < g_doc_count; i++) {
