@@ -29,6 +29,25 @@ static CTFontRef g_font = NULL;
 static double g_char_width = 0.0;
 static CGColorRef g_token_colors[6] = { NULL, NULL, NULL, NULL, NULL, NULL };
 
+/* Gecachte Text-/Dim-/Akzent-/Gutter-/Footer-Farben und ihre fertigen
+ * CFDictionaryRef-Attribute (Font+Farbe) - ohne diesen Cache wuerden
+ * draw_gutter()/draw_footer()/btn_render_tab_bar()/btn_render_find_bar()/
+ * btn_render_frame() bei JEDEM Redraw (also bei jedem Tastendruck, da die
+ * App das komplette Fenster neu zeichnet statt nur die betroffene Region)
+ * dieselben CGColorRef/CFDictionaryRef-Objekte neu anlegen und sofort
+ * wieder freigeben - reiner Overhead, da Font und Farben sich zwischen zwei
+ * Tastendruecken so gut wie nie aendern. Analog zu get_token_color() unten. */
+static CGColorRef g_text_color = NULL;
+static CGColorRef g_dim_color = NULL;
+static CGColorRef g_accent_color = NULL;
+static CGColorRef g_gutter_text_color = NULL;
+static CGColorRef g_footer_text_color = NULL;
+static CFDictionaryRef g_text_attrs = NULL;
+static CFDictionaryRef g_dim_attrs = NULL;
+static CFDictionaryRef g_accent_attrs = NULL;
+static CFDictionaryRef g_gutter_attrs = NULL;
+static CFDictionaryRef g_footer_attrs = NULL;
+
 /* 0 = Light Mode, 1 = Dark Mode - main.c setzt das bei jedem Redraw frisch
  * (siehe btn_render_set_dark_mode() in render.h). */
 static int g_dark_mode = 0;
@@ -121,23 +140,35 @@ static CGColorRef get_token_color(BtnTokenKind kind) {
     return g_token_colors[kind];
 }
 
-/* Verwirft gecachte Ressourcen, die von Schriftgroesse/Modus abhaengen -
- * gemeinsam genutzt von btn_render_set_dark_mode() (Token-Farben) und
- * btn_render_set_font_size() (Font/Zeichenbreite). */
-static void invalidate_token_color_cache(void) {
+/* Verwirft alle gecachten Ressourcen, die von Schriftgroesse/Modus abhaengen -
+ * gemeinsam genutzt von btn_render_set_dark_mode() (Farben aendern sich) und
+ * btn_render_set_font_size() (die Attribut-Dicts enthalten den Font, der
+ * Farbanteil bleibt zwar gleich, wird hier der Einfachheit halber aber
+ * mitinvalidiert statt zwei separate Cache-Ebenen zu pflegen). */
+static void invalidate_style_cache(void) {
     for (int i = 0; i < 6; i++) {
         if (g_token_colors[i]) {
             CGColorRelease(g_token_colors[i]);
             g_token_colors[i] = NULL;
         }
     }
+    if (g_text_attrs)   { CFRelease(g_text_attrs);   g_text_attrs = NULL; }
+    if (g_dim_attrs)    { CFRelease(g_dim_attrs);    g_dim_attrs = NULL; }
+    if (g_accent_attrs) { CFRelease(g_accent_attrs); g_accent_attrs = NULL; }
+    if (g_gutter_attrs) { CFRelease(g_gutter_attrs); g_gutter_attrs = NULL; }
+    if (g_footer_attrs) { CFRelease(g_footer_attrs); g_footer_attrs = NULL; }
+    if (g_text_color)        { CGColorRelease(g_text_color);        g_text_color = NULL; }
+    if (g_dim_color)         { CGColorRelease(g_dim_color);         g_dim_color = NULL; }
+    if (g_accent_color)      { CGColorRelease(g_accent_color);      g_accent_color = NULL; }
+    if (g_gutter_text_color) { CGColorRelease(g_gutter_text_color); g_gutter_text_color = NULL; }
+    if (g_footer_text_color) { CGColorRelease(g_footer_text_color); g_footer_text_color = NULL; }
 }
 
 void btn_render_set_dark_mode(int dark) {
     int new_dark = dark ? 1 : 0;
     if (new_dark != g_dark_mode) {
         g_dark_mode = new_dark;
-        invalidate_token_color_cache();
+        invalidate_style_cache();
     }
 }
 
@@ -164,6 +195,7 @@ void btn_render_set_font_size(double size) {
         g_font = NULL;
     }
     g_char_width = 0.0; /* neu vermessen bei naechstem get_char_width() */
+    invalidate_style_cache(); /* Attribut-Dicts referenzieren noch den alten Font */
 }
 
 double btn_render_get_font_size(void) {
@@ -187,6 +219,78 @@ static CFDictionaryRef make_attrs(CTFontRef font, CGColorRef color) {
     CFTypeRef values[] = { font, color };
     return CFDictionaryCreate(NULL, (const void **)keys, (const void **)values, 2,
                                &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+}
+
+/* ---- Gecachte Farben/Attribute (siehe Kommentar bei den g_*-Globalen oben) ---- */
+
+static CGColorRef get_text_color(void) {
+    if (!g_text_color) {
+        g_text_color = create_cg_color(col_text());
+    }
+    return g_text_color;
+}
+
+static CGColorRef get_dim_color(void) {
+    if (!g_dim_color) {
+        g_dim_color = create_cg_color(col_dim());
+    }
+    return g_dim_color;
+}
+
+static CGColorRef get_accent_color(void) {
+    if (!g_accent_color) {
+        g_accent_color = create_cg_color(col_accent());
+    }
+    return g_accent_color;
+}
+
+static CGColorRef get_gutter_text_color(void) {
+    if (!g_gutter_text_color) {
+        g_gutter_text_color = create_cg_color(col_gutter_text());
+    }
+    return g_gutter_text_color;
+}
+
+static CGColorRef get_footer_text_color(void) {
+    if (!g_footer_text_color) {
+        g_footer_text_color = create_cg_color(col_footer_text());
+    }
+    return g_footer_text_color;
+}
+
+static CFDictionaryRef get_text_attrs(void) {
+    if (!g_text_attrs) {
+        g_text_attrs = make_attrs(get_font(), get_text_color());
+    }
+    return g_text_attrs;
+}
+
+static CFDictionaryRef get_dim_attrs(void) {
+    if (!g_dim_attrs) {
+        g_dim_attrs = make_attrs(get_font(), get_dim_color());
+    }
+    return g_dim_attrs;
+}
+
+static CFDictionaryRef get_accent_attrs(void) {
+    if (!g_accent_attrs) {
+        g_accent_attrs = make_attrs(get_font(), get_accent_color());
+    }
+    return g_accent_attrs;
+}
+
+static CFDictionaryRef get_gutter_attrs(void) {
+    if (!g_gutter_attrs) {
+        g_gutter_attrs = make_attrs(get_font(), get_gutter_text_color());
+    }
+    return g_gutter_attrs;
+}
+
+static CFDictionaryRef get_footer_attrs(void) {
+    if (!g_footer_attrs) {
+        g_footer_attrs = make_attrs(get_font(), get_footer_text_color());
+    }
+    return g_footer_attrs;
 }
 
 static double get_char_width(void) {
@@ -366,7 +470,7 @@ size_t btn_layout_row_for_offset(const BtnRow *rows, size_t row_count, size_t of
 /* ---- Zeichnen ---- */
 
 static void draw_gutter(CGContextRef ctx, CGRect bounds, const BtnRow *rows, size_t row_count,
-                         long scroll_row, CTFontRef font) {
+                         long scroll_row) {
     set_fill(ctx, col_gutter_bg());
     CGContextFillRect(ctx, CGRectMake(0, BTN_FOOTER_HEIGHT, GUTTER_WIDTH, bounds.size.height - BTN_FOOTER_HEIGHT));
 
@@ -375,8 +479,7 @@ static void draw_gutter(CGContextRef ctx, CGRect bounds, const BtnRow *rows, siz
     CGPoint divider[2] = { { GUTTER_WIDTH, BTN_FOOTER_HEIGHT }, { GUTTER_WIDTH, bounds.size.height } };
     CGContextStrokeLineSegments(ctx, divider, 2);
 
-    CGColorRef gray = create_cg_color(col_gutter_text());
-    CFDictionaryRef attrs = make_attrs(font, gray);
+    CFDictionaryRef attrs = get_gutter_attrs();
 
     for (size_t r = (size_t)scroll_row; r < row_count; r++) {
         /* Dieselbe top_y-Formel und Abbruchbedingung wie btn_render_frame's
@@ -405,9 +508,7 @@ static void draw_gutter(CGContextRef ctx, CGRect bounds, const BtnRow *rows, siz
         CFRelease(attrStr);
         CFRelease(numStr);
     }
-
-    CFRelease(attrs);
-    CGColorRelease(gray);
+    /* attrs ist gecacht (siehe get_gutter_attrs()) - keine Freigabe hier. */
 }
 
 static void draw_footer(CGContextRef ctx, CGRect bounds, Editor *ed) {
@@ -419,8 +520,7 @@ static void draw_footer(CGContextRef ctx, CGRect bounds, Editor *ed) {
     CGPoint divider[2] = { { 0, BTN_FOOTER_HEIGHT }, { bounds.size.width, BTN_FOOTER_HEIGHT } };
     CGContextStrokeLineSegments(ctx, divider, 2);
 
-    CGColorRef gray = create_cg_color(col_footer_text());
-    CFDictionaryRef attrs = make_attrs(get_font(), gray);
+    CFDictionaryRef attrs = get_footer_attrs();
 
     size_t cur_line = editor_offset_to_line(ed, ed->cursor);
     size_t col = editor_visual_column(ed, ed->cursor);
@@ -452,9 +552,7 @@ static void draw_footer(CGContextRef ctx, CGRect bounds, Editor *ed) {
     CFRelease(rightLine);
     CFRelease(rightAttrStr);
     CFRelease(rightStr);
-
-    CFRelease(attrs);
-    CGColorRelease(gray);
+    /* attrs ist gecacht (siehe get_footer_attrs()) - keine Freigabe hier. */
 }
 
 /* Zeichnet text linksbuendig bei (x,y) mit den gegebenen Attributen -
@@ -522,11 +620,8 @@ void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labe
     set_fill(ctx, col_tab_bar_bg());
     CGContextFillRect(ctx, CGRectMake(0, bar_top, bounds.size.width, BTN_TAB_BAR_HEIGHT));
 
-    CTFontRef font = get_font();
-    CGColorRef textColor = create_cg_color(col_text());
-    CGColorRef dimColor = create_cg_color(col_dim());
-    CFDictionaryRef attrs = make_attrs(font, textColor);
-    CFDictionaryRef dimAttrs = make_attrs(font, dimColor);
+    CFDictionaryRef attrs = get_text_attrs();
+    CFDictionaryRef dimAttrs = get_dim_attrs();
 
     for (int i = 0; i < count; i++) {
         double tab_x = (double)i * tab_width;
@@ -581,11 +676,8 @@ void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labe
     CGContextSetLineWidth(ctx, 1.0);
     CGPoint bottom_divider[2] = { { 0, bar_top }, { bounds.size.width, bar_top } };
     CGContextStrokeLineSegments(ctx, bottom_divider, 2);
-
-    CFRelease(attrs);
-    CFRelease(dimAttrs);
-    CGColorRelease(textColor);
-    CGColorRelease(dimColor);
+    /* attrs/dimAttrs sind gecacht (siehe get_text_attrs()/get_dim_attrs()) -
+     * keine Freigabe hier. */
 }
 
 /* Zeichnet den Inhalt eines Suchen/Ersetzen-Feldes samt Selektions-
@@ -645,14 +737,10 @@ void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_lab
     set_fill(ctx, col_find_bar_bg());
     CGContextFillRect(ctx, CGRectMake(0, bar_top, bounds.size.width, BTN_FIND_BAR_HEIGHT));
 
-    CTFontRef font = get_font();
     double char_width = get_char_width();
-    CGColorRef textColor = create_cg_color(col_text());
-    CGColorRef dimColor = create_cg_color(col_dim());
-    CGColorRef accentColor = create_cg_color(col_accent());
-    CFDictionaryRef attrs = make_attrs(font, textColor);
-    CFDictionaryRef dimAttrs = make_attrs(font, dimColor);
-    CFDictionaryRef accentAttrs = make_attrs(font, accentColor);
+    CFDictionaryRef attrs = get_text_attrs();
+    CFDictionaryRef dimAttrs = get_dim_attrs();
+    CFDictionaryRef accentAttrs = get_accent_attrs();
 
     double search_label_x = BTN_FIND_BAR_PADDING;
     double search_field_x = search_label_x + BTN_FIND_LABEL_WIDTH;
@@ -697,13 +785,8 @@ void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_lab
     CGContextSetLineWidth(ctx, 1.0);
     CGPoint bottom_divider[2] = { { 0, bar_top }, { bounds.size.width, bar_top } };
     CGContextStrokeLineSegments(ctx, bottom_divider, 2);
-
-    CFRelease(attrs);
-    CFRelease(dimAttrs);
-    CFRelease(accentAttrs);
-    CGColorRelease(textColor);
-    CGColorRelease(dimColor);
-    CGColorRelease(accentColor);
+    /* attrs/dimAttrs/accentAttrs sind gecacht (siehe get_text_attrs()/
+     * get_dim_attrs()/get_accent_attrs()) - keine Freigabe hier. */
 }
 
 /* Kommentar-Zustand direkt vor logical_line, indem alle vorherigen Zeilen
@@ -904,11 +987,8 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
     set_fill(ctx, col_bg());
     CGContextFillRect(ctx, bounds);
 
-    CTFontRef font = get_font();
     double char_width = get_char_width();
-
-    CGColorRef black = create_cg_color(col_text());
-    CFDictionaryRef attrs = make_attrs(font, black);
+    CFDictionaryRef attrs = get_text_attrs();
 
     double text_width = btn_layout_text_width(bounds);
     size_t row_count;
@@ -1033,12 +1113,11 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
         }
     }
 
-    draw_gutter(ctx, bounds, rows, row_count, scroll_row, font);
+    draw_gutter(ctx, bounds, rows, row_count, scroll_row);
     draw_footer(ctx, bounds, ed);
 
     btn_layout_free(rows);
-    CFRelease(attrs);
-    CGColorRelease(black);
+    /* attrs ist gecacht (siehe get_text_attrs()) - keine Freigabe hier. */
 }
 
 size_t btn_rows_per_page(double page_height) {
@@ -1072,7 +1151,7 @@ void btn_render_print_page(CGContextRef ctx, CGRect page_rect, Editor *ed, const
     int saved_dark_mode = g_dark_mode;
     if (g_dark_mode) {
         g_dark_mode = 0;
-        invalidate_token_color_cache();
+        invalidate_style_cache();
     }
 
     CGContextSetRGBFillColor(ctx, 1.0, 1.0, 1.0, 1.0);
@@ -1104,7 +1183,7 @@ void btn_render_print_page(CGContextRef ctx, CGRect page_rect, Editor *ed, const
 
     if (saved_dark_mode) {
         g_dark_mode = 1;
-        invalidate_token_color_cache();
+        invalidate_style_cache();
     }
 }
 

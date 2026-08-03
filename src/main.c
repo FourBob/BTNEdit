@@ -35,6 +35,17 @@ typedef struct {
     size_t saved_edit_seq;
     long scroll_row;
     double scroll_accum;
+    /* Gecachtes, fertig formatiertes Tab-Label (siehe doc_display_name()),
+     * damit on_draw() es nicht bei JEDEM Redraw (jedem Tastendruck, da die
+     * App ohne Dirty-Region-Tracking das ganze Fenster neu zeichnet) fuer
+     * ALLE offenen Tabs neu zusammenbauen muss, auch fuer unveraenderte
+     * Hintergrund-Tabs. label_cache_valid=0 erzwingt einen Neuaufbau;
+     * label_cache_was_dirty haelt fest, fuer welchen doc_is_dirty()-Zustand
+     * der Cache zuletzt gebaut wurde, damit ein Wechsel des Punkt-Praefixes
+     * (ungesicherte Aenderung) den Cache verlaesslich invalidiert. */
+    char label_cache[300];
+    int label_cache_valid;
+    int label_cache_was_dirty;
 } Document;
 
 #define MAX_TABS 20
@@ -165,6 +176,7 @@ static void set_doc_path(Document *d, const char *path) {
     char *copy = path ? btn_dup_cstring(path) : NULL;
     free(d->path);
     d->path = copy;
+    d->label_cache_valid = 0; /* Basisname fuers Tab-Label hat sich geaendert */
     if (d == active_doc()) {
         btn_set_window_title(doc_display_name(d));
     }
@@ -467,6 +479,7 @@ static int add_tab(void) {
     d->saved_edit_seq = d->editor.edit_seq;
     d->scroll_row = 0;
     d->scroll_accum = 0.0;
+    d->label_cache_valid = 0;
     return g_doc_count++;
 }
 
@@ -684,6 +697,66 @@ static size_t collect_all_matches(const char *text, size_t text_len,
         scan = (me > ms) ? me : ms + 1; /* Leertreffer: mind. 1 vorruecken */
     }
     regfree(&re);
+    return count;
+}
+
+/* Wie collect_all_matches(), aber OHNE Obergrenze (waechst per realloc statt
+ * in ein Array fester Groesse zu schreiben) - nur fuer perform_replace_all()
+ * gedacht: "Alle ersetzen" ist ein einmaliger, expliziter Nutzerbefehl (kein
+ * Pro-Tastendruck-Pfad wie die Live-Suche, die BTN_MAX_SEARCH_MATCHES
+ * bewusst deckelt) und MUSS auch bei mehr als BTN_MAX_SEARCH_MATCHES
+ * Treffern (z.B. jedes Leerzeichen in einer grossen Datei) vollstaendig
+ * arbeiten statt den Rest der Datei stillschweigend unveraendert zu lassen.
+ * *out_starts/*out_ends sind NULL, wenn 0 zurueckgegeben wird, sonst muss
+ * der Aufrufer beide per free() freigeben. */
+static size_t collect_all_matches_unbounded(const char *text, size_t text_len,
+                                             size_t **out_starts, size_t **out_ends) {
+    *out_starts = NULL;
+    *out_ends = NULL;
+    if (editor_length(&g_search_editor) == 0) {
+        return 0;
+    }
+    regex_t re;
+    if (!compile_search_regex(&re)) {
+        return 0;
+    }
+    size_t cap = 0, count = 0;
+    size_t *starts = NULL, *ends = NULL;
+    size_t scan = 0;
+    regmatch_t m;
+    while (scan <= text_len) {
+        m.rm_so = (regoff_t)scan;
+        m.rm_eo = (regoff_t)text_len;
+        if (regexec(&re, text, 1, &m, regexec_flags_for(text, scan)) != 0) {
+            break;
+        }
+        size_t ms = (size_t)m.rm_so, me = (size_t)m.rm_eo;
+        if (count == cap) {
+            size_t new_cap = cap ? cap * 2 : 256;
+            /* Direkt zuweisen wuerde bei fehlgeschlagenem realloc() den
+             * alten (noch gueltigen) Zeiger verlieren - stattdessen in eine
+             * temporaere Variable, bei Fehlschlag mit den bisher
+             * gefundenen Treffern abbrechen statt abzustuerzen. */
+            size_t *new_starts = realloc(starts, new_cap * sizeof(size_t));
+            if (!new_starts) {
+                break;
+            }
+            starts = new_starts;
+            size_t *new_ends = realloc(ends, new_cap * sizeof(size_t));
+            if (!new_ends) {
+                break;
+            }
+            ends = new_ends;
+            cap = new_cap;
+        }
+        starts[count] = ms;
+        ends[count] = me;
+        count++;
+        scan = (me > ms) ? me : ms + 1; /* Leertreffer: mind. 1 vorruecken */
+    }
+    regfree(&re);
+    *out_starts = starts;
+    *out_ends = ends;
     return count;
 }
 
@@ -1055,50 +1128,50 @@ static void perform_replace_all(void) {
         }
     }
 
-    size_t from = 0;
-    int count = 0;
+    /* Alle Treffer EINMAL im unveraenderten Ausgangsdokument sammeln, statt
+     * (wie zuvor) bei jedem einzelnen Treffer das inzwischen teils schon
+     * ersetzte Dokument komplett neu zu kopieren und erneut zu durchsuchen -
+     * das war O(Treffer * Dokumentlaenge), jetzt O(Dokumentlaenge) fuer die
+     * Suche plus die ohnehin noetigen Ersetzungen selbst. Treffer sind nicht
+     * ueberlappend und aufsteigend sortiert (siehe
+     * collect_all_matches_unbounded()) - jede Ersetzung betrifft daher nur
+     * den Bereich VOR dem naechsten Treffer, sodass orig_text ab dessen
+     * Originalposition weiterhin byte-identisch mit dem Live-Puffer an der
+     * um delta verschobenen Position ist. */
+    size_t orig_len;
+    char *orig_text = editor_copy_all(ed, &orig_len);
+    size_t *starts, *ends;
+    size_t match_count = collect_all_matches_unbounded(orig_text, orig_len, &starts, &ends);
 
-    while (1) {
-        size_t len;
-        char *text = editor_copy_all(ed, &len);
-        if (from > len) {
-            free(text);
-            break;
-        }
-        size_t match_start, match_end;
-        /* wrap=0: sonst wuerde die Schleife, sobald sie einmal das
-         * Dokumentende erreicht, wieder vorne anfangen und bereits
-         * ersetzte Treffer erneut finden - eine Endlosschleife. */
-        int found = find_match(text, len, from, 1, 0, &match_start, &match_end);
-        if (!found) {
-            free(text);
-            break;
-        }
+    long delta = 0;
+    for (size_t i = 0; i < match_count; i++) {
+        size_t match_start = starts[i];
+        size_t match_end = ends[i];
+
         size_t replace_len;
         char *replace_text;
         if (per_match_expansion) {
-            replace_text = expand_replacement(text, len, match_start, &replace_len);
+            replace_text = expand_replacement(orig_text, orig_len, match_start, &replace_len);
         } else {
             replace_text = fixed_replace_text;
             replace_len = fixed_replace_len;
         }
-        free(text);
-        editor_set_cursor(ed, match_start, 0);
-        editor_set_cursor(ed, match_end, 1);
+
+        size_t live_start = (size_t)((long)match_start + delta);
+        size_t live_end = (size_t)((long)match_end + delta);
+        editor_set_cursor(ed, live_start, 0);
+        editor_set_cursor(ed, live_end, 1);
         replace_selection(ed, replace_text, replace_len);
-        /* Bei leerem Treffer UND leerem Ersetzungstext wuerde from sonst
-         * nicht vorruecken (Leertreffer an derselben Stelle immer wieder
-         * "ersetzt") - mindestens 1 Byte Fortschritt erzwingen. */
-        size_t advance = replace_len;
-        if (advance == 0 && match_end == match_start) {
-            advance = 1;
-        }
-        from = match_start + advance;
-        count++;
+
+        delta += (long)replace_len - (long)(match_end - match_start);
         if (per_match_expansion) {
             free(replace_text);
         }
     }
+    int count = (int)match_count;
+    free(starts);
+    free(ends);
+    free(orig_text);
     free(fixed_replace_text); /* NULL-sicher, No-Op wenn per_match_expansion galt */
 
     /* Trefferliste nach dem Ersetzen neu aufbauen - der bisherige Stand
@@ -1482,15 +1555,19 @@ static void on_draw(CGContextRef ctx, CGRect bounds) {
     btn_render_set_dark_mode(btn_app_is_dark_mode());
 
     const char *labels[MAX_TABS];
-    char label_bufs[MAX_TABS][300];
     for (int i = 0; i < g_doc_count; i++) {
         Document *d = &g_docs[i];
-        if (doc_is_dirty(d)) {
-            snprintf(label_bufs[i], sizeof(label_bufs[i]), "• %s", doc_display_name(d));
-        } else {
-            snprintf(label_bufs[i], sizeof(label_bufs[i]), "%s", doc_display_name(d));
+        int dirty = doc_is_dirty(d);
+        if (!d->label_cache_valid || d->label_cache_was_dirty != dirty) {
+            if (dirty) {
+                snprintf(d->label_cache, sizeof(d->label_cache), "• %s", doc_display_name(d));
+            } else {
+                snprintf(d->label_cache, sizeof(d->label_cache), "%s", doc_display_name(d));
+            }
+            d->label_cache_valid = 1;
+            d->label_cache_was_dirty = dirty;
         }
-        labels[i] = label_bufs[i];
+        labels[i] = d->label_cache;
     }
     btn_render_tab_bar(ctx, bounds, labels, g_doc_count, g_active_doc);
 
