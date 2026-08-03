@@ -707,8 +707,8 @@ static size_t collect_all_matches(const char *text, size_t text_len,
  * bewusst deckelt) und MUSS auch bei mehr als BTN_MAX_SEARCH_MATCHES
  * Treffern (z.B. jedes Leerzeichen in einer grossen Datei) vollstaendig
  * arbeiten statt den Rest der Datei stillschweigend unveraendert zu lassen.
- * *out_starts/*out_ends sind NULL, wenn 0 zurueckgegeben wird, sonst muss
- * der Aufrufer beide per free() freigeben. */
+ * *out_starts und *out_ends sind NULL, wenn 0 zurueckgegeben wird, sonst
+ * muss der Aufrufer beide per free() freigeben. */
 static size_t collect_all_matches_unbounded(const char *text, size_t text_len,
                                              size_t **out_starts, size_t **out_ends) {
     *out_starts = NULL;
