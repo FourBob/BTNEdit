@@ -962,8 +962,21 @@ static int replacement_has_backreferences(const char *raw, size_t raw_len) {
  * Gruppen-Bereiche, die find_match()/collect_all_matches() (nur Gruppe 0)
  * nicht mit herausreichen. Nicht existierende oder nicht getroffene Gruppen
  * werden durch einen leeren String ersetzt (wie in den meisten Editoren/
- * sed -E ueblich). Caller muss free() aufrufen. */
-static char *expand_replacement(const char *text, size_t text_len, size_t match_start, size_t *out_len) {
+ * sed -E ueblich). Caller muss free() aufrufen.
+ *
+ * flags statt eines intern per regexec_flags_for(text, match_start)
+ * berechneten Werts: perform_replace_all() ruft das hier mit text=orig_text
+ * (dem UNVERAENDERTEN Ausgangsdokument, siehe dortiger Kommentar zur
+ * O(Dokumentlaenge)-Optimierung) auf, aber ob '^' an match_start matchen
+ * darf, haengt vom Zeichen davor im tatsaechlichen LIVE-Puffer ab - bei
+ * direkt an einen vorherigen Treffer angrenzenden Treffern kann das
+ * inzwischen dessen Ersetzungstext sein, nicht mehr das urspruengliche
+ * Zeichen aus orig_text. perform_replace_all() verfolgt diesen Live-Kontext
+ * selbst mit (ohne dafuer das Dokument erneut kopieren zu muessen) und
+ * reicht das fertige Ergebnis hier durch; perform_replace_current() (Einzel-
+ * Ersetzung auf dem echten Live-Puffer) uebergibt weiterhin einfach
+ * regexec_flags_for(text, match_start). */
+static char *expand_replacement(const char *text, size_t text_len, size_t match_start, int flags, size_t *out_len) {
     size_t raw_len;
     char *raw = editor_copy_all(&g_replace_editor, &raw_len);
     if (!g_search_regex || !replacement_has_backreferences(raw, raw_len)) {
@@ -979,7 +992,7 @@ static char *expand_replacement(const char *text, size_t text_len, size_t match_
     regmatch_t groups[BTN_MAX_REGEX_GROUPS];
     groups[0].rm_so = (regoff_t)match_start;
     groups[0].rm_eo = (regoff_t)text_len;
-    int ok = regexec(&re, text, BTN_MAX_REGEX_GROUPS, groups, regexec_flags_for(text, match_start)) == 0;
+    int ok = regexec(&re, text, BTN_MAX_REGEX_GROUPS, groups, flags) == 0;
     regfree(&re);
     if (!ok) {
         *out_len = raw_len;
@@ -1085,7 +1098,8 @@ static void perform_replace_current(void) {
     char *doc_text = editor_copy_all(ed, &doc_len);
     size_t match_start = editor_selection_start(ed);
     size_t replace_len;
-    char *replace_text = expand_replacement(doc_text, doc_len, match_start, &replace_len);
+    char *replace_text = expand_replacement(doc_text, doc_len, match_start,
+                                             regexec_flags_for(doc_text, match_start), &replace_len);
     free(doc_text);
     replace_selection(ed, replace_text, replace_len);
     free(replace_text);
@@ -1144,6 +1158,13 @@ static void perform_replace_all(void) {
     size_t match_count = collect_all_matches_unbounded(orig_text, orig_len, &starts, &ends);
 
     long delta = 0;
+    /* Nur relevant, wenn per_match_expansion (siehe expand_replacement()-
+     * Kommentar oben): verfolgt, ob '^' fuer den JEWEILS NAECHSTEN Treffer
+     * im tatsaechlichen Live-Puffer matchen darf, ohne das Dokument dafuer
+     * zu kopieren - siehe die Faelle unten. */
+    int prev_live_flags = 0;
+    size_t prev_replace_len = 0;
+    char prev_replace_last_byte = 0;
     for (size_t i = 0; i < match_count; i++) {
         size_t match_start = starts[i];
         size_t match_end = ends[i];
@@ -1151,7 +1172,31 @@ static void perform_replace_all(void) {
         size_t replace_len;
         char *replace_text;
         if (per_match_expansion) {
-            replace_text = expand_replacement(orig_text, orig_len, match_start, &replace_len);
+            int live_flags;
+            if (i > 0 && match_start == ends[i - 1]) {
+                /* Keine Luecke zum vorherigen Treffer (im Original UND damit
+                 * auch im Live-Puffer, siehe Kommentar oben) - das Zeichen
+                 * unmittelbar davor ist jetzt das letzte Zeichen von dessen
+                 * Ersetzungstext, nicht mehr das urspruengliche Zeichen aus
+                 * orig_text. War die vorherige Ersetzung leer, wurde nichts
+                 * eingefuegt - der Kontext bleibt dann exakt der, den der
+                 * vorherige Treffer selbst schon hatte (rekursiv bis zur
+                 * naechsten echten Luecke bzw. bis Treffer 0). */
+                if (prev_replace_len > 0) {
+                    live_flags = (prev_replace_last_byte != '\n') ? (REG_STARTEND | REG_NOTBOL) : REG_STARTEND;
+                } else {
+                    live_flags = prev_live_flags;
+                }
+            } else {
+                /* Luecke zum Vorgaenger (oder erster Treffer): dieser
+                 * Bereich wurde noch nie veraendert, orig_text ist hier
+                 * weiterhin exakt das, was auch im Live-Puffer steht. */
+                live_flags = regexec_flags_for(orig_text, match_start);
+            }
+            replace_text = expand_replacement(orig_text, orig_len, match_start, live_flags, &replace_len);
+            prev_live_flags = live_flags;
+            prev_replace_last_byte = (replace_len > 0) ? replace_text[replace_len - 1] : 0;
+            prev_replace_len = replace_len;
         } else {
             replace_text = fixed_replace_text;
             replace_len = fixed_replace_len;
