@@ -75,6 +75,64 @@ static NSMenu *g_recentMenu = nil;
     }
 }
 
+/* Standard-Editieraktionen (Undo/Redo/Cut/Copy/Paste/SelectAll) - werden
+ * ueber die Menue-Eintraege mit target:nil aufgerufen (siehe
+ * btn_app_build_menu() weiter unten), NICHT ueber den eigenen menuAction:/
+ * Tag-Mechanismus wie der Rest des Menues. Grund: bei target:nil schickt
+ * AppKit die Aktion die Responder-Chain hoch und liefert sie an das jeweils
+ * TATSAECHLICH fokussierte Objekt aus - ist das diese View (der normale
+ * Fall, waehrend ein Dokument/die Suchleiste editiert wird), landen wir
+ * hier und reichen es wie gewohnt an main.c weiter; ist stattdessen z.B.
+ * das Dateinamensfeld eines nativen NSSavePanel fokussiert, greift dessen
+ * eigene eingebaute Editier-Logik, OHNE dass diese View ueberhaupt beteiligt
+ * ist. Mit dem alten festen target/@selector(menuAction:) haette das Menue
+ * Cmd+C/V/X/Z/A IMMER zuerst abgefangen (AppKit prueft Menue-Tastenkuerzel
+ * vor der eigentlichen keyDown:-Zustellung) und dabei stets auf main.c's
+ * eigenem Editor-Zustand gearbeitet, selbst wenn currently ein natives
+ * Cocoa-Textfeld wie das Speichern-Dialog-Feld den echten Tastaturfokus
+ * hatte - das native Feld haette Cmd+C/V/X nie zu sehen bekommen. */
+- (void)cut:(id)sender {
+    (void)sender;
+    if (g_menu_cb) {
+        g_menu_cb(BTN_MENU_CUT);
+    }
+}
+
+- (void)copy:(id)sender {
+    (void)sender;
+    if (g_menu_cb) {
+        g_menu_cb(BTN_MENU_COPY);
+    }
+}
+
+- (void)paste:(id)sender {
+    (void)sender;
+    if (g_menu_cb) {
+        g_menu_cb(BTN_MENU_PASTE);
+    }
+}
+
+- (void)selectAll:(id)sender {
+    (void)sender;
+    if (g_menu_cb) {
+        g_menu_cb(BTN_MENU_SELECT_ALL);
+    }
+}
+
+- (void)undo:(id)sender {
+    (void)sender;
+    if (g_menu_cb) {
+        g_menu_cb(BTN_MENU_UNDO);
+    }
+}
+
+- (void)redo:(id)sender {
+    (void)sender;
+    if (g_menu_cb) {
+        g_menu_cb(BTN_MENU_REDO);
+    }
+}
+
 - (void)setFrameSize:(NSSize)newSize {
     [super setFrameSize:newSize];
     if (g_resize_cb) {
@@ -294,13 +352,19 @@ void btn_app_build_menu(void) {
         NSMenuItem *editMenuItem = [NSMenuItem new];
         [menubar addItem:editMenuItem];
         NSMenu *editMenu = [[NSMenu alloc] initWithTitle:trs(BTN_STR_EDIT_MENU)];
-        add_item(editMenu, trs(BTN_STR_UNDO), @"z", BTN_MENU_UNDO);
-        add_item(editMenu, trs(BTN_STR_REDO), @"Z", BTN_MENU_REDO);
+        /* target:nil (nicht add_item()) fuer die Standard-Editieraktionen -
+         * siehe der ausfuehrliche Kommentar bei BTNContentViews cut:/copy:/
+         * paste:/selectAll:/undo:/redo: oben, warum das noetig ist, damit
+         * Cmd+C/V/X/Z/A auch in nativen Cocoa-Textfeldern (z.B. dem
+         * Speichern-Dialog) funktionieren statt immer von diesem Menue
+         * abgefangen zu werden. */
+        [editMenu addItemWithTitle:trs(BTN_STR_UNDO) action:@selector(undo:) keyEquivalent:@"z"];
+        [editMenu addItemWithTitle:trs(BTN_STR_REDO) action:@selector(redo:) keyEquivalent:@"Z"];
         [editMenu addItem:[NSMenuItem separatorItem]];
-        add_item(editMenu, trs(BTN_STR_CUT), @"x", BTN_MENU_CUT);
-        add_item(editMenu, trs(BTN_STR_COPY), @"c", BTN_MENU_COPY);
-        add_item(editMenu, trs(BTN_STR_PASTE), @"v", BTN_MENU_PASTE);
-        add_item(editMenu, trs(BTN_STR_SELECT_ALL), @"a", BTN_MENU_SELECT_ALL);
+        [editMenu addItemWithTitle:trs(BTN_STR_CUT) action:@selector(cut:) keyEquivalent:@"x"];
+        [editMenu addItemWithTitle:trs(BTN_STR_COPY) action:@selector(copy:) keyEquivalent:@"c"];
+        [editMenu addItemWithTitle:trs(BTN_STR_PASTE) action:@selector(paste:) keyEquivalent:@"v"];
+        [editMenu addItemWithTitle:trs(BTN_STR_SELECT_ALL) action:@selector(selectAll:) keyEquivalent:@"a"];
         [editMenu addItem:[NSMenuItem separatorItem]];
         add_item(editMenu, trs(BTN_STR_FIND), @"f", BTN_MENU_FIND);
         add_item(editMenu, trs(BTN_STR_GOTO_LINE), @"l", BTN_MENU_GOTO_LINE);
