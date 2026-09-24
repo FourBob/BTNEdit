@@ -19,7 +19,8 @@ Graphics/Core Text gezeichnet.
   Zeilenenden)
 - Zeilenenden: LF (macOS/Unix), CRLF (Windows) und CR (klassisches Mac OS)
   werden beim Öffnen erkannt und beim Sichern beibehalten; umstellen über
-  Ablage > Zeilenenden. Eingefügter Text wird angepasst
+  Ablage > Zeilenenden. Eingefügter Text wird angepasst. Dateien mit
+  gemischten Zeilenenden bleiben unverändert, bis man ein Format wählt
 - Syntax-Highlighting: C/C++/Objective-C/Java, Python, Shell, JavaScript/
   TypeScript, Swift, Markdown, STL (ASCII), INI/Config, SVG, DXF (ASCII)
 - Suchen/Ersetzen mit regulären Ausdrücken (POSIX ERE), Ersetzen/Alle ersetzen;
@@ -118,7 +119,8 @@ umbenennt, muss sie dort nachziehen.
 | `test_undo` | Undo-Gruppen und Fuzzing mit simulierten Allokationsfehlern |
 | `test_save_atomic`, `test_save_links_perms`, `test_file_io` | atomares Sichern, Symlinks, Schreibschutz, Laden, Recent-Liste |
 | `test_close_flow` | Schließen/Beenden verliert nie ungesicherte Änderungen |
-| `test_eol` | Zeilenenden: Erkennung, bytegenauer Round-Trip LF/CRLF/CR, gemischte Dateien, Einfügen |
+| `test_eol` | Zeilenenden: Erkennung, bytegenauer Round-Trip LF/CRLF/CR, Umwandeln aus zwei Pufferhälften |
+| `test_eol_glue` | Laden/Sichern/Menü aus `main.c` mit echten Dateien: gemischte und Binärdateien bleiben bytegleich |
 | `test_gapbuffer`, `test_oom` | Gap-Buffer und Speichermangel-Helfer |
 | `test_strings`, `test_tab_label`, `test_font_size`, `test_row_capacity` | Übersetzungstabelle, Tab-Beschriftung, Schriftgröße, sichtbare Zeilen |
 

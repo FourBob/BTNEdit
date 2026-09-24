@@ -184,11 +184,11 @@ size_t editor_selection_end(Editor *ed);
 int editor_cursor_adjacent_bracket(Editor *ed, size_t *out_pos);
 int editor_find_matching_bracket(Editor *ed, size_t offset, size_t *out_match);
 
-/* Fuegt text am Cursor ein (ersetzt eine Selektion). In einem Dokument
- * werden "\r\n" und '\r' zu '\n' (siehe eol.h), in einem einzeiligen Feld
- * '\n'/'\r' zu ' '. editor_set_text() vereinheitlicht dagegen NICHT - das
- * erledigt main.c beim Laden, damit eine per "Trotzdem oeffnen" geladene
- * Binaerdatei ihre '\r'-Bytes behaelt. */
+/* Fuegt text am Cursor ein (ersetzt eine Selektion) - in einem Dokument
+ * genau diese len Bytes (Aufrufer wie wrap_selection_with() und "Alle
+ * ersetzen" rechnen damit), in einem einzeiligen Feld mit '\n'/'\r' als ' '.
+ * Zeilenenden vereinheitlicht main.c dort, wo Text von aussen kommt (Laden,
+ * Einfuegen aus der Zwischenablage), siehe eol.h. */
 void editor_insert_text(Editor *ed, const char *text, size_t len);
 void editor_delete_backward(Editor *ed);
 void editor_delete_forward(Editor *ed);

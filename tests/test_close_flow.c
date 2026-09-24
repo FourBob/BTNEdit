@@ -3,20 +3,17 @@
 #include <stdio.h>
 #include <stddef.h>
 
-/* Minimal-Stubs fuer den aus main.c extrahierten should_close(): nur das,
- * was die Funktion anfasst. */
+#include "editor.h"
+#include "eol.h"
+
+/* Echtes Document samt doc_is_dirty()/mark_doc_saved() aus main.c, dazu
+ * Stubs fuer den Rest dessen, was should_close() anfasst. */
+#include "doc_extracted.h"
 #define MAX_TABS 20
-typedef struct {
-    struct { size_t edit_seq; } editor;
-    size_t saved_edit_seq;
-} Document;
 
 static Document g_docs[MAX_TABS];
 static int g_doc_count = 0;
 static int g_active_doc = 0;
-
-static int doc_is_dirty(Document *d) { return d->editor.edit_seq != d->saved_edit_seq; }
-static void mark_doc_saved(Document *d) { d->saved_edit_seq = d->editor.edit_seq; }
 static void switch_to_tab(int idx) { g_active_doc = idx; }
 static void btn_app_request_redraw(void) {}
 static const char *doc_display_name(Document *d) { (void)d; return "doc"; }
@@ -35,7 +32,7 @@ static int perform_save_doc(Document *d, int force) {
     g_save_calls++;
     int idx = (int)(d - g_docs);
     if (g_save_result[idx]) {
-        d->saved_edit_seq = d->editor.edit_seq;
+        mark_doc_saved(d);
     }
     return g_save_result[idx];
 }
@@ -93,6 +90,16 @@ int main(void) {
     /* Kein dirty Tab: sofort 1 */
     g_doc_count = 1; g_docs[0].editor.edit_seq = 3; g_docs[0].saved_edit_seq = 3;
     check(should_close() == 1, "S5 clean doc -> 1 without dialog");
+
+    /* Nur das Zeilenende umgestellt (Inhalt unveraendert): gilt als
+     * ungesichert, "Nicht sichern" markiert es sauber. */
+    g_doc_count = 1; g_active_doc = 0; g_save_calls = 0;
+    g_docs[0].eol = BTN_EOL_CRLF; g_docs[0].saved_eol = BTN_EOL_LF;
+    check(doc_is_dirty(&g_docs[0]), "S6 line-ending change alone makes the doc dirty");
+    g_alert_choice[0] = 2;
+    check(should_close() == 1 && !doc_is_dirty(&g_docs[0]), "S6 'Don't Save' marks the line-ending change clean");
+    g_docs[0].eol_raw = 0; g_docs[0].saved_eol_raw = 1;
+    check(doc_is_dirty(&g_docs[0]), "S7 converting a mixed file (raw -> uniform) makes the doc dirty");
 
     printf(failures ? "\n%d TEST(S) FAILED\n" : "\nALL TESTS PASSED\n", failures);
     return failures ? 1 : 0;

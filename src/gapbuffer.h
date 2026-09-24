@@ -46,6 +46,15 @@ static inline char gb_char_at(const GapBuffer *gb, size_t pos) {
     return gb->data[pos + (gb->gap_end - gb->gap_start)];
 }
 
+/* Die beiden Haelften des Inhalts (vor und hinter der Luecke), ohne Kopie -
+ * gueltig bis zur naechsten Aenderung des Puffers. */
+static inline void gb_segments(const GapBuffer *gb, const char **a, size_t *alen, const char **b, size_t *blen) {
+    *a = gb->data;
+    *alen = gb->gap_start;
+    *b = gb->data + gb->gap_end;
+    *blen = gb->capacity - gb->gap_end;
+}
+
 /* Gibt einen neu allokierten, NUL-terminierten Ausschnitt zurueck (caller muss free() aufrufen). */
 char *gb_copy_range(const GapBuffer *gb, size_t start, size_t len);
 

@@ -1,6 +1,8 @@
 /* Zeilenenden (eol.c): Erkennung, Vereinheitlichung, Zurueckwandeln beim
- * Sichern - bytegenauer Round-Trip fuer LF/CRLF/CR, gemischte Dateien,
- * Einfuegen im Editor, Laufzeit bei 100 MB. */
+ * Sichern - bytegenauer Round-Trip fuer LF/CRLF/CR, Umwandeln gemischter
+ * Eingaben, Aufteilung in zwei Gap-Buffer-Haelften, exakte Einfuegelaenge
+ * im Editor, Laufzeit bei 100 MB. Das Zusammenspiel in main.c (Laden,
+ * Sichern, Menue) prueft test_eol_glue.c. */
 #define _POSIX_C_SOURCE 199309L
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,6 +27,11 @@ static void test_detect(void) {
         { "a\r\r\n", BTN_EOL_CRLF, 1 },   /* CR + CRLF, Gleichstand: CRLF vor CR */
         { "\n\r", BTN_EOL_LF, 1 },        { "a\rb\rc\r\n", BTN_EOL_CR, 1 },
         { "\r\n\r\n\r\n", BTN_EOL_CRLF, 0 },
+        /* '\r' als Nutzdaten - muss als gemischt erkannt werden, damit main.c
+         * die Datei unveraendert laesst */
+        { "10%\r20%\r30%\rdone\nnext\n", BTN_EOL_CR, 1 },   /* Fortschrittszeilen */
+        { "a\nb\n-x\r\n+y\r\nc\n", BTN_EOL_LF, 1 },       /* Patch mit CRLF-Zeilen */
+        { "a\nb\n\r", BTN_EOL_LF, 1 },                      /* '\r' am Dateiende */
     };
     for (size_t i = 0; i < sizeof c / sizeof c[0]; i++) {
         int mixed = -1;
@@ -48,8 +55,16 @@ static void test_normalize_encode(void) {
         CHECK(got == strlen(n[i].out) && memcmp(buf, n[i].out, got) == 0, "normalize case %zu", i);
     }
     size_t ol;
-    CHECK(btn_eol_encode("a\nb", 3, BTN_EOL_LF, &ol) == NULL && ol == 3, "encode LF returns NULL");
-    char *e = btn_eol_encode("a\nb\n", 4, BTN_EOL_CRLF, &ol);
+    char *e = btn_eol_encode("a\nb", 3, BTN_EOL_LF, &ol);
+    CHECK(e && ol == 3 && memcmp(e, "a\nb", 3) == 0 && e[3] == 0, "encode LF copies");
+    free(e);
+    e = btn_eol_encode("a\r\nb\rc\n\r", 8, BTN_EOL_LF, &ol);
+    CHECK(e && ol == 7 && memcmp(e, "a\nb\nc\n\n", 7) == 0, "encode LF also converts CRLF/CR (explicit choice)");
+    free(e);
+    e = btn_eol_encode("a\r\r\nb", 6, BTN_EOL_CRLF, &ol);
+    CHECK(e && ol == 7 && memcmp(e, "a\r\n\r\nb", 7) == 0, "encode CR + CRLF -> two CRLF");
+    free(e);
+    e = btn_eol_encode("a\nb\n", 4, BTN_EOL_CRLF, &ol);
     CHECK(e && ol == 6 && memcmp(e, "a\r\nb\r\n", 6) == 0 && e[6] == 0, "encode CRLF");
     free(e);
     e = btn_eol_encode("a\nb\n", 4, BTN_EOL_CR, &ol);
@@ -99,64 +114,72 @@ static void test_roundtrip(void) {
         CHECK(memchr(work, '\r', nlen) == NULL, "no CR after normalize");
         size_t olen;
         char *enc = btn_eol_encode(work, nlen, det, &olen);
-        const char *saved = enc ? enc : work;
-        CHECK(olen == len && memcmp(saved, file, len) == 0, "round trip %s not byte-identical (iter %d)", btn_eol_name(eol), iter);
+        CHECK(olen == len && memcmp(enc, file, len) == 0, "round trip %s not byte-identical (iter %d)", btn_eol_name(eol), iter);
+        free(enc);
+        /* dasselbe aus zwei Haelften (Gap-Buffer), an jeder Trennstelle */
+        size_t split = rnd((unsigned)nlen + 1);
+        enc = btn_eol_encode_segments(work, split, work + split, nlen - split, det, &olen);
+        CHECK(olen == len && memcmp(enc, file, len) == 0, "segmented round trip (iter %d, split %zu)", iter, split);
         free(enc);
     }
 }
 
-/* Gemischt: nach dem Sichern steht ueberall das vorherrschende Format, der
- * Text dazwischen bleibt gleich. */
-static void test_mixed(void) {
-    static char file[8192], work[8192], norm_before[8192];
-    for (int iter = 0; iter < 5000; iter++) {
-        size_t len = 0, lines = 2 + rnd(10);
-        for (size_t l = 0; l < lines; l++) {
-            len += random_line(file + len);
-            const char *e = eol_str((BtnEol)rnd(3));
-            memcpy(file + len, e, strlen(e));
-            len += strlen(e);
-        }
+/* Zwei Haelften: "\r" am Ende von a und "\n" am Anfang von b sind EIN CRLF. */
+static void test_segments(void) {
+    size_t ol;
+    char *e = btn_eol_encode_segments("x\r", 2, "\ny", 2, BTN_EOL_CRLF, &ol);
+    CHECK(e && ol == 4 && memcmp(e, "x\r\ny", 4) == 0, "CRLF split across segments stays one line ending");
+    free(e);
+    e = btn_eol_encode_segments("x\r", 2, "", 0, BTN_EOL_LF, &ol);
+    CHECK(e && ol == 2 && memcmp(e, "x\n", 2) == 0, "CR at end of last segment");
+    free(e);
+    e = btn_eol_encode_segments("", 0, "", 0, BTN_EOL_CRLF, &ol);
+    CHECK(e && ol == 0 && e[0] == 0, "empty segments");
+    free(e);
+    /* zufaellige Eingaben: jede Trennstelle ergibt dasselbe wie am Stueck */
+    static char in[512];
+    for (int iter = 0; iter < 20000; iter++) {
+        size_t len = rnd(40);
+        for (size_t i = 0; i < len; i++) in[i] = "ab\r\n"[rnd(4)];
+        BtnEol eol = (BtnEol)rnd(3);
+        size_t l1, l2;
+        char *whole = btn_eol_encode(in, len, eol, &l1);
+        size_t split = rnd((unsigned)len + 1);
+        char *parts = btn_eol_encode_segments(in, split, in + split, len - split, eol, &l2);
+        CHECK(l1 == l2 && memcmp(whole, parts, l1) == 0, "segments == whole (iter %d)", iter);
         int mixed;
-        BtnEol det = btn_eol_detect(file, len, &mixed);
-        memcpy(work, file, len);
-        size_t nlen = btn_eol_normalize(work, len);
-        memcpy(norm_before, work, nlen);
-        size_t olen;
-        char *enc = btn_eol_encode(work, nlen, det, &olen);
-        const char *saved = enc ? enc : work;
-        int mixed_after;
-        BtnEol det_after = btn_eol_detect(saved, olen, &mixed_after);
-        CHECK(det_after == det && !mixed_after, "mixed file saved uniformly (iter %d)", iter);
-        char *again = malloc(olen + 1);
-        memcpy(again, saved, olen);
-        size_t alen = btn_eol_normalize(again, olen);
-        CHECK(alen == nlen && memcmp(again, norm_before, nlen) == 0, "mixed file text unchanged (iter %d)", iter);
-        free(again);
-        free(enc);
+        BtnEol det = btn_eol_detect(whole, l1, &mixed);
+        CHECK(!mixed, "encoded output is uniform (iter %d)", iter);
+        CHECK(det == eol || (!memchr(in, '\n', len) && !memchr(in, '\r', len)), "encoded output detected as target (iter %d)", iter);
+        free(whole);
+        free(parts);
     }
 }
 
-static void test_editor_paste(void) {
+/* editor_insert_text fuegt genau die uebergebenen Bytes ein - auch "\r\n"
+ * (roh geladene gemischte/Binaerdatei). Vorher wurde dort vereinheitlicht:
+ * Klammer-Umschliessen setzte den Cursor dann hinter das Pufferende
+ * (Heap-Ueberlauf beim naechsten Tastendruck), "Alle ersetzen" verschob
+ * alle folgenden Treffer. */
+static void test_editor_exact_insert(void) {
     Editor ed;
     editor_init(&ed);
-    editor_insert_text(&ed, "x", 1);
-    editor_insert_text(&ed, "a\r\nb\rc", 6);
+    editor_set_text(&ed, "\0A\r\nB\r\n", 7);
+    editor_set_cursor(&ed, 1, 0);
+    editor_set_cursor(&ed, 7, 1);
+    editor_handle_bracket_key(&ed, '(');
     size_t len;
     char *t = editor_copy_all(&ed, &len);
-    CHECK(len == 6 && memcmp(t, "xa\nb\nc", 6) == 0 && ed.cursor == 6, "paste normalizes CRLF/CR to LF");
+    CHECK(len == 9 && memcmp(t, "\0(A\r\nB\r\n)", 9) == 0, "wrap keeps CRLF bytes in a raw buffer");
+    CHECK(ed.anchor == 2 && ed.cursor == 8 && ed.cursor <= len, "wrap selection stays inside the buffer");
     free(t);
-    editor_undo(&ed);
+    editor_insert_text(&ed, "z", 1); /* tippt ueber die Selektion - vorher ASan-Fehler */
     t = editor_copy_all(&ed, &len);
-    CHECK(len == 1 && t[0] == 'x', "undo removes the normalized paste");
+    CHECK(len == 4 && memcmp(t, "\0(z)", 4) == 0, "typing over the wrapped selection");
     free(t);
-    editor_redo(&ed);
-    t = editor_copy_all(&ed, &len);
-    CHECK(len == 6 && memcmp(t, "xa\nb\nc", 6) == 0, "redo restores normalized paste");
-    free(t);
-    /* editor_set_text vereinheitlicht bewusst NICHT (Binaerdatei-Pfad) */
-    editor_set_text(&ed, "a\r\nb", 4);
-    CHECK(editor_length(&ed) == 4, "set_text keeps CR bytes");
+    editor_set_text(&ed, "", 0);
+    editor_insert_text(&ed, "a\r\nb\rc", 6);
+    CHECK(editor_length(&ed) == 6 && ed.cursor == 6, "insert keeps CR bytes (normalizing is main.c's job)");
     editor_free(&ed);
 
     Editor field;
@@ -201,8 +224,8 @@ int main(void) {
     test_detect();
     test_normalize_encode();
     test_roundtrip();
-    test_mixed();
-    test_editor_paste();
+    test_segments();
+    test_editor_exact_insert();
     test_large();
     printf("%s: %ld checks, %ld failures\n", fails ? "FAILED" : "ALL PASSED", checks, fails);
     return fails != 0;

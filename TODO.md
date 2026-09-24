@@ -47,11 +47,16 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
 
 ## Bekannte Einschränkungen (bewusst zurückgestellt, kein akuter Bug)
 
-- Zeilenenden: Eine Datei mit gemischten Zeilenenden wird beim Sichern
-  einheitlich im vorherrschenden Format geschrieben (Statuszeile zeigt bis
-  dahin "gemischt"). Eine per "Trotzdem öffnen" geladene Binärdatei wird
-  nicht umgewandelt (ein `\r` darin ist Nutzdaten); stellt man bei ihr das
-  Format per Menü um, wandelt das Sichern jedes `\n`-Byte um.
+- Zeilenenden: Dateien mit gemischten Zeilenenden (z.B. Logs mit
+  Fortschrittszeilen, Patches mit einzelnen CRLF-Zeilen) und Binärdateien
+  bleiben Byte für Byte, wie sie sind - ein `\r` darin wird dann wie bisher
+  als eigenes (unsichtbares) Zeichen angezeigt, Statuszeile "gemischt". Erst
+  eine Wahl in Ablage > Zeilenenden vereinheitlicht (ein Undo-Schritt; ein
+  Undo stellt den Text wieder her, gesichert wird aber im gewählten Format).
+  Bei Binärdateien ist das Menü gesperrt.
+- Eine Datei knapp unter 1 GB, als CRLF gesichert, kann über die
+  Öffnen-Grenze (`BTN_MAX_FILE_MB`) wachsen und lässt sich dann nicht mehr
+  öffnen; es gibt keine Warnung beim Sichern.
 - Jedes Zeichen (gültige UTF-8-Sequenz, sonst ein einzelnes Byte als
   Latin-1, siehe `btn_utf8_char_len`) ist genau EINE Spalte - Cursor,
   Umbruch und Zeichnen sind sich darin einig, auch bei Latin-1-Dateien.

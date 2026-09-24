@@ -26,9 +26,16 @@ BtnEol btn_eol_detect(const char *s, size_t len, int *out_mixed);
  * Rueckgabe: neue Laenge (<= len). */
 size_t btn_eol_normalize(char *s, size_t len);
 
-/* Neuer Puffer mit jedem '\n' als eol (fuers Sichern), *out_len = seine
- * Laenge. NULL bei BTN_EOL_LF - dann ist s bereits richtig. Andere '\r'
- * in s bleiben unveraendert. Freigabe mit free(). */
+/* Neuer, NUL-terminierter Puffer (fuers Sichern), in dem JEDES Zeilenende
+ * - '\n', "\r\n" oder einzelnes '\r' - als eol steht. Die Eingabe sind zwei
+ * aufeinanderfolgende Stuecke a und b (die beiden Haelften eines Gap-
+ * Buffers, siehe gb_segments()), damit beim Sichern keine zusaetzliche
+ * Kopie des ganzen Dokuments entsteht; "\r" am Ende von a und "\n" am
+ * Anfang von b zaehlen als ein CRLF. *out_len = Laenge ohne NUL. Freigabe
+ * mit free(). */
+char *btn_eol_encode_segments(const char *a, size_t alen, const char *b, size_t blen, BtnEol eol,
+                              size_t *out_len);
+/* Dasselbe fuer einen zusammenhaengenden Puffer. */
 char *btn_eol_encode(const char *s, size_t len, BtnEol eol, size_t *out_len);
 
 /* "LF", "CRLF" oder "CR" - fuer Statuszeile und Menue. */

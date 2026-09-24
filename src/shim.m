@@ -26,6 +26,7 @@ static NSMenu *g_recentMenu = nil;
 /* Die drei Eintraege von Ablage > Zeilenenden (Index wie BtnEol), fuer das
  * Haekchen per btn_app_set_line_ending_menu(). */
 static NSMenuItem *g_eolItems[3];
+static BOOL g_eolMenuEnabled = YES;
 
 @interface BTNContentView : NSView
 @end
@@ -264,6 +265,16 @@ static void btn_activate_and_focus_window(void) {
     }
 }
 
+/* NSMenu aktiviert Eintraege automatisch - hier nur die Zeilenenden sperren,
+ * solange das aktive Dokument eine Binaerdatei ist. */
+- (BOOL)validateMenuItem:(NSMenuItem *)item {
+    NSInteger tag = [item tag];
+    if (tag >= BTN_MENU_EOL_LF && tag <= BTN_MENU_EOL_CR) {
+        return g_eolMenuEnabled;
+    }
+    return YES;
+}
+
 @end
 
 static BTNMenuTarget *g_menuTarget = nil;
@@ -456,7 +467,8 @@ void btn_app_set_recent_files(const char **paths, int count) {
     }
 }
 
-void btn_app_set_line_ending_menu(int index) {
+void btn_app_set_line_ending_menu(int index, int enabled) {
+    g_eolMenuEnabled = enabled ? YES : NO;
     for (int i = 0; i < 3; i++) {
         [g_eolItems[i] setState:(i == index) ? NSControlStateValueOn : NSControlStateValueOff];
     }

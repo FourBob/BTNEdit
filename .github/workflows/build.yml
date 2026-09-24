@@ -1,8 +1,11 @@
 name: Build und Tests
 
+# Branches laufen ueber ihren Pull Request, main ueber den Push - so gibt es
+# pro Commit nur einen Lauf (macOS-Minuten zaehlen zehnfach). Ohne Pull
+# Request: "Run workflow" in GitHub (workflow_dispatch).
 on:
   push:
-    branches: [main, 'claude/**']
+    branches: [main]
   pull_request:
   workflow_dispatch:
 

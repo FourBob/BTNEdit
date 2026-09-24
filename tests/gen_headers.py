@@ -14,6 +14,7 @@ Spezifikationen pro Header:
               Zeile, die nur "}" enthaelt
   #NAME       einzeiliges #define
   struct:NAME "static struct { ... } NAME;"-Block
+  typedef:NAME "typedef struct/enum { ... } NAME;"-Block
 """
 import os
 import re
@@ -33,6 +34,11 @@ HEADERS = {
     "expensive_extracted.h": ("main.c", ["#BTN_LIVE_REGEX_MAX_COPIES",
                                          "regex_too_expensive_for_live_search"]),
     "replsel_extracted.h": ("main.c", ["replace_selection"]),
+    "doc_extracted.h": ("main.c", ["typedef:Document", "doc_is_dirty", "mark_doc_saved"]),
+    "eol_glue_extracted.h": ("main.c", [
+        "typedef:BtnReadResult", "#BTN_MAX_FILE_MB", "#BTN_MAX_FILE_SIZE", "basename_of", "looks_binary",
+        "write_stream_checked", "write_file_atomic", "write_file_contents", "read_file_contents",
+        "show_file_error", "set_doc_line_ending", "open_file_path", "perform_save_doc"]),
     "render_pure_extracted.h": ("render.c", [
         "rows_push", "layout_build", "struct:g_layout", "btn_layout_get",
         "btn_layout_row_for_offset", "btn_row_offset_for_column", "first_row_of_line",
@@ -52,6 +58,14 @@ def extract(src, spec, path):
         if not m:
             sys.exit(f"{path}: #define {spec[1:]} nicht gefunden")
         return m.group(0)
+    if spec.startswith("typedef:"):
+        name = spec[len("typedef:"):]
+        end_marker = "} " + name + ";\n"
+        end = src.find(end_marker)
+        start = src.rfind("\ntypedef ", 0, end) + 1 if end >= 0 else 0
+        if end < 0 or start <= 0:
+            sys.exit(f"{path}: typedef {name} nicht gefunden")
+        return src[start:end + len(end_marker)]
     if spec.startswith("struct:"):
         name = spec[len("struct:"):]
         end_marker = "} " + name + ";\n"

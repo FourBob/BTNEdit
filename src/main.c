@@ -25,6 +25,11 @@
 #define KEYCODE_FORWARD_DELETE 117
 #define KEYCODE_TAB            48
 
+/* on_menu() rechnet tag - BTN_MENU_EOL_LF in ein BtnEol um. */
+_Static_assert(BTN_MENU_EOL_CRLF - BTN_MENU_EOL_LF == (int)BTN_EOL_CRLF &&
+               BTN_MENU_EOL_CR - BTN_MENU_EOL_LF == (int)BTN_EOL_CR,
+               "BTN_MENU_EOL_* muss der Reihenfolge von BtnEol folgen");
+
 /* Ein offenes Dokument (ein Tab). Jedes hat seinen eigenen Puffer/Undo-
  * Verlauf/Scroll-Zustand - nur das Fenster, das Menue und die Zwischenablage
  * werden zwischen ihnen geteilt. Der Verschiebe-per-memmove-Ansatz in
@@ -35,13 +40,21 @@ typedef struct {
     Editor editor;
     char *path;            /* NULL = unbenanntes, neues Dokument */
     size_t saved_edit_seq;
-    /* Zeilenenden, mit denen gesichert wird (im Puffer steht immer '\n',
-     * siehe eol.h), und der Stand beim letzten Laden/Sichern - ein
-     * Umstellen per Menue ist eine ungesicherte Aenderung. eol_mixed: die
-     * geladene Datei hatte mehrere Arten (Statuszeile), bis zum Sichern. */
+    /* Zeilenenden (siehe eol.h). Normalfall: im Puffer steht nur '\n', eol
+     * ist das Format der Datei und wird beim Sichern wieder geschrieben.
+     * eol_raw = 1: der Puffer enthaelt die Datei Byte fuer Byte, wie sie war
+     * - bei gemischten Zeilenenden (ein '\r' kann dort Nutzdaten sein, z.B.
+     * Fortschrittszeilen in einem Log) und bei Binaerdateien; gesichert wird
+     * dann unveraendert, eol ist nur das vorherrschende Format fuer die
+     * Statuszeile. Erst eine ausdrueckliche Wahl im Menue wandelt um
+     * (set_doc_line_ending()). binary: per "Trotzdem oeffnen" geladen - das
+     * Menue ist dann gesperrt. saved_*: Stand beim letzten Laden/Sichern,
+     * ein Umstellen ist eine ungesicherte Aenderung. */
     BtnEol eol;
+    int eol_raw;
+    int binary;
     BtnEol saved_eol;
-    int eol_mixed;
+    int saved_eol_raw;
     long scroll_row;
     double scroll_accum;
     /* Gecachtes, fertig formatiertes Tab-Label (siehe doc_display_name()),
@@ -166,7 +179,7 @@ static int doc_is_dirty(Document *d) {
     /* Bewusst ueber edit_seq statt ueber undo.pos: Undo-Coalescing kann
      * pos unveraendert lassen, obwohl sich der Inhalt geaendert hat (siehe
      * editor.h-Kommentar bei edit_seq). */
-    return d->editor.edit_seq != d->saved_edit_seq || d->eol != d->saved_eol;
+    return d->editor.edit_seq != d->saved_edit_seq || d->eol != d->saved_eol || d->eol_raw != d->saved_eol_raw;
 }
 
 /* Merkt den aktuellen Stand als gesichert (nach Laden, Sichern oder "Nicht
@@ -174,6 +187,7 @@ static int doc_is_dirty(Document *d) {
 static void mark_doc_saved(Document *d) {
     d->saved_edit_seq = d->editor.edit_seq;
     d->saved_eol = d->eol;
+    d->saved_eol_raw = d->eol_raw;
 }
 
 static int is_dirty(void) {
@@ -200,7 +214,8 @@ static void set_doc_path(Document *d, const char *path) {
 
 static void sync_window_state(void) {
     btn_app_set_document_edited(is_dirty());
-    btn_app_set_line_ending_menu((int)active_doc()->eol);
+    Document *d = active_doc();
+    btn_app_set_line_ending_menu(d->eol_raw ? -1 : (int)d->eol, !d->binary);
 }
 
 /* Persistiert als einfache Zeilenliste unter ~/.btnedit_recent statt in
@@ -500,7 +515,8 @@ static int add_tab(void) {
     editor_init(&d->editor);
     d->path = NULL;
     d->eol = BTN_EOL_LF;
-    d->eol_mixed = 0;
+    d->eol_raw = 0;
+    d->binary = 0;
     mark_doc_saved(d);
     d->scroll_row = 0;
     d->scroll_accum = 0.0;
@@ -1678,19 +1694,46 @@ static int write_file_contents(const char *path, const char *data, size_t len) {
  * dortiger Kommentar), sieht eine solche Datei nicht mehr offensichtlich
  * "kaputt" aus, sondern wie plausibler, wenn auch wirrer Text - ohne diese
  * Warnung koennte ein Nutzer sie versehentlich bearbeiten und mit Cmd+S
- * ueberschreiben. Nur die ersten paar KB werden geprueft: reicht als
- * repraesentative Stichprobe und haelt die Pruefung auch bei sehr grossen
- * Dateien schnell. */
-#define BTN_BINARY_SNIFF_LEN 8192
-
+ * ueberschreiben. Geprueft wird die ganze Datei (memchr, auch bei 1 GB nur
+ * Sekundenbruchteile): eine Datei mit harmlosem Anfang und Binaerdaten
+ * dahinter (z.B. ein PDF) wuerde sonst als Text behandelt und ihre
+ * Zeilenenden beim Sichern umgewandelt. */
 static int looks_binary(const char *data, size_t len) {
-    size_t n = len < BTN_BINARY_SNIFF_LEN ? len : BTN_BINARY_SNIFF_LEN;
-    for (size_t i = 0; i < n; i++) {
-        if (data[i] == '\0') {
-            return 1;
-        }
+    return memchr(data, '\0', len) != NULL;
+}
+
+/* Waehlt per Menue die Zeilenenden, mit denen d gesichert wird. War der
+ * Puffer bisher roh (gemischte Zeilenenden), wird er jetzt vereinheitlicht -
+ * als ein Undo-Schritt, Cursor und Selektion bleiben an ihrer Textstelle.
+ * Bei einer Binaerdatei tut das nichts (Menue ist dort gesperrt). */
+static void set_doc_line_ending(Document *d, BtnEol eol) {
+    if (d->binary) {
+        return;
     }
-    return 0;
+    Editor *ed = &d->editor;
+    size_t len;
+    char *text = editor_copy_all(ed, &len);
+    if (memchr(text, '\r', len)) {
+        /* Jedes "\r\n" vor einer Position verkuerzt den Text davor um 1. */
+        size_t cur = ed->cursor, anc = ed->anchor, cur_shift = 0, anc_shift = 0;
+        for (size_t i = 0; i + 1 < len; i++) {
+            if (text[i] == '\r' && text[i + 1] == '\n') {
+                cur_shift += i < cur;
+                anc_shift += i < anc;
+            }
+        }
+        size_t new_len = btn_eol_normalize(text, len);
+        editor_begin_undo_group(ed);
+        editor_set_cursor(ed, 0, 0);
+        editor_set_cursor(ed, len, 1);
+        editor_insert_text(ed, text, new_len);
+        editor_end_undo_group(ed);
+        editor_set_cursor(ed, anc - anc_shift, 0);
+        editor_set_cursor(ed, cur - cur_shift, 1);
+    }
+    free(text);
+    d->eol = eol;
+    d->eol_raw = 0;
 }
 
 /* Gemeinsame Ladelogik fuer Datei > Oeffnen... und Klicks im "Zuletzt
@@ -1708,14 +1751,15 @@ static void open_file_path(Document *d, const char *path) {
             free(contents);
             return;
         }
-        /* Zeilenenden erkennen und im Puffer auf '\n' bringen; beim
-         * Sichern wird zurueckgewandelt. Eine Binaerdatei ("Trotzdem
-         * oeffnen") bleibt Byte fuer Byte, wie sie ist - ein '\r' darin ist
-         * Nutzdaten, kein Zeilenende. */
-        d->eol = BTN_EOL_LF;
-        d->eol_mixed = 0;
-        if (!binary) {
-            d->eol = btn_eol_detect(contents, len, &d->eol_mixed);
+        /* Einheitliche Zeilenenden erkennen und im Puffer auf '\n' bringen;
+         * beim Sichern wird zurueckgewandelt (bytegleich, wenn nichts
+         * geaendert wurde). Gemischte Dateien und Binaerdateien bleiben Byte
+         * fuer Byte, wie sie sind - ein '\r' kann dort Nutzdaten sein. */
+        int mixed = 0;
+        d->binary = binary;
+        d->eol = binary ? BTN_EOL_LF : btn_eol_detect(contents, len, &mixed);
+        d->eol_raw = binary || mixed;
+        if (!d->eol_raw) {
             len = btn_eol_normalize(contents, len);
         }
         editor_set_text(&d->editor, contents, len);
@@ -1797,17 +1841,24 @@ static int perform_save_doc(Document *d, int force_save_as) {
         path = d->path;
     }
 
-    size_t len;
-    char *contents = editor_copy_all(&d->editor, &len);
-    size_t encoded_len;
-    char *encoded = btn_eol_encode(contents, len, d->eol, &encoded_len); /* NULL bei LF */
-    int ok = write_file_contents(path, encoded ? encoded : contents, encoded ? encoded_len : len);
-    free(encoded);
+    /* Roh (gemischt/binaer) oder LF ohne '\r' im Puffer: unveraendert
+     * schreiben. Sonst direkt aus den beiden Gap-Buffer-Haelften ins
+     * Zielformat - nur eine Kopie des Dokuments im Speicher, wie bei LF. */
+    const char *seg_a, *seg_b;
+    size_t len_a, len_b, len;
+    gb_segments(&d->editor.buffer, &seg_a, &len_a, &seg_b, &len_b);
+    int has_cr = memchr(seg_a, '\r', len_a) || memchr(seg_b, '\r', len_b);
+    char *contents;
+    if (d->eol_raw || (d->eol == BTN_EOL_LF && !has_cr)) {
+        contents = editor_copy_all(&d->editor, &len);
+    } else {
+        contents = btn_eol_encode_segments(seg_a, len_a, seg_b, len_b, d->eol, &len);
+    }
+    int ok = write_file_contents(path, contents, len);
     free(contents);
 
     if (ok) {
         set_doc_path(d, path);
-        d->eol_mixed = 0; /* jetzt einheitlich in d->eol geschrieben */
         mark_doc_saved(d);
         /* d->path statt path: siehe Begruendung in open_file_path(). */
         add_recent_file(d->path);
@@ -2007,11 +2058,10 @@ static void on_draw(CGContextRef ctx, CGRect bounds) {
      * (siehe dortiger Kommentar) faengt das ab: weicht es vom aktuellen
      * edit_seq ab, werden 0 Treffer statt der veralteten Bereiche gezeichnet. */
     size_t render_match_count = (g_match_edit_seq == active->editor.edit_seq) ? g_match_count : 0;
-    char eol_label[64];
-    if (active->eol_mixed) {
-        snprintf(eol_label, sizeof(eol_label), btn_tr(BTN_STR_EOL_MIXED_FMT), btn_eol_name(active->eol));
-    } else {
-        snprintf(eol_label, sizeof(eol_label), "%s", btn_eol_name(active->eol));
+    char eol_label[64] = ""; /* Binaerdatei: kein Zeilenende-Format anzeigen */
+    if (!active->binary) {
+        snprintf(eol_label, sizeof(eol_label), active->eol_raw ? btn_tr(BTN_STR_EOL_MIXED_FMT) : "%s",
+                 btn_eol_name(active->eol));
     }
     btn_render_set_footer_eol(eol_label);
     btn_render_frame(ctx, content_bounds(), &active->editor, active->scroll_row,
@@ -2514,13 +2564,10 @@ static void on_menu(int tag) {
             break;
         case BTN_MENU_EOL_LF:
         case BTN_MENU_EOL_CRLF:
-        case BTN_MENU_EOL_CR: {
+        case BTN_MENU_EOL_CR:
             /* Gilt beim naechsten Sichern; bis dahin ungesichert (Punkt). */
-            Document *d = active_doc();
-            d->eol = (BtnEol)(tag - BTN_MENU_EOL_LF);
-            d->eol_mixed = 0;
+            set_doc_line_ending(active_doc(), (BtnEol)(tag - BTN_MENU_EOL_LF));
             break;
-        }
         case BTN_MENU_OPEN: {
             char *path = btn_show_open_panel();
             if (path) {
@@ -2570,7 +2617,13 @@ static void on_menu(int tag) {
         case BTN_MENU_PASTE: {
             size_t clip_len;
             clip = btn_pasteboard_copy_string(&clip_len);
-            /* Kein manuelles Saeubern von '\n'/'\r' mehr noetig hier -
+            /* Text aus einer Windows-App kommt mit "\r\n" - im Dokument steht
+             * nur '\n' (das Format setzt erst das Sichern), ausser der Puffer
+             * ist roh (gemischt/binaer, siehe Document). */
+            if (clip && focused_editor() == &active_doc()->editor && !active_doc()->eol_raw) {
+                clip_len = btn_eol_normalize(clip, clip_len);
+            }
+            /* Kein manuelles Saeubern von '\n'/'\r' fuer die Suchfelder noetig -
              * editor_insert_text() macht das jetzt zentral fuer jeden
              * einzeiligen Editor (siehe editor_set_single_line() in main(),
              * editor.h/.c), egal ueber welchen Weg Text eingefuegt wird.
@@ -2656,6 +2709,7 @@ int main(void) {
     btn_app_set_should_close_callback(should_close);
     btn_app_set_open_file_callback(on_open_file);
     btn_app_build_menu();
+    sync_window_state(); /* Haekchen in Ablage > Zeilenenden fuer den ersten Tab */
     load_recent_files();
     recent_files_refresh_menu();
     /* Muss vor btn_app_run() stehen, damit der allererste Redraw schon mit
