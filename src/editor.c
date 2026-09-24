@@ -164,6 +164,22 @@ size_t btn_utf8_char_len(const unsigned char *s, size_t avail) {
     return n;
 }
 
+size_t btn_utf8_seq_start(const unsigned char *s, size_t len, size_t pos) {
+    if (pos >= len) {
+        return pos;
+    }
+    size_t p = pos;
+    size_t steps = 0;
+    while (steps < 3 && p > 0 && (s[p] & 0xC0) == 0x80) {
+        p--;
+        steps++;
+    }
+    if (p < pos && btn_utf8_char_len(s + p, len - p) > pos - p) {
+        return p;
+    }
+    return pos;
+}
+
 size_t editor_char_len(Editor *ed, size_t pos, size_t limit) {
     unsigned char b[4];
     b[0] = (unsigned char)gb_char_at(&ed->buffer, pos);
@@ -345,11 +361,8 @@ void editor_set_single_line(Editor *ed, int single_line) {
  * einzeilig ist - genutzt von editor_insert_text()/editor_set_text(), damit
  * KEIN Einfuegeweg (Tippen, Einfuegen aus der Zwischenablage, künftige Wege
  * wie Drag&Drop/IME) das einzeilig-Feld je mit einem echten Zeilenumbruch
- * oder Tab durcheinanderbringen kann - Tabs wuerden sonst render.c's rein
- * byte-basierte Cursor-/Selektions-Spaltenrechnung im Suchleisten-Feld
- * gegenueber CoreTexts eigener Tab-Stop-Darstellung verschieben (dort gibt
- * es anders als beim Hauptdokument keine expand_tabs_for_display()-
- * Vorverarbeitung). Gibt NULL zurueck, wenn keine Ersetzung noetig war
+ * oder Tab durcheinanderbringen kann (ein Tab im einzeiligen Feld waere fuer
+ * den Nutzer nicht von Leerzeichen zu unterscheiden). Gibt NULL zurueck, wenn keine Ersetzung noetig war
  * (Aufrufer nutzt dann weiter das Original); sonst einen neu allokierten,
  * gleich langen Puffer (Ersetzung ist immer 1:1, keine Laengenaenderung).
  */

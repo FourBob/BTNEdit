@@ -12,11 +12,18 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
   Emoji) stimmt das aber nicht exakt mit der von Menlo gerenderten Breite
   überein (die App kennt keine East-Asian-Width-Klassifizierung) - Cursor-
   Darstellung/Klick-Position kann bei solchem Text leicht abweichen.
-- Ende/Cmd+Rechts auf einer umgebrochenen Zeile setzt den Cursor vor das
-  letzte Zeichen der Row (bei einem Umbruch an einem Leerzeichen also direkt
-  hinter das letzte Wort). Bei einem erzwungenen Umbruch mitten in einem
-  überlangen Wort steht er damit ein Zeichen vor dem Row-Ende; exakt wäre
-  nur eine Cursor-"Affinität" (oberhalb/unterhalb der Umbruchgrenze).
+- Ende/Cmd+Rechts, Auf/Ab und ein Klick hinter das Ende einer umgebrochenen
+  Row setzen den Cursor vor das letzte Zeichen der Row (bei einem Umbruch an
+  einem Leerzeichen also direkt hinter das letzte Wort). Bei einem
+  erzwungenen Umbruch mitten in einem überlangen Wort steht er damit ein
+  Zeichen vor dem Row-Ende; exakt wäre nur eine Cursor-"Affinität"
+  (oberhalb/unterhalb der Umbruchgrenze).
+- Regex-Suche arbeitet byteweise (C-Locale, kein `setlocale`): `.` oder
+  `[^a]` treffen ein einzelnes Byte eines mehrbytigen Zeichens. Treffer
+  werden deshalb auf ganze Zeichen erweitert (`regex_search_from`), damit
+  Selektion und Cursor nie mitten in einem Zeichen landen; bei einem so
+  erweiterten Treffer sind die Gruppen `$1..$9` beim Ersetzen leer, `$0` ist
+  der ganze Treffer. `.` auf "ä" trifft also "ä", `(.)` → `$1` aber nichts.
 - Klammer-/Anführungszeichen-Matching (`editor_find_matching_bracket`) kennt
   keine Strings/Kommentare - eine Klammer oder ein Anführungszeichen
   innerhalb eines String-Literals oder Kommentars kann in seltenen Fällen

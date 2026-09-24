@@ -526,6 +526,18 @@ size_t btn_layout_row_for_offset(const BtnRow *rows, size_t row_count, size_t of
     return lo;
 }
 
+size_t btn_row_offset_for_column(Editor *ed, const BtnRow *rows, size_t row_count, size_t row, size_t col) {
+    size_t row_end = rows[row].start + rows[row].len;
+    size_t offset = editor_offset_for_column_in_range(ed, rows[row].start, rows[row].len, col);
+    /* Beim Umbruch an einem Leerzeichen (Normalfall) steht der Cursor damit
+     * direkt hinter dem letzten Wort; bei einem erzwungenen Umbruch mitten
+     * in einem ueberlangen Wort ein Zeichen vor dem Row-Ende. */
+    if (offset == row_end && rows[row].len > 0 && row + 1 < row_count && rows[row + 1].is_continuation) {
+        offset = editor_utf8_seq_start(ed, row_end - 1);
+    }
+    return offset;
+}
+
 /* Index der ersten Row der logischen Zeile, zu der Row r gehoert. */
 static size_t first_row_of_line(const BtnRow *rows, size_t r) {
     while (r > 0 && rows[r].is_continuation) {
@@ -659,17 +671,10 @@ static void draw_footer(CGContextRef ctx, CGRect bounds, Editor *ed, const BtnRo
     /* attrs ist gecacht (siehe get_footer_attrs()) - keine Freigabe hier. */
 }
 
-/* Zeichnet text linksbuendig bei (x,y) mit den gegebenen Attributen -
- * kleiner gemeinsamer Helfer, um das CFString/CTLine-Boilerplate nicht
- * drei Mal (Tab-Label, Schliessen-Kreuz, "+"-Knopf) zu wiederholen. Gibt
- * die gemessene Textbreite zurueck, falls der Aufrufer zentrieren will.
- * NULL-Check nach CFStringCreateWithCString: wie bei btn_render_frame's
- * Zeilen-Zeichnung (dort mit ausfuehrlicherem Kommentar) ist text hier
- * nicht garantiert gueltiges UTF-8 (siehe utf8_safe_cut() unten fuer den
- * Fall, der diese Verteidigung noetig gemacht hat) - lieber nichts zeichnen
- * als mit NULL weiterzurechnen. */
-static double draw_text_at(CGContextRef ctx, const char *text, double x, double y, CFDictionaryRef attrs) {
-    CFStringRef str = CFStringCreateWithCString(NULL, text, kCFStringEncodingUTF8);
+/* Zeichnet str linksbuendig bei (x,y) mit den gegebenen Attributen und gibt
+ * die gemessene Textbreite zurueck. Uebernimmt str (gibt es frei); NULL
+ * (fehlgeschlagene Konvertierung) zeichnet nichts. */
+static double draw_cfstring_at(CGContextRef ctx, CFStringRef str, double x, double y, CFDictionaryRef attrs) {
     if (!str) {
         return 0.0;
     }
@@ -682,6 +687,16 @@ static double draw_text_at(CGContextRef ctx, const char *text, double x, double 
     CFRelease(attrStr);
     CFRelease(str);
     return width;
+}
+
+/* draw_cfstring_at() fuer einen UTF-8-C-String - fuer die festen Texte der
+ * Oberflaeche (Tab-Label, Schliessen-Kreuz, "+"-Knopf, Beschriftungen).
+ * Ungueltiges UTF-8 liefert NULL und zeichnet nichts; Tab-Labels sind
+ * Dateinamen (gueltiges UTF-8) und werden per utf8_safe_cut() nur an
+ * Zeichengrenzen gekuerzt. Nutzertext (Dokument, Suchfelder) geht dagegen
+ * ueber decode_row_for_display(). */
+static double draw_text_at(CGContextRef ctx, const char *text, double x, double y, CFDictionaryRef attrs) {
+    return draw_cfstring_at(ctx, CFStringCreateWithCString(NULL, text, kCFStringEncodingUTF8), x, y, attrs);
 }
 
 /* Rueckt pos zurueck, bis es nicht mehr auf ein UTF-8-Fortsetzungsbyte
@@ -808,8 +823,8 @@ void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labe
 }
 
 /* Zeichnet den Inhalt eines Suchen/Ersetzen-Feldes samt Selektions-
- * Hervorhebung und (falls focused und ohne Selektion) Cursor - byte-genaue
- * Spaltenmathematik wie beim Hauptdokument, aber ohne Tabs/Wortumbruch, weil
+ * Hervorhebung und (falls focused und ohne Selektion) Cursor - dieselbe
+ * Zeichen-Regel wie beim Hauptdokument, aber ohne Tabs/Wortumbruch, weil
  * main.c niemals '\n'/'\t' in diese Felder einfuegt (siehe editor_move()-
  * Kommentar in editor.h: BTN_MOVE_DOC_START/END sind fuer ein Feld ohne
  * Zeilenumbrueche bereits genau Pos1/Ende). */
@@ -833,9 +848,22 @@ static void draw_find_field(CGContextRef ctx, Editor *ed, double field_x, double
         CGContextFillRect(ctx, CGRectMake(sx, bar_top + 4.0, sw, BTN_FIND_BAR_HEIGHT - 8.0));
     }
 
+    /* Wie eine Dokument-Row dekodieren, nicht als UTF-8-C-String: nach
+     * Cmd+F mit einer Selektion aus einer Latin-1-Datei (oder mit einem
+     * NUL-Byte darin) stand hier sonst gar nichts bzw. nur der Text bis zum
+     * NUL, waehrend Cursor und Selektion nach der Zeichen-Regel weiterliefen. */
     size_t len;
     char *text = editor_copy_all(ed, &len);
-    draw_text_at(ctx, text, field_x, text_y, attrs);
+    if (text && len > 0) {
+        UniChar *u16 = malloc(len * (BTN_TAB_WIDTH > 2 ? BTN_TAB_WIDTH : 2) * sizeof(UniChar));
+        size_t *byte_to_u16 = malloc((len + 1) * sizeof(size_t));
+        if (u16 && byte_to_u16) {
+            size_t n = decode_row_for_display((const unsigned char *)text, len, u16, byte_to_u16);
+            draw_cfstring_at(ctx, CFStringCreateWithCharacters(NULL, u16, (CFIndex)n), field_x, text_y, attrs);
+        }
+        free(u16);
+        free(byte_to_u16);
+    }
     free(text);
 
     if (focused && !has_sel) {
@@ -1365,6 +1393,5 @@ size_t btn_hit_test(Editor *ed, CGRect bounds, double x, double y, long scroll_r
         col = 0;
     }
 
-    size_t offset = editor_offset_for_column_in_range(ed, rows[row].start, rows[row].len, (size_t)col);
-    return offset;
+    return btn_row_offset_for_column(ed, rows, row_count, (size_t)row, (size_t)col);
 }

@@ -597,6 +597,49 @@ static int regexec_flags_for(const char *text, size_t offset) {
     return REG_STARTEND;
 }
 
+/* Ein regexec() auf text[scan, text_len), Treffer auf ganze Zeichen
+ * erweitert. Ohne setlocale() arbeitet regex in der C-Locale byteweise: "."
+ * auf "ae" (2 Bytes) traefe nur das erste Byte, Selektion bzw. Cursor laegen
+ * mitten im Zeichen und Tippen wuerde es zerteilen. Deshalb Anfang auf den
+ * Zeichenanfang zurueck (btn_utf8_seq_start()), Ende auf das Ende des letzten
+ * beruehrten Zeichens. Steht scan auf einer Zeichengrenze, liegt der
+ * erweiterte Treffer nie vor scan - aufeinanderfolgende Treffer ueberlappen
+ * also nicht. expand_replacement() erkennt einen so erweiterten Treffer
+ * (Re-Exec liefert nicht exakt denselben Bereich) und setzt dann nur $0. */
+static int regex_search_from(const regex_t *re, const char *text, size_t text_len, size_t scan, int eflags,
+                             size_t *out_start, size_t *out_end) {
+    regmatch_t m;
+    m.rm_so = (regoff_t)scan;
+    m.rm_eo = (regoff_t)text_len;
+    if (regexec(re, text, 1, &m, eflags) != 0) {
+        return 0;
+    }
+    const unsigned char *u = (const unsigned char *)text;
+    size_t ms = (size_t)m.rm_so, me = (size_t)m.rm_eo;
+    size_t start = btn_utf8_seq_start(u, text_len, ms);
+    size_t end = start;
+    if (me > ms) {
+        size_t last = btn_utf8_seq_start(u, text_len, me - 1);
+        end = last + btn_utf8_char_len(u + last, text_len - last);
+    }
+    *out_start = start;
+    *out_end = end;
+    return 1;
+}
+
+/* Scan-Position nach einem Treffer: dahinter, bei einem Leertreffer (z.B.
+ * "a*") ein ganzes Zeichen weiter statt ein Byte - sonst stuende der
+ * naechste Scan mitten in einem mehrbytigen Zeichen. */
+static size_t regex_next_scan(const char *text, size_t text_len, size_t ms, size_t me) {
+    if (me > ms) {
+        return me;
+    }
+    if (ms >= text_len) {
+        return ms + 1;
+    }
+    return ms + btn_utf8_char_len((const unsigned char *)text + ms, text_len - ms);
+}
+
 static int find_match(const char *text, size_t text_len, size_t from, int forward, int wrap,
                        size_t *out_start, size_t *out_end) {
     if (editor_length(&g_search_editor) == 0) {
@@ -607,25 +650,13 @@ static int find_match(const char *text, size_t text_len, size_t from, int forwar
         return 0;
     }
 
-    regmatch_t m;
     int found = 0;
     size_t found_start = 0, found_end = 0;
 
     if (forward) {
-        m.rm_so = (regoff_t)from;
-        m.rm_eo = (regoff_t)text_len;
-        if (regexec(&re, text, 1, &m, regexec_flags_for(text, from)) == 0) {
-            found = 1;
-            found_start = (size_t)m.rm_so;
-            found_end = (size_t)m.rm_eo;
-        } else if (wrap && from > 0) {
-            m.rm_so = 0;
-            m.rm_eo = (regoff_t)text_len;
-            if (regexec(&re, text, 1, &m, REG_STARTEND) == 0) {
-                found = 1;
-                found_start = (size_t)m.rm_so;
-                found_end = (size_t)m.rm_eo;
-            }
+        found = regex_search_from(&re, text, text_len, from, regexec_flags_for(text, from), &found_start, &found_end);
+        if (!found && wrap && from > 0) {
+            found = regex_search_from(&re, text, text_len, 0, REG_STARTEND, &found_start, &found_end);
         }
     } else {
         size_t scan = 0;
@@ -635,12 +666,10 @@ static int find_match(const char *text, size_t text_len, size_t from, int forwar
         size_t before_start = 0, before_end = 0;
 
         while (scan <= text_len) {
-            m.rm_so = (regoff_t)scan;
-            m.rm_eo = (regoff_t)text_len;
-            if (regexec(&re, text, 1, &m, regexec_flags_for(text, scan)) != 0) {
+            size_t ms, me;
+            if (!regex_search_from(&re, text, text_len, scan, regexec_flags_for(text, scan), &ms, &me)) {
                 break;
             }
-            size_t ms = (size_t)m.rm_so, me = (size_t)m.rm_eo;
             any_found = 1;
             last_start = ms;
             last_end = me;
@@ -649,7 +678,7 @@ static int find_match(const char *text, size_t text_len, size_t from, int forwar
                 before_start = ms;
                 before_end = me;
             }
-            scan = (me > ms) ? me : ms + 1; /* Leertreffer: mind. 1 vorruecken */
+            scan = regex_next_scan(text, text_len, ms, me);
         }
 
         if (has_before) {
@@ -691,18 +720,15 @@ static size_t collect_all_matches(const char *text, size_t text_len,
     }
     size_t count = 0;
     size_t scan = 0;
-    regmatch_t m;
     while (scan <= text_len && count < max_out) {
-        m.rm_so = (regoff_t)scan;
-        m.rm_eo = (regoff_t)text_len;
-        if (regexec(&re, text, 1, &m, regexec_flags_for(text, scan)) != 0) {
+        size_t ms, me;
+        if (!regex_search_from(&re, text, text_len, scan, regexec_flags_for(text, scan), &ms, &me)) {
             break;
         }
-        size_t ms = (size_t)m.rm_so, me = (size_t)m.rm_eo;
         out_starts[count] = ms;
         out_ends[count] = me;
         count++;
-        scan = (me > ms) ? me : ms + 1; /* Leertreffer: mind. 1 vorruecken */
+        scan = regex_next_scan(text, text_len, ms, me);
     }
     regfree(&re);
     return count;
@@ -731,14 +757,11 @@ static size_t collect_all_matches_unbounded(const char *text, size_t text_len,
     size_t cap = 0, count = 0;
     size_t *starts = NULL, *ends = NULL;
     size_t scan = 0;
-    regmatch_t m;
     while (scan <= text_len) {
-        m.rm_so = (regoff_t)scan;
-        m.rm_eo = (regoff_t)text_len;
-        if (regexec(&re, text, 1, &m, regexec_flags_for(text, scan)) != 0) {
+        size_t ms, me;
+        if (!regex_search_from(&re, text, text_len, scan, regexec_flags_for(text, scan), &ms, &me)) {
             break;
         }
-        size_t ms = (size_t)m.rm_so, me = (size_t)m.rm_eo;
         if (count == cap) {
             size_t new_cap = cap ? cap * 2 : 256;
             /* Direkt zuweisen wuerde bei fehlgeschlagenem realloc() den
@@ -760,7 +783,7 @@ static size_t collect_all_matches_unbounded(const char *text, size_t text_len,
         starts[count] = ms;
         ends[count] = me;
         count++;
-        scan = (me > ms) ? me : ms + 1; /* Leertreffer: mind. 1 vorruecken */
+        scan = regex_next_scan(text, text_len, ms, me);
     }
     regfree(&re);
     *out_starts = starts;
@@ -984,7 +1007,9 @@ static int replacement_has_backreferences(const char *raw, size_t raw_len) {
  * anderen Treffer und nahm dessen Gruppen. match_end dient als
  * Sicherheitsnetz: liefert der Re-Exec nicht exakt [match_start, match_end),
  * sind die Gruppen unbekannt - dann wird $0 durch den bekannten Treffertext
- * und $1..$9 durch leer ersetzt, nie der rohe Ersetzungstext eingefuegt. */
+ * und $1..$9 durch leer ersetzt, nie der rohe Ersetzungstext eingefuegt.
+ * Das gilt auch fuer einen von regex_search_from() auf ganze Zeichen
+ * erweiterten Treffer - so fuegt eine Gruppe nie ein halbes Zeichen ein. */
 static char *expand_replacement(const char *text, size_t text_len, size_t match_start, size_t match_end,
                                 int flags, size_t *out_len) {
     size_t raw_len;
@@ -1265,7 +1290,7 @@ static void move_visual_row(int direction, int extend) {
         new_col = editor_visual_column_in_range(ed, rows[cur_row].start, new_offset);
     } else {
         size_t target_row = (direction < 0) ? cur_row - 1 : cur_row + 1;
-        new_offset = editor_offset_for_column_in_range(ed, rows[target_row].start, rows[target_row].len, col);
+        new_offset = btn_row_offset_for_column(ed, rows, row_count, target_row, col);
         new_col = col;
     }
     commit_cursor(new_offset, extend, new_col);
@@ -1280,17 +1305,12 @@ static void move_row_edge(int to_end, int extend) {
     const BtnRow *rows;
     size_t row_count = build_current_rows(&rows);
     size_t cur_row = btn_layout_row_for_offset(rows, row_count, ed->cursor);
-    size_t new_offset = to_end ? rows[cur_row].start + rows[cur_row].len : rows[cur_row].start;
-    /* Bei einer umgebrochenen Zeile ist das Row-Ende zugleich der Anfang der
-     * naechsten Row - dort gezeichnet landete der Cursor am Anfang der
-     * FOLGENDEN Row, ein zweites Ende sprang eine weitere Row weiter und Pos1
-     * schien nichts zu tun. Deshalb vor dem letzten Zeichen der Row bleiben:
-     * beim Umbruch an einem Leerzeichen (der Normalfall) ist das genau hinter
-     * dem letzten Wort; bei einem erzwungenen Umbruch mitten in einem
-     * ueberlangen Wort steht der Cursor ein Zeichen vor dem Row-Ende. */
-    if (to_end && cur_row + 1 < row_count && rows[cur_row + 1].is_continuation && rows[cur_row].len > 0) {
-        new_offset = editor_utf8_seq_start(ed, new_offset - 1);
-    }
+    /* Ende: btn_row_offset_for_column() bleibt bei einer umgebrochenen Zeile
+     * vor dem letzten Zeichen der Row - sonst landete der Cursor am Anfang
+     * der FOLGENDEN Row, ein zweites Ende sprang eine weitere Row weiter und
+     * Pos1 schien nichts zu tun. */
+    size_t new_offset = to_end ? btn_row_offset_for_column(ed, rows, row_count, cur_row, (size_t)-1)
+                               : rows[cur_row].start;
     commit_cursor(new_offset, extend, (size_t)-1);
 }
 

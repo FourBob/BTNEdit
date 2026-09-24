@@ -106,6 +106,13 @@ const BtnRow *btn_layout_get(Editor *ed, double text_width, size_t *out_row_coun
  * zugeschlagen, nicht dem Ende der vorherigen). */
 size_t btn_layout_row_for_offset(const BtnRow *rows, size_t row_count, size_t offset);
 
+/* Offset fuer eine visuelle Spalte in Row row (auf das Row-Ende geklemmt,
+ * (size_t)-1 = Row-Ende). Das Ende einer umgebrochenen Row ist zugleich der
+ * Anfang der naechsten und wuerde dort gezeichnet - deshalb landet das
+ * Ergebnis dann vor dem letzten Zeichen der Row. Gemeinsam fuer Auf/Ab,
+ * Ende/Cmd+Rechts und Mausklick. */
+size_t btn_row_offset_for_column(Editor *ed, const BtnRow *rows, size_t row_count, size_t row, size_t col);
+
 /* Tatsaechliche Breite eines einzelnen Tabs bei gegebener Tab-Anzahl und
  * Fensterbreite - volle BTN_TAB_ITEM_WIDTH, solange alles hineinpasst,
  * sonst gleichmaessig geschrumpft (nie unter 40pt). main.c's Hit-Testing

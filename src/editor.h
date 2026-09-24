@@ -153,6 +153,8 @@ size_t editor_char_len(Editor *ed, size_t pos, size_t limit);
 /* Anfang des Zeichens (siehe oben), das das Byte bei pos enthaelt - pos
  * selbst, wenn dort schon ein Zeichen beginnt. */
 size_t editor_utf8_seq_start(Editor *ed, size_t pos);
+/* Dasselbe fuer einen zusammenhaengenden Puffer s[0,len). */
+size_t btn_utf8_seq_start(const unsigned char *s, size_t len, size_t pos);
 
 /* Setzt suppress_coalesce - von jeder Cursor-Neupositionierung ausserhalb
  * von editor.c aufzurufen (z.B. main.c's wortumbruch-bewusste Zeilen-
