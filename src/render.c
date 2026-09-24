@@ -358,9 +358,10 @@ static size_t disp_byte_offset_in_range(Editor *ed, size_t range_start, size_t o
     return col;
 }
 
-/* CFAttributedString-Ranges zaehlen in UTF-16-Code-Units, waehrend unsere
- * eigene Spaltenrechnung (editor_visual_column_in_range) in UTF-8-Bytes
- * zaehlt. Fuer reinen ASCII-Text ist das identisch, aber jedes mehrbytige
+/* CFAttributedString-Ranges zaehlen in UTF-16-Code-Units, waehrend die
+ * Offsets, die draw_row_line() hier hereinreicht (siehe
+ * disp_byte_offset_in_range()), UTF-8-Bytes sind. Fuer reinen ASCII-Text
+ * ist das identisch, aber jedes mehrbytige
  * Zeichen wuerde sonst eine zu lange/falsche CFRange erzeugen. Dekodiert
  * einfach den Praefix bis byte_offset erneut und misst dessen echte Laenge -
  * das ist fuer die kurzen Zeilen, die wir hier behandeln, guenstig genug. */
@@ -664,10 +665,13 @@ void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labe
         /* Label ggf. kuerzen ("...") bis es in die verfuegbare Breite passt.
          * Monospace-Schrift -> Breite pro Byte ist konstant (get_char_width()),
          * eine einzige Kapazitaetsrechnung reicht statt iterativem Neumessen;
-         * wie beim Rest der App (editor_visual_column_in_range) ist das eine
-         * Byte- statt Codepoint-Naeherung, ABER utf8_safe_cut() stellt sicher,
-         * dass der Schnitt selbst nie mitten in einem mehrbytigen Zeichen
-         * landet (sonst wuerde draw_text_at() ungueltiges UTF-8 bekommen). */
+         * anders als die Cursor-/Selektionsspalten (editor_visual_column_in_range
+         * zaehlt seit dem UTF-8-Fix echte Zeichen) ist das hier bewusst noch
+         * eine Byte- statt Codepoint-Naeherung (ein Label mit vielen Umlauten
+         * wird hoechstens etwas frueher gekuerzt als noetig), ABER
+         * utf8_safe_cut() stellt sicher, dass der Schnitt selbst nie mitten
+         * in einem mehrbytigen Zeichen landet (sonst wuerde draw_text_at()
+         * ungueltiges UTF-8 bekommen). */
         double avail = tab_width - 2.0 * LEFT_PADDING - BTN_TAB_CLOSE_WIDTH;
         size_t max_bytes = (size_t)(avail / get_char_width());
         if (max_bytes < 1) {
