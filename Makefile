@@ -27,14 +27,14 @@ CFLAGS   := -Wall -Wextra -std=c11 -O2 -Isrc $(SDKFLAG) $(EXTRA_CFLAGS)
 OBJCFLAGS:= -Wall -Wextra -fno-objc-arc -O2 -Isrc $(SDKFLAG) $(EXTRA_CFLAGS)
 FRAMEWORKS := -framework Cocoa -framework CoreText -framework CoreGraphics $(SDKFLAG)
 
-SRC_C := src/main.c src/render.c src/editor.c src/gapbuffer.c src/highlight.c src/strings.c src/eol.c
+SRC_C := src/main.c src/render.c src/editor.c src/gapbuffer.c src/highlight.c src/strings.c src/eol.c src/textinput.c
 SRC_M := src/shim.m
 
 OBJ := $(SRC_C:.c=.o) $(SRC_M:.m=.o)
 
 BINARY := $(MACOS_DIR)/$(APP_NAME)
 
-.PHONY: all run clean test bench
+.PHONY: all run clean test bench test-objc
 
 # Compiler fuer Tests/Benchmark. Unter Linux: "make test TEST_CC=gcc" (clang
 # bringt dort oft keine ASan-Laufzeit mit). Die Tests brauchen kein macOS.
@@ -74,6 +74,14 @@ run: all
 # kaputtes Standard-SDK scheitert daran genauso wie die App.
 test:
 	CC=$(TEST_CC) TEST_EXTRA_CFLAGS="$(SDKFLAG)" tests/run_tests.sh
+
+# Nur macOS: die echte View aus shim.m mit Eingabemethoden-Aufrufen und
+# kuenstlichen Tasten-Events (tests/objc/test_shim_input.m).
+test-objc:
+	mkdir -p $(BUILD_DIR)/tests
+	$(CC) $(OBJCFLAGS) -o $(BUILD_DIR)/tests/test_shim_input tests/objc/test_shim_input.m src/shim.m src/strings.c \
+		$(FRAMEWORKS)
+	$(BUILD_DIR)/tests/test_shim_input
 
 # Laufzeit pro Tastendruck bei grossen Dokumenten (kein Test, nur Messwerte).
 bench:

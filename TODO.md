@@ -5,30 +5,22 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
 
 ## Fehlende Features (nach Priorität)
 
-1. **Eingabemethoden (IME) und Tottasten.** Die View implementiert kein
-   `NSTextInputClient` (kein `interpretKeyEvents:`/`insertText:`/
-   `setMarkedText:`), `keyDown:` reicht nur `[event characters]` durch.
-   Chinesische/japanische Eingabe und die Emoji-Palette (Ctrl+Cmd+Leertaste)
-   funktionieren deshalb nicht - obwohl die UI auf Chinesisch übersetzt ist.
-   Tottasten der deutschen Tastatur (`^`, `´`, `` ` `` + Buchstabe)
-   vermutlich ebenso; am Mac prüfen. Umbau des Tastatur-Pfads in shim.m,
-   inklusive Anzeige des vorläufigen (marked) Texts.
-2. **Maus und Scrollen.** Keine Scrollbar, kein Autoscroll beim Ziehen einer
+1. **Maus und Scrollen.** Keine Scrollbar, kein Autoscroll beim Ziehen einer
    Selektion über den Fensterrand, Mauszeiger bleibt ein Pfeil statt
    I-Beam, Datei aufs Fenster ziehen öffnet sie nicht (Drag & Drop).
-3. **Schutz der Arbeit.** Keine Erkennung, wenn ein anderes Programm eine
+2. **Schutz der Arbeit.** Keine Erkennung, wenn ein anderes Programm eine
    offene Datei auf der Platte ändert (Neu laden anbieten). Kein Autosave /
    keine Wiederherstellung nach Absturz - wichtiger, seit Speichermangel im
    Gap-Buffer bewusst mit `abort()` endet.
-4. **Standard-Tastenkürzel.** Weitersuchen/Rückwärtssuchen (⌘G / ⇧⌘G),
+3. **Standard-Tastenkürzel.** Weitersuchen/Rückwärtssuchen (⌘G / ⇧⌘G),
    "Auswahl zum Suchen verwenden" (⌘E), Tab-Wechsel per Tastatur (Ctrl+Tab
    bzw. ⇧⌘[ / ⇧⌘]), Fenster-Menü mit Im Dock ablegen (⌘M) und Vollbild.
-5. **Code-Editor-Funktionen.** Kommentar umschalten (⌘/), Zeile duplizieren,
+4. **Code-Editor-Funktionen.** Kommentar umschalten (⌘/), Zeile duplizieren,
    Zeile(n) hoch/runter verschieben, unsichtbare Zeichen anzeigen,
    Wortumbruch an/aus, Kodierung beim Öffnen/Sichern wählen (heute: Bytes
    unverändert, Anzeige als UTF-8 mit Latin-1-Fallback), Suche über alle
    Tabs.
-6. **KI-Vervollständigung mit lokalem LLM (optional, standardmäßig aus).**
+5. **KI-Vervollständigung mit lokalem LLM (optional, standardmäßig aus).**
    Kein eingebautes Modell: BTNEdit fragt per HTTP einen lokal laufenden
    Server an (Ollama oder llama-server), Adresse und Modellname in der
    Prefs-Datei; ohne Server fehlt die Funktion einfach. Code-Modell mit
@@ -39,11 +31,19 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
    `NSURLSession` in shim.m mit Callback (UI blockiert nie), Geistertext in
    render.c ohne Puffer-Änderung (Umbruch/Cursor beachten), Timer/Abbruch/
    Tab-Belegung in main.c. Schalter global oder pro Sprache (für Code
-   nützlich, für Fließtext eher störend). Erst nach Punkt 1, weil beide den
-   Tastatur-Pfad in shim.m umbauen.
+   nützlich, für Fließtext eher störend). Der Geistertext kann das Overlay
+   der Eingabemethoden (render.c, `draw_marked_overlay`) als Vorlage nehmen.
 
 ## Bekannte Einschränkungen (bewusst zurückgestellt, kein akuter Bug)
 
+- Eingabemethoden: Der vorläufige Text (z.B. Pinyin vor der Auswahl) wird
+  als Overlay am Cursor gezeichnet und verdeckt so lange den Text dahinter,
+  statt ihn wie in TextEdit zur Seite zu schieben. Positionen gibt der
+  Editor macOS nur relativ zur aktuellen Zeile (höchstens 1024 Zeichen vor
+  dem Cursor) - reicht für Tottasten, Kandidaten, Emoji und das Akzent-Menü,
+  aber Funktionen, die weiter entfernten Text brauchen (Rückumwandlung
+  bereits eingefügter Kanji), gehen nicht. Doppelbreite Zeichen im Overlay
+  haben dieselbe Einschränkung wie im Dokument (siehe unten).
 - Einrücken: Return übernimmt nur die vorhandene Einrückung - kein
   zusätzliches Einrücken nach `{` oder `:` und kein Aufteilen von `{}` auf
   drei Zeilen (bräuchte Sprachwissen aus highlight.c). Drückt man Return auf

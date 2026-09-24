@@ -6,6 +6,7 @@
 #include "render.h"
 #include "editor.h"
 #include "eol.h"
+#include "textinput.h"
 #include "strings.h"
 
 #include <ctype.h>
@@ -24,6 +25,9 @@
 #define KEYCODE_END            119
 #define KEYCODE_FORWARD_DELETE 117
 #define KEYCODE_TAB            48
+/* Kein echter Keycode: markiert Text aus einer Eingabemethode (insertText:),
+ * der ueber denselben Weg wie ein getipptes Zeichen eingefuegt wird. */
+#define KEYCODE_TEXT           0xFFFF
 
 /* on_menu() rechnet tag - BTN_MENU_EOL_LF in ein BtnEol um. */
 _Static_assert(BTN_MENU_EOL_CRLF - BTN_MENU_EOL_LF == (int)BTN_EOL_CRLF &&
@@ -94,6 +98,11 @@ typedef enum {
 } BtnFocus;
 
 static int g_find_bar_visible = 0;
+
+/* Vorlaeufiger Text einer Eingabemethode (siehe textinput.h) - gehoert zum
+ * fokussierten Editor, steht aber nicht in dessen Puffer. */
+static BtnMarkedText g_marked;
+static void commit_marked(void);
 static BtnFocus g_focus = BTN_FOCUS_DOCUMENT;
 static Editor g_search_editor;
 static Editor g_replace_editor;
@@ -441,6 +450,7 @@ static void close_find_bar(void) {
     if (!g_find_bar_visible) {
         return;
     }
+    commit_marked();
     g_find_bar_visible = 0;
     g_focus = BTN_FOCUS_DOCUMENT;
     /* Sonst blieben die gelben Treffer-Hervorhebungen (siehe
@@ -460,6 +470,7 @@ static void close_find_bar(void) {
  * Mehrzeilige Selektionen werden ignoriert (Zeilenumbrueche/Regex-
  * Sonderzeichen darin ergeben selten einen sinnvollen Suchbegriff). */
 static void open_find_bar(void) {
+    commit_marked();
     Editor *ed = &active_doc()->editor;
     if (editor_has_selection(ed)) {
         char *sel = editor_get_selection_text(ed);
@@ -492,6 +503,7 @@ static void open_find_bar(void) {
  * offene Suchen-Leiste - deren Zustand (Selektion als aktueller Treffer)
  * bezieht sich sonst auf ein Dokument, das gerade nicht mehr sichtbar ist. */
 static void switch_to_tab(int idx) {
+    commit_marked();
     close_find_bar();
     g_active_doc = idx;
     btn_set_window_title(doc_display_name(active_doc()));
@@ -2064,6 +2076,10 @@ static void on_draw(CGContextRef ctx, CGRect bounds) {
                  btn_eol_name(active->eol));
     }
     btn_render_set_footer_eol(eol_label);
+    btn_render_set_marked_text(g_marked.text, g_marked.len, g_marked.sel_start,
+                               g_focus == BTN_FOCUS_SEARCH    ? BTN_MARKED_SEARCH
+                               : g_focus == BTN_FOCUS_REPLACE ? BTN_MARKED_REPLACE
+                                                              : BTN_MARKED_DOCUMENT);
     btn_render_frame(ctx, content_bounds(), &active->editor, active->scroll_row,
                       btn_highlight_lang_for_path(active->path),
                       g_match_starts, g_match_ends, render_match_count);
@@ -2236,6 +2252,18 @@ static void handle_find_bar_key(const char *characters, unsigned short keycode, 
     }
 }
 
+/* Getippter bzw. von einer Eingabemethode festgeschriebener Text im
+ * Dokument. editor_handle_bracket_key() deckt Auto-Vervollstaendigen/
+ * Typdurchlauf fuer Klammern UND Anfuehrungszeichen ab (siehe editor.c) -
+ * aber nur fuer genau ein Zeichen: eine Eingabemethode kann mehrere auf
+ * einmal liefern ("(abc"), dann wurde vorher nur die Klammer eingefuegt. */
+static void insert_typed_chars(Editor *ed, const char *chars) {
+    size_t n = strlen(chars);
+    if (n != 1 || !editor_handle_bracket_key(ed, chars[0])) {
+        editor_insert_text(ed, chars, n);
+    }
+}
+
 static void on_key(const char *characters, unsigned short keycode, unsigned long modifierFlags) {
     int shift = (modifierFlags & BTN_MOD_SHIFT) != 0;
     int option = (modifierFlags & BTN_MOD_OPTION) != 0;
@@ -2337,14 +2365,7 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
     } else if (c == 0x7F) {
         editor_delete_backward(ed);
     } else if (c >= 0x20) {
-        /* editor_handle_bracket_key() deckt Auto-Vervollstaendigen/
-         * Typdurchlauf fuer Klammern UND Anfuehrungszeichen ab (siehe
-         * editor.c) - fuer alles andere normal einfuegen. Beide sind ASCII,
-         * characters ist bei einem solchen Byte also garantiert genau
-         * dieses eine Zeichen. */
-        if (!editor_handle_bracket_key(ed, (char)c)) {
-            editor_insert_text(ed, characters, strlen(characters));
-        }
+        insert_typed_chars(ed, characters);
     } else {
         return;
     }
@@ -2352,6 +2373,127 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
     sync_window_state();
     sync_scroll_to_cursor();
     btn_app_request_redraw();
+}
+
+/* ---- Eingabemethoden (NSTextInputClient, siehe shim.h/textinput.h) ----
+ * Fertiger Text geht durch on_key() wie ein getipptes Zeichen - Klammer-
+ * Automatik, Suchfelder, Live-Suche und Undo verhalten sich also gleich.
+ * Bereiche kommen als UTF-16-Einheiten relativ zu btn_ti_origin(). */
+
+/* Nach einer Aenderung im fokussierten Editor, die nicht ueber on_key()
+ * lief: Live-Suche bzw. Fensterzustand nachziehen. */
+static void after_focused_edit(void) {
+    if (g_focus == BTN_FOCUS_SEARCH) {
+        perform_live_search();
+        return;
+    }
+    if (g_focus == BTN_FOCUS_REPLACE) {
+        g_search_status[0] = '\0';
+    } else {
+        sync_window_state();
+    }
+    sync_scroll_to_cursor();
+    btn_app_request_redraw();
+}
+
+/* Waehlt den ursprungsrelativen Bereich (loc, len) im fokussierten Editor
+ * aus, falls gueltig. */
+static void select_ti_range(long loc, long len) {
+    Editor *ed = focused_editor();
+    size_t start, end;
+    if (loc >= 0 && len >= 0 && btn_ti_range_to_bytes(ed, (size_t)loc, (size_t)len, &start, &end)) {
+        editor_set_cursor(ed, start, 0);
+        editor_set_cursor(ed, end, 1);
+    }
+}
+
+static void ti_insert_text(const char *utf8, long repl_loc, long repl_len) {
+    int had_marked = g_marked.len > 0;
+    btn_marked_clear(&g_marked);
+    /* Mit vorlaeufigem Text ersetzt der neue genau diesen (der nicht im
+     * Puffer steht); sonst z.B. das Zeichen vor dem Cursor (Akzent-Menue). */
+    if (!had_marked) {
+        select_ti_range(repl_loc, repl_len);
+    }
+    if (utf8[0] != '\0') {
+        on_key(utf8, KEYCODE_TEXT, 0);
+    } else {
+        btn_app_request_redraw();
+    }
+}
+
+static void ti_set_marked_text(const char *utf8, long sel_loc, long sel_len, long repl_loc, long repl_len) {
+    size_t len = strlen(utf8);
+    if (g_marked.len == 0 && len > 0) {
+        /* Eine neue Eingabe ersetzt die Selektion - wie in jedem Textfeld. */
+        select_ti_range(repl_loc, repl_len);
+        Editor *ed = focused_editor();
+        if (editor_has_selection(ed)) {
+            editor_delete_selection(ed);
+            after_focused_edit();
+        }
+    }
+    if (len == 0) {
+        btn_marked_clear(&g_marked);
+    } else {
+        size_t units = btn_ti_utf16_len(utf8, len);
+        size_t loc = sel_loc < 0 ? units : (size_t)sel_loc;
+        btn_marked_set(&g_marked, utf8, len, loc, sel_len < 0 ? 0 : (size_t)sel_len);
+    }
+    sync_scroll_to_cursor();
+    btn_app_request_redraw();
+}
+
+static void ti_unmark_text(void) {
+    if (g_marked.len == 0) {
+        return;
+    }
+    char *text = btn_dup_cstring(g_marked.text);
+    ti_insert_text(text, -1, 0); /* leert g_marked */
+    free(text);
+}
+
+/* Schreibt einen laufenden vorlaeufigen Text fest (vor Tab-Wechsel, Klick,
+ * Menuebefehl ...) und sagt der Eingabemethode, dass er erledigt ist. */
+static void commit_marked(void) {
+    if (g_marked.len > 0) {
+        ti_unmark_text();
+        btn_text_input_discard();
+    }
+}
+
+static void ti_query(long *sel_loc, long *sel_len, long *marked_loc, long *marked_len) {
+    size_t loc, len;
+    btn_ti_selection(focused_editor(), &loc, &len);
+    if (g_marked.len > 0) {
+        *marked_loc = (long)loc;
+        *marked_len = (long)btn_ti_utf16_len(g_marked.text, g_marked.len);
+        *sel_loc = (long)(loc + btn_ti_utf16_len(g_marked.text, g_marked.sel_start));
+        *sel_len = (long)btn_ti_utf16_len(g_marked.text + g_marked.sel_start, g_marked.sel_end - g_marked.sel_start);
+    } else {
+        *marked_loc = -1;
+        *marked_len = 0;
+        *sel_loc = (long)loc;
+        *sel_len = (long)len;
+    }
+}
+
+static uint16_t *ti_substring(long loc, long len, long *actual_loc, size_t *n) {
+    if (loc < 0 || len < 0) {
+        return NULL;
+    }
+    size_t actual = 0;
+    uint16_t *u16 = btn_ti_substring(focused_editor(), (size_t)loc, (size_t)len, &actual, n);
+    *actual_loc = (long)actual;
+    return u16;
+}
+
+static CGRect ti_caret_rect(void) {
+    if (g_focus == BTN_FOCUS_DOCUMENT) {
+        Document *d = active_doc();
+        return btn_render_caret_rect(&d->editor, content_bounds(), d->scroll_row);
+    }
+    return btn_render_find_caret_rect(g_bounds, focused_editor(), g_focus == BTN_FOCUS_REPLACE);
 }
 
 static void on_resize(CGSize size) {
@@ -2370,6 +2512,7 @@ static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, 
 
     switch (phase) {
         case BTN_MOUSE_DOWN: {
+            commit_marked(); /* Klick beendet eine laufende Eingabe (wie in NSTextView) */
             if (y >= g_bounds.size.height - BTN_TAB_BAR_HEIGHT) {
                 handle_tab_bar_click(x);
                 btn_app_request_redraw();
@@ -2543,6 +2686,9 @@ static void on_open_file(const char *path) {
 static void on_menu(int tag) {
     char *clip;
 
+    /* Sichern, Kopieren usw. sollen den Text sehen, der gerade getippt wird. */
+    commit_marked();
+
     if (tag >= BTN_MENU_RECENT_BASE) {
         int index = tag - BTN_MENU_RECENT_BASE;
         if (index < g_recent_count) {
@@ -2710,6 +2856,10 @@ int main(void) {
     btn_app_set_menu_callback(on_menu);
     btn_app_set_should_close_callback(should_close);
     btn_app_set_open_file_callback(on_open_file);
+    static const BtnTextInputCallbacks text_input = {
+        ti_insert_text, ti_set_marked_text, ti_unmark_text, ti_query, ti_substring, ti_caret_rect,
+    };
+    btn_app_set_text_input_callbacks(&text_input);
     btn_app_build_menu();
     sync_window_state(); /* Haekchen in Ablage > Zeilenenden fuer den ersten Tab */
     load_recent_files();

@@ -20,6 +20,8 @@ static btn_mouse_callback g_mouse_cb = NULL;
 static btn_scroll_callback g_scroll_cb = NULL;
 static btn_should_close_callback g_should_close_cb = NULL;
 static btn_open_file_callback g_open_file_cb = NULL;
+static BtnTextInputCallbacks g_ti;
+static BOOL g_ti_set = NO;
 
 static NSWindow *g_window = nil;
 static NSMenu *g_recentMenu = nil;
@@ -28,7 +30,45 @@ static NSMenu *g_recentMenu = nil;
 static NSMenuItem *g_eolItems[3];
 static BOOL g_eolMenuEnabled = YES;
 
-@interface BTNContentView : NSView
+/* Gibt ein Tasten-Event wie frueher an main.c weiter (Keycode, Modifier und
+ * characters) - fuer alles, was keinen Text erzeugt. */
+static void forward_key_event(NSEvent *event) {
+    if (!g_key_cb) {
+        return;
+    }
+    NSString *characters = [event characters];
+    const char *chars = [characters UTF8String];
+    /* Funktions-/Navigationstasten (F1-F12, Bild auf/ab, Hilfe, Pfeile,
+     * ...) liefern in [event characters] Codepunkte aus dem von AppKit
+     * reservierten Bereich U+F700-U+F7FF (NSUpArrowFunctionKey bis
+     * NSModeSwitchFunctionKey = U+F747). Bewusst NICHT bis U+F8FF: das
+     * Apple-Logo (Wahl+Umschalt+K) ist U+F8FF und ein echtes, tippbares
+     * Zeichen. Ohne Filter wuerde main.c alles, was es nicht per Keycode
+     * kennt, wie normalen Text einfuegen: ein unsichtbares 3-Byte-Zeichen,
+     * und das Dokument gilt als geaendert. Leeren String statt das Event zu
+     * schlucken - Keycode/Modifier gehen unveraendert weiter, damit
+     * Pfeile/Pos1/Ende usw. in main.c ueber den Keycode funktionieren. */
+    if ([characters length] > 0) {
+        unichar first = [characters characterAtIndex:0];
+        if (first >= 0xF700 && first <= 0xF7FF) {
+            chars = "";
+        }
+    }
+    g_key_cb(chars ? chars : "", [event keyCode], (unsigned long)[event modifierFlags]);
+}
+
+static long ns_loc(NSRange r) {
+    return r.location == NSNotFound ? -1 : (long)r.location;
+}
+
+/* Eigene View statt NSTextView (siehe Kopfkommentar), aber mit
+ * NSTextInputClient: nur so funktionieren Tottasten (^ ´ ` auf der
+ * deutschen Tastatur), Eingabemethoden (Pinyin, Kana), die Emoji-Palette
+ * und das Akzent-Menue beim Gedrueckthalten einer Taste. Die Logik dahinter
+ * liegt in main.c/textinput.c; hier wird nur uebersetzt. */
+@interface BTNContentView : NSView <NSTextInputClient> {
+    NSEvent *_keyEvent; /* das Event, das gerade interpretKeyEvents: durchlaeuft */
+}
 @end
 
 @implementation BTNContentView
@@ -46,29 +86,115 @@ static BOOL g_eolMenuEnabled = YES;
 }
 
 - (void)keyDown:(NSEvent *)event {
-    if (g_key_cb) {
-        NSString *characters = [event characters];
-        const char *chars = [characters UTF8String];
-        /* Funktions-/Navigationstasten (F1-F12, Bild auf/ab, Hilfe, Pfeile,
-         * ...) liefern in [event characters] Codepunkte aus dem von AppKit
-         * reservierten Bereich U+F700-U+F7FF (NSUpArrowFunctionKey bis
-         * NSModeSwitchFunctionKey = U+F747). Bewusst NICHT bis U+F8FF: das
-         * Apple-Logo (Wahl+Umschalt+K) ist U+F8FF und ein echtes, tippbares
-         * Zeichen. Ohne
-         * Filter wuerde main.c alles, was es nicht per Keycode kennt, wie
-         * normalen Text einfuegen: ein unsichtbares 3-Byte-Zeichen, und das
-         * Dokument gilt als geaendert. Leeren String statt das Event zu
-         * schlucken - Keycode/Modifier gehen unveraendert weiter, damit
-         * Pfeile/Pos1/Ende usw. in main.c ueber den Keycode funktionieren
-         * wie bisher (deren characters[0] wird dort nie gebraucht). */
-        if ([characters length] > 0) {
-            unichar first = [characters characterAtIndex:0];
-            if (first >= 0xF700 && first <= 0xF7FF) {
-                chars = "";
-            }
-        }
-        g_key_cb(chars ? chars : "", [event keyCode], (unsigned long)[event modifierFlags]);
+    if (!g_ti_set) {
+        forward_key_event(event); /* ohne Eingabemethoden-Callbacks wie frueher */
+        return;
     }
+    /* macOS entscheidet: Text (insertText:/setMarkedText:) oder Befehl
+     * (doCommandBySelector:). Verschachtelt moeglich, daher sichern. */
+    NSEvent *previous = _keyEvent;
+    _keyEvent = event;
+    [self interpretKeyEvents:@[ event ]];
+    _keyEvent = previous;
+}
+
+/* Taste ohne Text: das Original-Event an main.c, das Pfeile, Return, Tab,
+ * Backspace, Escape usw. per Keycode behandelt wie bisher. */
+- (void)doCommandBySelector:(SEL)selector {
+    (void)selector;
+    if (_keyEvent) {
+        forward_key_event(_keyEvent);
+    }
+}
+
+- (void)insertText:(id)string replacementRange:(NSRange)replacementRange {
+    /* Cmd+Zeichen ohne Menuepunkt ist ein Befehl, kein Text. */
+    if (_keyEvent && ([_keyEvent modifierFlags] & NSEventModifierFlagCommand)) {
+        forward_key_event(_keyEvent);
+        return;
+    }
+    NSString *s = [string isKindOfClass:[NSAttributedString class]] ? [(NSAttributedString *)string string] : string;
+    const char *utf8 = [s UTF8String];
+    if (utf8 && g_ti.insert_text) {
+        g_ti.insert_text(utf8, ns_loc(replacementRange), (long)replacementRange.length);
+    }
+}
+
+- (void)setMarkedText:(id)string selectedRange:(NSRange)selectedRange replacementRange:(NSRange)replacementRange {
+    NSString *s = [string isKindOfClass:[NSAttributedString class]] ? [(NSAttributedString *)string string] : string;
+    const char *utf8 = [s UTF8String];
+    if (g_ti.set_marked_text) {
+        g_ti.set_marked_text(utf8 ? utf8 : "", ns_loc(selectedRange), (long)selectedRange.length,
+                             ns_loc(replacementRange), (long)replacementRange.length);
+    }
+}
+
+- (void)unmarkText {
+    if (g_ti.unmark_text) {
+        g_ti.unmark_text();
+    }
+}
+
+- (NSRange)selectedRange {
+    long sel_loc = 0, sel_len = 0, mk_loc = -1, mk_len = 0;
+    if (g_ti.query) {
+        g_ti.query(&sel_loc, &sel_len, &mk_loc, &mk_len);
+    }
+    return NSMakeRange((NSUInteger)sel_loc, (NSUInteger)sel_len);
+}
+
+- (NSRange)markedRange {
+    long sel_loc = 0, sel_len = 0, mk_loc = -1, mk_len = 0;
+    if (g_ti.query) {
+        g_ti.query(&sel_loc, &sel_len, &mk_loc, &mk_len);
+    }
+    return mk_loc < 0 ? NSMakeRange(NSNotFound, 0) : NSMakeRange((NSUInteger)mk_loc, (NSUInteger)mk_len);
+}
+
+- (BOOL)hasMarkedText {
+    return [self markedRange].location != NSNotFound;
+}
+
+- (NSAttributedString *)attributedSubstringForProposedRange:(NSRange)range actualRange:(NSRangePointer)actualRange {
+    if (!g_ti.substring || range.location == NSNotFound) {
+        return nil;
+    }
+    long actual_loc = 0;
+    size_t n = 0;
+    uint16_t *u16 = g_ti.substring((long)range.location, (long)range.length, &actual_loc, &n);
+    if (!u16) {
+        return nil;
+    }
+    NSString *str = [[[NSString alloc] initWithCharacters:(const unichar *)u16 length:n] autorelease];
+    free(u16);
+    if (actualRange) {
+        *actualRange = NSMakeRange((NSUInteger)actual_loc, [str length]);
+    }
+    return [[[NSAttributedString alloc] initWithString:str] autorelease];
+}
+
+- (NSArray<NSAttributedStringKey> *)validAttributesForMarkedText {
+    return @[];
+}
+
+/* Bildschirm-Rechteck des Cursors - dort oeffnet macOS das
+ * Kandidatenfenster bzw. das Akzent-Menue. */
+- (NSRect)firstRectForCharacterRange:(NSRange)range actualRange:(NSRangePointer)actualRange {
+    if (actualRange) {
+        *actualRange = range;
+    }
+    NSRect r = g_ti.caret_rect ? NSRectFromCGRect(g_ti.caret_rect()) : NSZeroRect;
+    NSWindow *window = [self window];
+    if (!window) {
+        return r;
+    }
+    r = [self convertRect:r toView:nil];
+    return [window convertRectToScreen:r];
+}
+
+- (NSUInteger)characterIndexForPoint:(NSPoint)point {
+    (void)point;
+    return NSNotFound;
 }
 
 - (void)mouseDown:(NSEvent *)event {
@@ -363,6 +489,20 @@ void btn_app_set_should_close_callback(btn_should_close_callback cb) {
 
 void btn_app_set_open_file_callback(btn_open_file_callback cb) {
     g_open_file_cb = cb;
+}
+
+void btn_app_set_text_input_callbacks(const BtnTextInputCallbacks *cb) {
+    if (cb) {
+        g_ti = *cb;
+        g_ti_set = YES;
+    } else {
+        memset(&g_ti, 0, sizeof(g_ti));
+        g_ti_set = NO;
+    }
+}
+
+void btn_text_input_discard(void) {
+    [[g_view inputContext] discardMarkedText];
 }
 
 void btn_app_build_menu(void) {

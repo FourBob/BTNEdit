@@ -3,6 +3,7 @@
 
 #include <CoreGraphics/CoreGraphics.h>
 #include <stddef.h>
+#include <stdint.h>
 #include "strings.h"
 
 #ifdef __cplusplus
@@ -77,6 +78,28 @@ typedef int (*btn_should_close_callback)(void);
  * absoluter Dateisystempfad (kein NSURL, main.c bleibt Cocoa-frei). */
 typedef void (*btn_open_file_callback)(const char *path);
 
+/* Eingabemethoden (NSTextInputClient, siehe textinput.h). keyDown: gibt
+ * jede Taste an macOS (interpretKeyEvents:): fertiger Text - auch aus
+ * Tottasten, Pinyin, Kana, der Emoji-Palette - kommt ueber insert_text;
+ * Tasten ohne Text (Pfeile, Return, Tab, Backspace, Escape, Cmd-Kombinationen)
+ * kommen unveraendert ueber den btn_key_callback. Bereiche sind UTF-16-
+ * Einheiten relativ zu btn_ti_origin(); -1 = keiner (NSNotFound). */
+typedef struct {
+    /* Text festschreiben; repl_loc >= 0: ersetzt diesen Bereich (Akzent-
+     * Menue beim Gedrueckthalten ersetzt das Zeichen vor dem Cursor). */
+    void (*insert_text)(const char *utf8, long repl_loc, long repl_len);
+    /* Vorlaeufigen Text setzen ("" = keiner mehr); sel_*: Cursor darin. */
+    void (*set_marked_text)(const char *utf8, long sel_loc, long sel_len, long repl_loc, long repl_len);
+    /* Vorlaeufigen Text so festschreiben, wie er ist. */
+    void (*unmark_text)(void);
+    /* Aktuelle Selektion und vorlaeufiger Bereich (marked_loc -1 = keiner). */
+    void (*query)(long *sel_loc, long *sel_len, long *marked_loc, long *marked_len);
+    /* Text eines Bereichs als UTF-16 (malloc, NULL = keiner). */
+    uint16_t *(*substring)(long loc, long len, long *actual_loc, size_t *n);
+    /* Cursor-Rechteck in View-Koordinaten (Kandidatenfenster). */
+    CGRect (*caret_rect)(void);
+} BtnTextInputCallbacks;
+
 /* Liest NSLocale.preferredLanguages (Systemeinstellung, nicht der App
  * eigene Auswahl - kein Sprachumschalter im Menue, ganz im Sinne der
  * schlanken Notepad.exe-Philosophie) und ordnet die bevorzugte Sprache
@@ -93,6 +116,10 @@ void btn_app_set_mouse_callback(btn_mouse_callback cb);
 void btn_app_set_scroll_callback(btn_scroll_callback cb);
 void btn_app_set_should_close_callback(btn_should_close_callback cb);
 void btn_app_set_open_file_callback(btn_open_file_callback cb);
+void btn_app_set_text_input_callbacks(const BtnTextInputCallbacks *cb);
+/* Sagt der Eingabemethode, dass ihr vorlaeufiger Text verworfen ist (main.c
+ * hat ihn selbst festgeschrieben, z.B. vor einem Tab-Wechsel). */
+void btn_text_input_discard(void);
 void btn_app_build_menu(void);
 
 /* Baut das "Zuletzt geoeffnet"-Untermenue komplett neu aus paths[0..count)

@@ -924,6 +924,95 @@ void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labe
      * keine Freigabe hier. */
 }
 
+/* x-Positionen der Suchleiste - gemeinsam fuer Zeichnen, Mausklick-Tests
+ * in main.c (dieselben Konstanten) und das Cursor-Rechteck fuer
+ * Eingabemethoden (btn_render_find_caret_rect()). */
+typedef struct {
+    double search_label_x, search_field_x, regex_x, case_x, word_x;
+    double replace_label_x, replace_field_x, replace_all_x, status_x;
+} FindBarGeometry;
+
+static FindBarGeometry find_bar_geometry(void) {
+    FindBarGeometry g;
+    g.search_label_x = BTN_FIND_BAR_PADDING;
+    g.search_field_x = g.search_label_x + BTN_FIND_LABEL_WIDTH;
+    g.regex_x = g.search_field_x + BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING;
+    g.case_x = g.regex_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING;
+    g.word_x = g.case_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING;
+    g.replace_label_x = g.word_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING * 2.0;
+    g.replace_field_x = g.replace_label_x + BTN_FIND_LABEL_WIDTH;
+    g.replace_all_x = g.replace_field_x + BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING;
+    g.status_x = g.replace_all_x + BTN_FIND_REPLACE_ALL_WIDTH + BTN_FIND_BAR_PADDING * 2.0;
+    return g;
+}
+
+/* ---- Vorlaeufiger Text einer Eingabemethode (siehe textinput.h) ----
+ * Steht nicht im Puffer; main.c reicht ihn vor jedem Zeichnen herein und
+ * er wird als Overlay am Cursor gezeichnet: Hintergrund, Text,
+ * Unterstreichung, Cursor darin. Das Layout dahinter verschiebt sich nicht
+ * (wie in Terminal-Programmen) - folgender Text ist so lange verdeckt. */
+static struct {
+    char *text;
+    size_t len;
+    size_t caret;
+    int target; /* BTN_MARKED_* */
+} g_marked;
+
+void btn_render_set_marked_text(const char *utf8, size_t len, size_t caret, int target) {
+    if (len == 0 || !utf8) {
+        free(g_marked.text);
+        g_marked.text = NULL;
+        g_marked.len = 0;
+        g_marked.target = BTN_MARKED_NONE;
+        return;
+    }
+    if (len != g_marked.len || !g_marked.text || memcmp(g_marked.text, utf8, len) != 0) {
+        char *copy = malloc(len);
+        if (!copy) {
+            return;
+        }
+        memcpy(copy, utf8, len);
+        free(g_marked.text);
+        g_marked.text = copy;
+        g_marked.len = len;
+    }
+    g_marked.caret = caret <= len ? caret : len;
+    g_marked.target = target;
+}
+
+static size_t count_chars(const unsigned char *s, size_t len) {
+    size_t n = 0;
+    for (size_t i = 0; i < len; i += btn_utf8_char_len(s + i, len - i)) {
+        n++;
+    }
+    return n;
+}
+
+static void draw_marked_overlay(CGContextRef ctx, double x, double box_y, double box_h, double text_y,
+                                CFDictionaryRef attrs, double char_width, BtnColor bg) {
+    const unsigned char *t = (const unsigned char *)g_marked.text;
+    size_t len = g_marked.len;
+    UniChar *u16 = malloc(len * (BTN_TAB_WIDTH > 2 ? BTN_TAB_WIDTH : 2) * sizeof(UniChar));
+    size_t *map = malloc((len + 1) * sizeof(size_t));
+    if (!u16 || !map) {
+        free(u16);
+        free(map);
+        return;
+    }
+    size_t n = decode_row_for_display(t, len, u16, map);
+    double width = (double)count_chars(t, len) * char_width;
+    double caret_x = x + (double)count_chars(t, g_marked.caret) * char_width;
+
+    set_fill(ctx, bg);
+    CGContextFillRect(ctx, CGRectMake(x, box_y, width + 1.0, box_h));
+    draw_cfstring_at(ctx, CFStringCreateWithCharacters(NULL, u16, (CFIndex)n), x, text_y, attrs);
+    set_fill(ctx, col_cursor());
+    CGContextFillRect(ctx, CGRectMake(x, box_y + 1.0, width, 1.0));          /* Unterstreichung */
+    CGContextFillRect(ctx, CGRectMake(caret_x, box_y + 2.0, 1.4, box_h - 4.0)); /* Cursor darin */
+    free(u16);
+    free(map);
+}
+
 /* Zeichnet den Inhalt eines Suchen/Ersetzen-Feldes samt Selektions-
  * Hervorhebung und (falls focused und ohne Selektion) Cursor - dieselbe
  * Zeichen-Regel wie beim Hauptdokument, aber ohne Wortumbruch, weil diese
@@ -931,7 +1020,7 @@ void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labe
  * BTN_MOVE_DOC_START/END sind dort bereits genau Pos1/Ende). Tabs rechnen
  * Spalten- und Zeichenlogik beide mit Tabstopps ab Spalte 0. */
 static void draw_find_field(CGContextRef ctx, Editor *ed, double field_x, double text_y, double bar_top,
-                             CFDictionaryRef attrs, double char_width, int focused) {
+                             CFDictionaryRef attrs, double char_width, int focused, int marked_target) {
     int has_sel = editor_has_selection(ed);
     /* Byte-Offsets (Cursor/Selektion) in Zeichenspalten umrechnen - dieselbe
      * Logik wie beim Hauptdokument (editor_visual_column_in_range zaehlt
@@ -971,8 +1060,13 @@ static void draw_find_field(CGContextRef ctx, Editor *ed, double field_x, double
     if (focused && !has_sel) {
         size_t cursor_col = editor_visual_column_in_range(ed, 0, ed->cursor);
         double cx = field_x + (double)cursor_col * char_width;
-        set_fill(ctx, col_cursor());
-        CGContextFillRect(ctx, CGRectMake(cx, bar_top + 6.0, 1.4, BTN_FIND_BAR_HEIGHT - 12.0));
+        if (g_marked.target == marked_target) {
+            draw_marked_overlay(ctx, cx, bar_top + 4.0, BTN_FIND_BAR_HEIGHT - 8.0, text_y, attrs, char_width,
+                                col_find_bar_bg());
+        } else {
+            set_fill(ctx, col_cursor());
+            CGContextFillRect(ctx, CGRectMake(cx, bar_top + 6.0, 1.4, BTN_FIND_BAR_HEIGHT - 12.0));
+        }
     }
 }
 
@@ -1005,18 +1099,15 @@ void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_lab
     CFDictionaryRef dimAttrs = get_dim_attrs();
     CFDictionaryRef accentAttrs = get_accent_attrs();
 
-    double search_label_x = BTN_FIND_BAR_PADDING;
-    double search_field_x = search_label_x + BTN_FIND_LABEL_WIDTH;
-    double regex_x = search_field_x + BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING;
-    double case_x = regex_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING;
-    double word_x = case_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING;
-    double replace_label_x = word_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING * 2.0;
-    double replace_field_x = replace_label_x + BTN_FIND_LABEL_WIDTH;
-    double replace_all_x = replace_field_x + BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING;
-    double status_x = replace_all_x + BTN_FIND_REPLACE_ALL_WIDTH + BTN_FIND_BAR_PADDING * 2.0;
+    FindBarGeometry g = find_bar_geometry();
+    double search_label_x = g.search_label_x, search_field_x = g.search_field_x;
+    double regex_x = g.regex_x, case_x = g.case_x, word_x = g.word_x;
+    double replace_label_x = g.replace_label_x, replace_field_x = g.replace_field_x;
+    double replace_all_x = g.replace_all_x, status_x = g.status_x;
 
     draw_text_at(ctx, search_label, search_label_x, text_y, dimAttrs);
-    draw_find_field(ctx, search_ed, search_field_x, text_y, bar_top, attrs, char_width, focus_field == 1);
+    draw_find_field(ctx, search_ed, search_field_x, text_y, bar_top, attrs, char_width, focus_field == 1,
+                    BTN_MARKED_SEARCH);
 
     /* Drei Umschalter fuer die Suche - main.c testet dieselben Positionen
      * (regex_x/case_x/word_x, je Breite BTN_FIND_REGEX_WIDTH) beim
@@ -1026,7 +1117,8 @@ void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_lab
     draw_toggle_button(ctx, word_x, bar_top, text_y, "\\b", whole_word, dimAttrs, accentAttrs);
 
     draw_text_at(ctx, replace_label, replace_label_x, text_y, dimAttrs);
-    draw_find_field(ctx, replace_ed, replace_field_x, text_y, bar_top, attrs, char_width, focus_field == 2);
+    draw_find_field(ctx, replace_ed, replace_field_x, text_y, bar_top, attrs, char_width, focus_field == 2,
+                    BTN_MARKED_REPLACE);
 
     /* "Alle ersetzen"-Knopf - main.c testet dieselbe Position (replace_all_x,
      * Breite BTN_FIND_REPLACE_ALL_WIDTH) beim Mausklick, siehe
@@ -1400,8 +1492,12 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
             size_t col = editor_visual_column_in_range(ed, rows[cur_row].start, ed->cursor);
             double cx = GUTTER_WIDTH + LEFT_PADDING + (double)col * char_width;
             double cy = bounds.size.height - TOP_PADDING - (double)(cur_row - (size_t)scroll_row + 1) * LINE_HEIGHT;
-            set_fill(ctx, col_cursor());
-            CGContextFillRect(ctx, CGRectMake(cx, cy, 1.4, LINE_HEIGHT - 2));
+            if (g_marked.target == BTN_MARKED_DOCUMENT) {
+                draw_marked_overlay(ctx, cx, cy, LINE_HEIGHT, cy + 4.0, attrs, char_width, col_bg());
+            } else {
+                set_fill(ctx, col_cursor());
+                CGContextFillRect(ctx, CGRectMake(cx, cy, 1.4, LINE_HEIGHT - 2));
+            }
         }
     }
 
@@ -1509,4 +1605,24 @@ size_t btn_hit_test(Editor *ed, CGRect bounds, double x, double y, long scroll_r
     }
 
     return btn_row_offset_for_column(ed, rows, row_count, (size_t)row, (size_t)col);
+}
+
+CGRect btn_render_caret_rect(Editor *ed, CGRect bounds, long scroll_row) {
+    double char_width = get_char_width();
+    size_t row_count;
+    const BtnRow *rows = btn_layout_get(ed, btn_layout_text_width(bounds), &row_count);
+    size_t cur_row = btn_layout_row_for_offset(rows, row_count, ed->cursor);
+    size_t col = editor_visual_column_in_range(ed, rows[cur_row].start, ed->cursor);
+    double x = GUTTER_WIDTH + LEFT_PADDING + (double)col * char_width;
+    double y = bounds.size.height - TOP_PADDING - ((double)cur_row - (double)scroll_row + 1.0) * LINE_HEIGHT;
+    return CGRectMake(x, y, char_width, LINE_HEIGHT);
+}
+
+CGRect btn_render_find_caret_rect(CGRect bounds, Editor *field, int replace_field) {
+    FindBarGeometry g = find_bar_geometry();
+    double bar_top = bounds.size.height - BTN_TAB_BAR_HEIGHT - BTN_FIND_BAR_HEIGHT;
+    double field_x = replace_field ? g.replace_field_x : g.search_field_x;
+    size_t col = editor_visual_column_in_range(field, 0, field->cursor);
+    double char_width = get_char_width();
+    return CGRectMake(field_x + (double)col * char_width, bar_top + 4.0, char_width, BTN_FIND_BAR_HEIGHT - 8.0);
 }

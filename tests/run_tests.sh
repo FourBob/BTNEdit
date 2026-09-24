@@ -42,6 +42,7 @@ TESTS=(
     "test_eol|$EDITOR_SRC|"
     "test_eol_glue|$EDITOR_SRC|"
     "test_indent|$EDITOR_SRC|"
+    "test_textinput|$EDITOR_SRC src/textinput.c|"
     "test_oom|src/gapbuffer.c|ASAN_OPTIONS=allocator_may_return_null=1"
     "test_strings|src/strings.c|"
     "test_close_flow||"

@@ -51,6 +51,9 @@ jobs:
       - name: Tests (clang, ASan/UBSan, Apples Regex-Engine)
         run: make test
 
+      - name: Eingabemethoden-Test (echte View aus shim.m)
+        run: make test-objc
+
       - name: Test-Logs bei Fehler
         if: failure()
         uses: actions/upload-artifact@v4

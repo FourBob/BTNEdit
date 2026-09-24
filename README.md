@@ -43,6 +43,9 @@ Graphics/Core Text gezeichnet.
 - Dateien bis 1 GB (größere werden mit einer Meldung abgelehnt)
 - Klammern und Anführungszeichen: Auto-Vervollständigung/Typdurchlauf für
   `()`, `[]`, `{}`, `""`, `''`, sowie Hervorhebung des zusammengehörigen Paars
+- Eingabemethoden: Tottasten (`^`, `´`, `` ` ``), das Akzent-Menü beim
+  Gedrückthalten einer Taste, chinesische/japanische Eingabe und die
+  Emoji-Palette (Ctrl+⌘+Leertaste) - im Dokument und in den Suchfeldern
 - UI-Sprache folgt der Systemeinstellung: Deutsch, Englisch, Französisch,
   Spanisch, Chinesisch (vereinfacht)
 - Ungesichert-Dialog beim Schließen/Beenden (pro Tab, keiner geht verloren)
@@ -65,6 +68,7 @@ Was noch fehlt bzw. bekannte Einschränkungen: siehe [TODO.md](TODO.md).
 | `src/highlight.c`/`.h` | Reiner Tokenizer für Syntax-Highlighting, unabhängig von Editor/Core Text. |
 | `src/strings.c`/`.h` | Übersetzungstabelle für die UI-Sprache (EN/DE/FR/ES/ZH) - reines C, damit main.c ohne Foundation auskommt. |
 | `src/gapbuffer.c`/`.h` | Der Gap Buffer selbst (Puffer-Grundlage von editor.c). |
+| `src/textinput.c`/`.h` | Eingabemethoden: UTF-16 ↔ Bytes nach der Zeichenregel, vorläufiger Text, Bereiche relativ zum Cursor. `shim.m` übersetzt nur `NSTextInputClient`. |
 | `src/eol.c`/`.h` | Zeilenenden erkennen, im Puffer auf `\n` vereinheitlichen und beim Sichern zurückwandeln. |
 | `src/shim.m`/`.h` | Der einzige Objective-C-Code: NSWindow/NSMenu/NSApplication/Event-Weiterleitung/NSPasteboard/NSOpenPanel/NSSavePanel/NSAlert - reine Chrome, keine Content-Widgets. |
 | `src/main.c` | Reines C: verdrahtet Shim-Callbacks mit editor.c/render.c, Datei-I/O, Tab-/Dokumentverwaltung, Scroll-Zustand. |
@@ -130,6 +134,7 @@ umbenennt, muss sie dort nachziehen.
 | `test_regex_replace`, `test_tab_search`, `test_regex_budget` | Suchen/Ersetzen, Rückreferenzen, `\t`, Komplexitätsdeckel der Live-Suche |
 | `test_layout_cache`, `test_layout_cache_lang` | Layout- und Kommentar-Cache gegen einen frischen Aufbau |
 | `test_undo` | Undo-Gruppen und Fuzzing mit simulierten Allokationsfehlern |
+| `test_textinput` | Eingabemethoden: UTF-16-Umrechnung, nachgestellte Abläufe (Tottaste, Pinyin, Akzent-Menü, Emoji, Suchfeld) mit dem Code aus `main.c` |
 | `test_indent` | Auto-Indent bei Return, Tab/⇧Tab über mehrere Zeilen, Tab vs. Leerzeichen, Fuzz: Ausrücken nach Einrücken = Original |
 | `test_save_atomic`, `test_save_links_perms`, `test_file_io` | atomares Sichern, Symlinks, Schreibschutz, Laden, Recent-Liste |
 | `test_close_flow` | Schließen/Beenden verliert nie ungesicherte Änderungen |
@@ -139,7 +144,9 @@ umbenennt, muss sie dort nachziehen.
 | `test_strings`, `test_tab_label`, `test_font_size`, `test_row_capacity` | Übersetzungstabelle, Tab-Beschriftung, Schriftgröße, sichtbare Zeilen |
 
 Die Objective-C-Seite (`shim.m`: Tastatur, Maus, Dialoge) lässt sich so nicht
-testen. Dafür baut die CI (`.github/workflows/build.yml`) bei jedem Push auf
+testen. `make test-objc` (nur macOS) erzeugt deshalb die echte View und prüft
+die Eingabemethoden-Schnittstelle mit Protokollaufrufen und künstlichen
+Tasten-Events. Dafür baut die CI (`.github/workflows/build.yml`) bei jedem Push auf
 einem macOS-Runner die echte App mit `-Werror`, startet sie kurz und führt die
 Tests mit Apples Regex-Engine aus; ein zweiter Job führt sie unter Linux mit
 gcc aus. Neue Tests: `tests/test_<name>.c` anlegen und in `tests/run_tests.sh`

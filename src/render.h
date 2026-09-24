@@ -179,6 +179,18 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
  * unter Beruecksichtigung der aktuellen Scroll-Position. */
 size_t btn_hit_test(Editor *ed, CGRect bounds, double x, double y, long scroll_row);
 
+/* Vorlaeufiger Text einer Eingabemethode (siehe textinput.h): wird bis zum
+ * Festschreiben als Overlay am Cursor des Ziels gezeichnet (kopiert).
+ * caret = Cursor darin in Bytes. len 0 = keiner. */
+enum { BTN_MARKED_NONE = 0, BTN_MARKED_SEARCH = 1, BTN_MARKED_REPLACE = 2, BTN_MARKED_DOCUMENT = 3 };
+void btn_render_set_marked_text(const char *utf8, size_t len, size_t caret, int target);
+
+/* Cursor-Rechteck in View-Koordinaten - dort oeffnet macOS das
+ * Kandidatenfenster. Dokument (bounds = Inhaltsbereich wie bei
+ * btn_render_frame()) bzw. Suchen-/Ersetzen-Feld (bounds = ganzes Fenster). */
+CGRect btn_render_caret_rect(Editor *ed, CGRect bounds, long scroll_row);
+CGRect btn_render_find_caret_rect(CGRect bounds, Editor *field, int replace_field);
+
 /* Wie viele Rows bei dieser Inhaltshoehe (ohne Tab-/Suchleiste) VOLL ueber
  * dem Footer sichtbar sind - mit demselben oberen Innenabstand, den
  * btn_render_frame() vor die erste Row setzt (mindestens 1). main.c's
