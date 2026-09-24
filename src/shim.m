@@ -43,8 +43,27 @@ static NSMenu *g_recentMenu = nil;
 
 - (void)keyDown:(NSEvent *)event {
     if (g_key_cb) {
-        const char *chars = [[event characters] UTF8String];
-        g_key_cb(chars, [event keyCode], (unsigned long)[event modifierFlags]);
+        NSString *characters = [event characters];
+        const char *chars = [characters UTF8String];
+        /* Funktions-/Navigationstasten (F1-F12, Bild auf/ab, Hilfe, Pfeile,
+         * ...) liefern in [event characters] Codepunkte aus dem von AppKit
+         * reservierten Bereich U+F700-U+F7FF (NSUpArrowFunctionKey bis
+         * NSModeSwitchFunctionKey = U+F747). Bewusst NICHT bis U+F8FF: das
+         * Apple-Logo (Wahl+Umschalt+K) ist U+F8FF und ein echtes, tippbares
+         * Zeichen. Ohne
+         * Filter wuerde main.c alles, was es nicht per Keycode kennt, wie
+         * normalen Text einfuegen: ein unsichtbares 3-Byte-Zeichen, und das
+         * Dokument gilt als geaendert. Leeren String statt das Event zu
+         * schlucken - Keycode/Modifier gehen unveraendert weiter, damit
+         * Pfeile/Pos1/Ende usw. in main.c ueber den Keycode funktionieren
+         * wie bisher (deren characters[0] wird dort nie gebraucht). */
+        if ([characters length] > 0) {
+            unichar first = [characters characterAtIndex:0];
+            if (first >= 0xF700 && first <= 0xF7FF) {
+                chars = "";
+            }
+        }
+        g_key_cb(chars ? chars : "", [event keyCode], (unsigned long)[event modifierFlags]);
     }
 }
 
@@ -452,12 +471,27 @@ void btn_app_run(void) {
     }
 }
 
-void btn_pasteboard_set_string(const char *utf8) {
+int btn_pasteboard_set_string(const char *bytes, size_t len) {
     @autoreleasepool {
-        NSString *s = [NSString stringWithUTF8String:utf8 ? utf8 : ""];
+        NSString *s = @"";
+        if (bytes && len > 0) {
+            /* initWithBytes:length: statt stringWithUTF8String: - Letzteres
+             * bricht am ersten NUL-Byte ab und liefert bei ungueltigem UTF-8
+             * nil; dann landete nil in setString: und der Text war nach dem
+             * anschliessenden Loeschen (Ausschneiden) nirgends mehr.
+             * ISO-8859-1 bildet jeden Bytewert ab und schlaegt nie fehl -
+             * fuer Latin-1-/Binaerdateien, die render.c bewusst anzeigt. */
+            s = [[[NSString alloc] initWithBytes:bytes length:len encoding:NSUTF8StringEncoding] autorelease];
+            if (!s) {
+                s = [[[NSString alloc] initWithBytes:bytes length:len encoding:NSISOLatin1StringEncoding] autorelease];
+            }
+            if (!s) {
+                return 0;
+            }
+        }
         NSPasteboard *pb = [NSPasteboard generalPasteboard];
         [pb clearContents];
-        [pb setString:s forType:NSPasteboardTypeString];
+        return [pb setString:s forType:NSPasteboardTypeString] ? 1 : 0;
     }
 }
 

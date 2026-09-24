@@ -41,6 +41,13 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
   Undo-Schritte (öffnende Klammer, wiedereingefügter Text, schließende
   Klammer) statt einem zusammengefassten - ein Undo braucht dafür 3x Cmd+Z.
 
+- Sichern ist atomar (Tempdatei + `rename()`), damit ein Schreibfehler nie
+  das Original zerstört. Nebenwirkung: die Datei bekommt eine neue Inode -
+  Hardlinks auf die Datei werden getrennt, erweiterte Attribute (Finder-Tags,
+  Quarantäne-Flag, ACLs) und das Erstellungsdatum gehen verloren. Symlinks
+  werden aufgelöst (das Ziel wird geschrieben, der Link bleibt), und
+  schreibgeschützte Dateien werden weiterhin abgelehnt.
+
 ## Reuse/Efficiency-Findings aus Code-Reviews, nicht behoben (niedrige Priorität)
 
 - Mehrere unabhängige "finde Zeilengrenzen"-Scanner in editor.c/render.c

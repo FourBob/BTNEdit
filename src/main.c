@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #define KEYCODE_LEFT           123
@@ -563,7 +564,16 @@ static int compile_search_regex(regex_t *re) {
          * statt mit NULL an snprintf() abzustuerzen. */
     }
 
-    int cflags = REG_EXTENDED | (g_search_case_sensitive ? 0 : REG_ICASE);
+    /* REG_NEWLINE: '^'/'$' matchen an jeder Zeilengrenze und '.' bzw. eine
+     * negierte Klasse laufen nicht ueber '\n' hinaus (wie in VS Code/BBEdit).
+     * Ohne das Flag bedeutete '^' nur "Anfang des durchsuchten Bereichs" -
+     * und weil jeder Scan beim Ende des vorherigen Treffers wieder aufsetzt
+     * (siehe collect_all_matches()), fand "^foo" in "bar\nfoo" schlicht
+     * nichts, "a$" vor einem Zeilenumbruch ebenso wenig. Die NOTBOL-Logik in
+     * regexec_flags_for() bleibt dabei korrekt: sie unterdrueckt '^' nur an
+     * der Startposition selbst, nach einem eingebetteten '\n' matcht '^'
+     * unabhaengig davon. */
+    int cflags = REG_EXTENDED | REG_NEWLINE | (g_search_case_sensitive ? 0 : REG_ICASE);
     int ok = regcomp(re, final_pattern, cflags) == 0;
     free(final_pattern);
     return ok;
@@ -955,28 +965,30 @@ static int replacement_has_backreferences(const char *raw, size_t raw_len) {
  * Literal-Modus (g_search_regex == 0) oder ohne Rueckreferenzen (siehe
  * replacement_has_backreferences() oben) unveraendert, sonst mit $1..$9
  * (bzw. \1..\9) ersetzt durch die jeweilige Erfassungsgruppe des Treffers
- * bei [match_start, ...) in text ($0/\0 = kompletter Treffer). Der Treffer
- * wird hier erneut per regexec() ab exakt match_start gesucht (statt
- * match_end als Parameter zu verlangen) - deterministisch dieselbe
- * Fundstelle wie beim ersten Mal, liefert aber zusaetzlich die einzelnen
- * Gruppen-Bereiche, die find_match()/collect_all_matches() (nur Gruppe 0)
- * nicht mit herausreichen. Nicht existierende oder nicht getroffene Gruppen
+ * bei [match_start, match_end) in text ($0/\0 = kompletter Treffer). Der
+ * Treffer wird hier erneut per regexec() ab match_start gesucht - mit
+ * denselben Flags deterministisch dieselbe Fundstelle wie beim ersten Mal,
+ * liefert aber zusaetzlich die einzelnen Gruppen-Bereiche, die
+ * find_match()/collect_all_matches() (nur Gruppe 0) nicht mit
+ * herausreichen. Nicht existierende oder nicht getroffene Gruppen
  * werden durch einen leeren String ersetzt (wie in den meisten Editoren/
  * sed -E ueblich). Caller muss free() aufrufen.
  *
- * flags statt eines intern per regexec_flags_for(text, match_start)
- * berechneten Werts: perform_replace_all() ruft das hier mit text=orig_text
- * (dem UNVERAENDERTEN Ausgangsdokument, siehe dortiger Kommentar zur
- * O(Dokumentlaenge)-Optimierung) auf, aber ob '^' an match_start matchen
- * darf, haengt vom Zeichen davor im tatsaechlichen LIVE-Puffer ab - bei
- * direkt an einen vorherigen Treffer angrenzenden Treffern kann das
- * inzwischen dessen Ersetzungstext sein, nicht mehr das urspruengliche
- * Zeichen aus orig_text. perform_replace_all() verfolgt diesen Live-Kontext
- * selbst mit (ohne dafuer das Dokument erneut kopieren zu muessen) und
- * reicht das fertige Ergebnis hier durch; perform_replace_current() (Einzel-
- * Ersetzung auf dem echten Live-Puffer) uebergibt weiterhin einfach
- * regexec_flags_for(text, match_start). */
-static char *expand_replacement(const char *text, size_t text_len, size_t match_start, int flags, size_t *out_len) {
+ * flags: der Aufrufer uebergibt exakt die Flags, mit denen der Treffer
+ * GEFUNDEN wurde (perform_replace_all(): regexec_flags_for(orig_text,
+ * match_start) auf dem unveraenderten Snapshot; perform_replace_current():
+ * dieselbe Rechnung auf dem Live-Puffer). Nur dann ist der erneute regexec()
+ * deterministisch derselbe Aufruf wie beim Finden. Ein frueherer Versuch,
+ * hier stattdessen den "Live-Kontext" nach vorherigen Ersetzungen
+ * nachzubilden, lieferte STRENGERE Flags als beim Sammeln - der Re-Exec
+ * schlug dann bei direkt angrenzenden Treffern fehl (und fuegte den rohen
+ * Text mit woertlichem "$1" ins Dokument ein) oder fand einen spaeteren,
+ * anderen Treffer und nahm dessen Gruppen. match_end dient als
+ * Sicherheitsnetz: liefert der Re-Exec nicht exakt [match_start, match_end),
+ * sind die Gruppen unbekannt - dann wird $0 durch den bekannten Treffertext
+ * und $1..$9 durch leer ersetzt, nie der rohe Ersetzungstext eingefuegt. */
+static char *expand_replacement(const char *text, size_t text_len, size_t match_start, size_t match_end,
+                                int flags, size_t *out_len) {
     size_t raw_len;
     char *raw = editor_copy_all(&g_replace_editor, &raw_len);
     if (!g_search_regex || !replacement_has_backreferences(raw, raw_len)) {
@@ -994,9 +1006,13 @@ static char *expand_replacement(const char *text, size_t text_len, size_t match_
     groups[0].rm_eo = (regoff_t)text_len;
     int ok = regexec(&re, text, BTN_MAX_REGEX_GROUPS, groups, flags) == 0;
     regfree(&re);
-    if (!ok) {
-        *out_len = raw_len;
-        return raw;
+    if (!ok || (size_t)groups[0].rm_so != match_start || (size_t)groups[0].rm_eo != match_end) {
+        groups[0].rm_so = (regoff_t)match_start;
+        groups[0].rm_eo = (regoff_t)match_end;
+        for (int g = 1; g < BTN_MAX_REGEX_GROUPS; g++) {
+            groups[g].rm_so = -1;
+            groups[g].rm_eo = -1;
+        }
     }
 
     size_t cap = raw_len + 1;
@@ -1064,10 +1080,11 @@ static char *expand_replacement(const char *text, size_t text_len, size_t match_
  * beginnen"-Semantik wie find_match()s eigener Vorwaertszweig weiter oben)
  * - bei einer Selektion, die NICHT von einem echten Treffer stammt (z.B.
  * manuell mit der Maus gewaehlt, waehrend die Suchleiste offen ist), wuerde
- * diese interne Suche stattdessen den naechsten, ganz woanders liegenden
- * Treffer finden und dessen Gruppen fuer eine Ersetzung an der falschen
- * (der eigentlich selektierten) Stelle verwenden - stillschweigend falscher
- * Inhalt an der falschen Stelle, ohne jede Fehlermeldung. */
+ * diese interne Suche einen anderen Bereich finden. expand_replacement()
+ * faengt das zwar ab (Gruppen leer statt fremder Gruppen), aber die
+ * beliebige Selektion wuerde trotzdem ersetzt - deshalb sucht
+ * perform_replace_current() in diesem Fall erst den naechsten echten
+ * Treffer, statt die manuelle Selektion zu ueberschreiben. */
 static int selection_is_current_match(Editor *ed) {
     if (!editor_has_selection(ed)) {
         return 0;
@@ -1098,7 +1115,7 @@ static void perform_replace_current(void) {
     char *doc_text = editor_copy_all(ed, &doc_len);
     size_t match_start = editor_selection_start(ed);
     size_t replace_len;
-    char *replace_text = expand_replacement(doc_text, doc_len, match_start,
+    char *replace_text = expand_replacement(doc_text, doc_len, match_start, editor_selection_end(ed),
                                              regexec_flags_for(doc_text, match_start), &replace_len);
     free(doc_text);
     replace_selection(ed, replace_text, replace_len);
@@ -1158,13 +1175,6 @@ static void perform_replace_all(void) {
     size_t match_count = collect_all_matches_unbounded(orig_text, orig_len, &starts, &ends);
 
     long delta = 0;
-    /* Nur relevant, wenn per_match_expansion (siehe expand_replacement()-
-     * Kommentar oben): verfolgt, ob '^' fuer den JEWEILS NAECHSTEN Treffer
-     * im tatsaechlichen Live-Puffer matchen darf, ohne das Dokument dafuer
-     * zu kopieren - siehe die Faelle unten. */
-    int prev_live_flags = 0;
-    size_t prev_replace_len = 0;
-    char prev_replace_last_byte = 0;
     for (size_t i = 0; i < match_count; i++) {
         size_t match_start = starts[i];
         size_t match_end = ends[i];
@@ -1172,31 +1182,13 @@ static void perform_replace_all(void) {
         size_t replace_len;
         char *replace_text;
         if (per_match_expansion) {
-            int live_flags;
-            if (i > 0 && match_start == ends[i - 1]) {
-                /* Keine Luecke zum vorherigen Treffer (im Original UND damit
-                 * auch im Live-Puffer, siehe Kommentar oben) - das Zeichen
-                 * unmittelbar davor ist jetzt das letzte Zeichen von dessen
-                 * Ersetzungstext, nicht mehr das urspruengliche Zeichen aus
-                 * orig_text. War die vorherige Ersetzung leer, wurde nichts
-                 * eingefuegt - der Kontext bleibt dann exakt der, den der
-                 * vorherige Treffer selbst schon hatte (rekursiv bis zur
-                 * naechsten echten Luecke bzw. bis Treffer 0). */
-                if (prev_replace_len > 0) {
-                    live_flags = (prev_replace_last_byte != '\n') ? (REG_STARTEND | REG_NOTBOL) : REG_STARTEND;
-                } else {
-                    live_flags = prev_live_flags;
-                }
-            } else {
-                /* Luecke zum Vorgaenger (oder erster Treffer): dieser
-                 * Bereich wurde noch nie veraendert, orig_text ist hier
-                 * weiterhin exakt das, was auch im Live-Puffer steht. */
-                live_flags = regexec_flags_for(orig_text, match_start);
-            }
-            replace_text = expand_replacement(orig_text, orig_len, match_start, live_flags, &replace_len);
-            prev_live_flags = live_flags;
-            prev_replace_last_byte = (replace_len > 0) ? replace_text[replace_len - 1] : 0;
-            prev_replace_len = replace_len;
+            /* Exakt dieselben Flags wie beim Sammeln: Sammeln UND
+             * Expandieren arbeiten beide auf dem unveraenderten orig_text,
+             * der Re-Exec ist damit derselbe Aufruf wie beim Finden (siehe
+             * expand_replacement()-Kommentar, warum ein nachgebildeter
+             * "Live-Kontext" hier falsch war). */
+            replace_text = expand_replacement(orig_text, orig_len, match_start, match_end,
+                                              regexec_flags_for(orig_text, match_start), &replace_len);
         } else {
             replace_text = fixed_replace_text;
             replace_len = fixed_replace_len;
@@ -1317,14 +1309,98 @@ static char *read_file_contents(const char *path, size_t *out_len) {
     return buf;
 }
 
-static int write_file_contents(const char *path, const char *data, size_t len) {
-    FILE *f = fopen(path, "wb");
-    if (!f) {
+/* Schreibt einen bereits offenen Stream vollstaendig durch und prueft JEDEN
+ * Schritt: fwrite() puffert bei kleinen Dokumenten nur, der eigentliche
+ * write(2) - und damit ENOSPC/EDQUOT/EIO - passiert erst in fflush()/
+ * fclose(). fsync() sorgt dafuer, dass die Daten vor dem rename() unten
+ * wirklich auf dem Medium sind. Schliesst f in jedem Fall. */
+static int write_stream_checked(FILE *f, const char *data, size_t len) {
+    int ok = fwrite(data, 1, len, f) == len && fflush(f) == 0 && fsync(fileno(f)) == 0;
+    if (fclose(f) != 0) {
+        ok = 0;
+    }
+    return ok;
+}
+
+/* Schreibt atomar: erst in eine Tempdatei im selben Verzeichnis (gleiches
+ * Volume, daher ist rename() auf APFS/HFS+ atomar), dann per rename() ueber
+ * das Original. Das Original bleibt bei JEDEM Fehler unveraendert. Vorher
+ * trunkierte fopen("wb") die Datei sofort auf 0 Byte und der Rueckgabewert
+ * von fclose() wurde ignoriert - bei voller Platte meldete die App
+ * "gesichert" (Punkt weg, kein Nachfragen beim Beenden), auf der Platte lag
+ * eine leere oder halbe Datei. Rueckfall auf checked In-Place-Schreiben nur,
+ * wenn im Zielverzeichnis keine Tempdatei angelegt werden darf (Datei
+ * beschreibbar, Verzeichnis nicht) - dann wenigstens mit korrekter
+ * Fehlermeldung statt falschem Erfolg. */
+static int write_file_atomic(const char *path, const char *data, size_t len) {
+    const char *slash = strrchr(path, '/');
+    size_t dir_len = slash ? (size_t)(slash - path + 1) : 0;
+    const char *base = slash ? slash + 1 : path;
+    size_t tmp_cap = dir_len + 1 + strlen(base) + 8; /* "." + base + ".XXXXXX" + NUL */
+    char *tmp = malloc(tmp_cap);
+    if (!tmp) {
         return 0;
     }
-    size_t written = fwrite(data, 1, len, f);
-    fclose(f);
-    return written == len;
+    snprintf(tmp, tmp_cap, "%.*s.%s.XXXXXX", (int)dir_len, path, base);
+
+    int fd = mkstemp(tmp);
+    if (fd < 0) {
+        free(tmp);
+        FILE *f = fopen(path, "wb");
+        return f ? write_stream_checked(f, data, len) : 0;
+    }
+
+    /* mkstemp() legt 0600 an - Rechte des Originals uebernehmen, sonst
+     * wuerde jedes Sichern z.B. eine gruppenlesbare Datei privat machen.
+     * Bei einer NEUEN Datei (Sichern unter) gilt wie bei fopen("wb") die
+     * umask (ueblich 022 -> 0644), nicht mkstemps 0600. fchmod auf die
+     * eigene Tempdatei kann praktisch nicht scheitern; falls doch, bleibt es
+     * bei 0600 - kein Grund, das Sichern abzubrechen. */
+    struct stat st;
+    mode_t mode;
+    if (stat(path, &st) == 0) {
+        mode = st.st_mode & 07777;
+    } else {
+        mode_t mask = umask(0);
+        umask(mask);
+        mode = 0666 & ~mask;
+    }
+    fchmod(fd, mode);
+
+    FILE *f = fdopen(fd, "wb");
+    if (!f) {
+        close(fd);
+        unlink(tmp);
+        free(tmp);
+        return 0;
+    }
+    int ok = write_stream_checked(f, data, len);
+    if (ok && rename(tmp, path) != 0) {
+        ok = 0;
+    }
+    if (!ok) {
+        unlink(tmp);
+    }
+    free(tmp);
+    return ok;
+}
+
+/* Symlinks aufloesen, bevor atomar geschrieben wird: rename() ersetzt sonst
+ * den Link selbst durch eine normale Datei, und das eigentliche Ziel bliebe
+ * unveraendert (vorher schrieb fopen("wb") durch den Link hindurch). Und
+ * Schreibschutz respektieren: rename() fragt nur das Verzeichnis, nicht die
+ * Rechte der Zieldatei - ohne die access()-Pruefung wuerde eine per
+ * "chmod a-w" geschuetzte Datei stillschweigend ueberschrieben. Neue Dateien
+ * (realpath() schlaegt mit ENOENT fehl) gehen direkt an write_file_atomic(). */
+static int write_file_contents(const char *path, const char *data, size_t len) {
+    char *resolved = realpath(path, NULL);
+    const char *target = resolved ? resolved : path;
+    int ok = 0;
+    if (!resolved || access(target, W_OK) == 0) {
+        ok = write_file_atomic(target, data, len);
+    }
+    free(resolved);
+    return ok;
 }
 
 /* Grobe Heuristik: ein eingebettetes NUL-Byte kommt in echten Textdateien
@@ -1579,11 +1655,17 @@ static int should_close(void) {
     switch_to_tab(original_active);
 
     for (int i = 0; i < g_doc_count; i++) {
-        if (choices[i] == 1) {
-            if (!perform_save_doc(&g_docs[i], 0)) {
-                return 0;
-            }
-        } else if (choices[i] == 2) {
+        if (choices[i] == 1 && !perform_save_doc(&g_docs[i], 0)) {
+            return 0;
+        }
+    }
+    /* "Nicht sichern"-Tabs erst als sauber markieren, wenn ALLE Speichern-
+     * Aktionen durch sind: bricht der Nutzer ein spaeteres Sichern ab (return
+     * 0 oben, das Fenster bleibt offen), darf ein frueherer Tab nicht schon
+     * seinen Punkt verloren haben - beim naechsten Schliessen ginge er sonst
+     * ohne jede Nachfrage verloren. */
+    for (int i = 0; i < g_doc_count; i++) {
+        if (choices[i] == 2) {
             g_docs[i].saved_edit_seq = g_docs[i].editor.edit_seq;
         }
     }
@@ -2159,17 +2241,29 @@ static void on_menu(int tag) {
         case BTN_MENU_REDO:
             editor_redo(focused_editor());
             break;
-        case BTN_MENU_CUT:
-            clip = editor_get_selection_text(focused_editor());
-            btn_pasteboard_set_string(clip);
+        case BTN_MENU_CUT: {
+            Editor *fed = focused_editor();
+            /* Byte-Laenge aus den Selektionsgrenzen, nicht strlen(): die
+             * Selektion darf NUL-Bytes enthalten (Binaerdatei per "Trotzdem
+             * oeffnen"). Geloescht wird nur, wenn die Zwischenablage den Text
+             * wirklich uebernommen hat - sonst waere er nirgends mehr. */
+            size_t clip_len = editor_selection_end(fed) - editor_selection_start(fed);
+            clip = editor_get_selection_text(fed);
+            int copied = btn_pasteboard_set_string(clip, clip_len);
             free(clip);
-            editor_delete_selection(focused_editor());
+            if (copied) {
+                editor_delete_selection(fed);
+            }
             break;
-        case BTN_MENU_COPY:
-            clip = editor_get_selection_text(focused_editor());
-            btn_pasteboard_set_string(clip);
+        }
+        case BTN_MENU_COPY: {
+            Editor *fed = focused_editor();
+            size_t clip_len = editor_selection_end(fed) - editor_selection_start(fed);
+            clip = editor_get_selection_text(fed);
+            btn_pasteboard_set_string(clip, clip_len);
             free(clip);
             break;
+        }
         case BTN_MENU_PASTE: {
             size_t clip_len;
             clip = btn_pasteboard_copy_string(&clip_len);

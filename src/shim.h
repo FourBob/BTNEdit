@@ -99,12 +99,17 @@ void btn_app_set_recent_files(const char **paths, int count);
 void btn_app_request_redraw(void);
 void btn_app_run(void);
 
-/* Systemweite Zwischenablage. btn_pasteboard_copy_string gibt einen neu
- * allokierten String zurueck (caller muss free() aufrufen) und schreibt
- * die tatsaechliche Byte-Laenge nach *out_len - wichtig, weil strlen() bei
- * einem eingebetteten NUL-Byte im Zwischenablage-Inhalt vorzeitig abbrechen
- * und den Rest stillschweigend verwerfen wuerde. */
-void btn_pasteboard_set_string(const char *utf8);
+/* Systemweite Zwischenablage. btn_pasteboard_set_string nimmt bytes+len
+ * (nicht NUL-terminiert, darf NUL enthalten): der Inhalt wird als UTF-8
+ * uebernommen, bei ungueltigem UTF-8 (Latin-1-/Binaerdatei per "Trotzdem
+ * oeffnen") als ISO-8859-1 - so wird nie stillschweigend nichts kopiert.
+ * Rueckgabe 1, wenn die Zwischenablage den Text uebernommen hat, sonst 0;
+ * Ausschneiden loescht die Selektion nur bei 1. btn_pasteboard_copy_string
+ * gibt einen neu allokierten String zurueck (caller muss free() aufrufen)
+ * und schreibt die tatsaechliche Byte-Laenge nach *out_len - wichtig, weil
+ * strlen() bei einem eingebetteten NUL-Byte im Zwischenablage-Inhalt
+ * vorzeitig abbrechen und den Rest stillschweigend verwerfen wuerde. */
+int btn_pasteboard_set_string(const char *bytes, size_t len);
 char *btn_pasteboard_copy_string(size_t *out_len);
 
 /* Dupliziert einen NUL-terminierten C-String in einen neu allokierten

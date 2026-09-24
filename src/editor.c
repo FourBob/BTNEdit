@@ -628,8 +628,12 @@ void editor_insert_text(Editor *ed, const char *text, size_t len) {
  * ausgeschrieben. */
 static void wrap_selection_with(Editor *ed, char open_c, char close_c) {
     size_t start = editor_selection_start(ed);
+    /* Laenge aus den Selektionsgrenzen, nicht strlen(): eine Selektion in
+     * einer per "Trotzdem oeffnen" geladenen Binaerdatei kann NUL-Bytes
+     * enthalten - strlen() haette alles dahinter beim Wiedereinfuegen
+     * verschluckt. */
+    size_t sel_len = editor_selection_end(ed) - start;
     char *sel = editor_get_selection_text(ed);
-    size_t sel_len = strlen(sel);
     editor_delete_selection(ed);
     editor_insert_text(ed, &open_c, 1);
     editor_insert_text(ed, sel, sel_len);
@@ -778,14 +782,20 @@ void editor_move(Editor *ed, BtnMove move, int extend) {
             if (!extend && editor_has_selection(ed)) {
                 new_pos = editor_selection_start(ed);
             } else if (new_pos > 0) {
-                new_pos--;
+                /* Ein ZEICHEN, nicht ein Byte - sonst landet der Cursor
+                 * mitten in einer UTF-8-Sequenz (bei "ä" zwischen C3 und
+                 * A4, gezeichnet an derselben Spalte, also unsichtbar), und
+                 * das naechste Tippen/Backspace zerreisst die Sequenz zu
+                 * ungueltigem UTF-8 in der Datei. Dieselben Helfer wie
+                 * Backspace/Entf. */
+                new_pos -= utf8_backward_len(ed, new_pos);
             }
             break;
         case BTN_MOVE_RIGHT:
             if (!extend && editor_has_selection(ed)) {
                 new_pos = editor_selection_end(ed);
             } else if (new_pos < len) {
-                new_pos++;
+                new_pos += utf8_forward_len(ed, new_pos, len);
             }
             break;
         case BTN_MOVE_WORD_LEFT:
