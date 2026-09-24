@@ -70,6 +70,19 @@ make clean  # räumt auf
 Kein Xcode-Projekt nötig - ein einfaches `Makefile` reicht (`clang`,
 `-framework Cocoa -framework CoreText -framework CoreGraphics`).
 
+Falls der Link-Schritt mit `ld: ... tapi error: malformed file` /
+`unknown architecture` abbricht: das ist kein Fehler im Code, sondern ein
+bekannter Toolchain-Bug bei manchen (insbesondere sehr neuen/Beta-)
+Xcode-/SDK-Kombinationen, bei denen der Linker die `.tbd`-Stub-Dateien der
+aktuell aufgelösten SDK-Version nicht parsen kann. Abhilfe: eine ältere,
+bereits auf der Maschine vorhandene SDK-Version erzwingen (Pfad ggf. mit
+`ls /Library/Developer/CommandLineTools/SDKs/` ermitteln):
+
+```bash
+make clean
+make SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
+```
+
 ## Tastenkürzel
 
 | Aktion | Shortcut |
