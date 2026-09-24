@@ -77,6 +77,15 @@ make run    # baut und öffnet die App
 make clean  # räumt auf
 ```
 
+Neuesten Stand von GitHub holen, sauber neu bauen und starten (klont bei
+Bedarf, sichert lokale Änderungen per `git stash`, nimmt SDK 26.5, falls
+vorhanden - siehe unten):
+
+```bash
+scripts/update-and-build.sh            # Klon in ~/Downloads/BTN
+scripts/update-and-build.sh ~/code/BTN --test
+```
+
 Kein Xcode-Projekt nötig - ein einfaches `Makefile` reicht (`clang`,
 `-framework Cocoa -framework CoreText -framework CoreGraphics`).
 
