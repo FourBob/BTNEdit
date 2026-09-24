@@ -21,8 +21,10 @@ CC       := clang
 # unpassende SDK aus der Umgebung stillschweigend als -isysroot uebernehmen.
 BTN_SDK  ?=
 SDKFLAG  := $(if $(BTN_SDK),-isysroot $(BTN_SDK),)
-CFLAGS   := -Wall -Wextra -std=c11 -O2 -Isrc $(SDKFLAG)
-OBJCFLAGS:= -Wall -Wextra -fno-objc-arc -O2 -Isrc $(SDKFLAG)
+# Zusaetzliche Compiler-Flags, z.B. "make EXTRA_CFLAGS=-Werror" (so baut die CI).
+EXTRA_CFLAGS ?=
+CFLAGS   := -Wall -Wextra -std=c11 -O2 -Isrc $(SDKFLAG) $(EXTRA_CFLAGS)
+OBJCFLAGS:= -Wall -Wextra -fno-objc-arc -O2 -Isrc $(SDKFLAG) $(EXTRA_CFLAGS)
 FRAMEWORKS := -framework Cocoa -framework CoreText -framework CoreGraphics $(SDKFLAG)
 
 SRC_C := src/main.c src/render.c src/editor.c src/gapbuffer.c src/highlight.c src/strings.c
@@ -32,7 +34,11 @@ OBJ := $(SRC_C:.c=.o) $(SRC_M:.m=.o)
 
 BINARY := $(MACOS_DIR)/$(APP_NAME)
 
-.PHONY: all run clean
+.PHONY: all run clean test bench
+
+# Compiler fuer Tests/Benchmark. Unter Linux: "make test TEST_CC=gcc" (clang
+# bringt dort oft keine ASan-Laufzeit mit). Die Tests brauchen kein macOS.
+TEST_CC ?= $(CC)
 
 all: $(BINARY) $(CONTENTS_DIR)/Info.plist $(RESOURCES_DIR)/AppIcon.icns
 
@@ -62,6 +68,17 @@ $(RESOURCES_DIR)/AppIcon.icns: resources/AppIcon.iconset | $(RESOURCES_DIR)
 
 run: all
 	open $(APP_DIR)
+
+# Alle Tests unter tests/ mit AddressSanitizer/UBSan - siehe tests/run_tests.sh.
+test:
+	CC=$(TEST_CC) tests/run_tests.sh
+
+# Laufzeit pro Tastendruck bei grossen Dokumenten (kein Test, nur Messwerte).
+bench:
+	python3 tests/gen_headers.py src $(BUILD_DIR)/tests/gen
+	$(TEST_CC) -std=gnu11 -O2 -Isrc -I$(BUILD_DIR)/tests/gen -o $(BUILD_DIR)/tests/bench_layout \
+		tests/bench_layout.c src/editor.c src/gapbuffer.c src/highlight.c -lm
+	$(BUILD_DIR)/tests/bench_layout
 
 clean:
 	rm -rf $(BUILD_DIR) src/*.o

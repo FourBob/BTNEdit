@@ -87,6 +87,42 @@ make clean
 make BTN_SDK=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
 ```
 
+## Entwicklung und Tests
+
+```bash
+make test                  # alle Tests (tests/), mit AddressSanitizer/UBSan
+make test TEST_CC=gcc      # dasselbe unter Linux
+ONLY=undo make test        # nur Tests, deren Name "undo" enthält
+make bench                 # Laufzeit pro Tastendruck bei großen Dokumenten
+```
+
+Die Tests brauchen kein macOS und kein Xcode-Projekt: `editor.c`,
+`gapbuffer.c`, `highlight.c` und `strings.c` werden direkt gelinkt. Die reinen
+C-Teile aus `main.c` und `render.c` (Regex-Suche, Sichern, Laden, Layout, ...)
+schneidet `tests/gen_headers.py` bei jedem Lauf frisch aus dem Quelltext
+heraus - ein Test prüft also immer den Code, der gerade im Repo steht. Welche
+Funktionen das sind, steht in der Liste oben in dieser Datei; wer eine davon
+umbenennt, muss sie dort nachziehen.
+
+| Test | Prüft |
+|---|---|
+| `test_editor_basics` | Pfeiltasten, Löschen und Klammer-Umschließen auf Mehrbyte-Zeichen und NUL-Bytes |
+| `test_utf8_rule`, `test_utf8_column`, `test_char_boundaries` | die eine Zeichenregel für Cursor, Umbruch, Spalten, Anzeige und Regex-Treffer |
+| `test_regex_replace`, `test_tab_search`, `test_regex_budget` | Suchen/Ersetzen, Rückreferenzen, `\t`, Komplexitätsdeckel der Live-Suche |
+| `test_layout_cache`, `test_layout_cache_lang` | Layout- und Kommentar-Cache gegen einen frischen Aufbau |
+| `test_undo` | Undo-Gruppen und Fuzzing mit simulierten Allokationsfehlern |
+| `test_save_atomic`, `test_save_links_perms`, `test_file_io` | atomares Sichern, Symlinks, Schreibschutz, Laden, Recent-Liste |
+| `test_close_flow` | Schließen/Beenden verliert nie ungesicherte Änderungen |
+| `test_gapbuffer`, `test_oom` | Gap-Buffer und Speichermangel-Helfer |
+| `test_strings`, `test_tab_label`, `test_font_size`, `test_row_capacity` | Übersetzungstabelle, Tab-Beschriftung, Schriftgröße, sichtbare Zeilen |
+
+Die Objective-C-Seite (`shim.m`: Tastatur, Maus, Dialoge) lässt sich so nicht
+testen. Dafür baut die CI (`.github/workflows/build.yml`) bei jedem Push auf
+einem macOS-Runner die echte App mit `-Werror`, startet sie kurz und führt die
+Tests mit Apples Regex-Engine aus; ein zweiter Job führt sie unter Linux mit
+gcc aus. Neue Tests: `tests/test_<name>.c` anlegen und in `tests/run_tests.sh`
+in die Liste `TESTS` eintragen.
+
 ## Tastenkürzel
 
 | Aktion | Shortcut |
