@@ -3,6 +3,40 @@
 Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
 (nicht nur abgehakt liegen gelassen).
 
+## Fehlende Features (nach Priorität)
+
+1. **Eingabemethoden (IME) und Tottasten.** Die View implementiert kein
+   `NSTextInputClient` (kein `interpretKeyEvents:`/`insertText:`/
+   `setMarkedText:`), `keyDown:` reicht nur `[event characters]` durch.
+   Chinesische/japanische Eingabe und die Emoji-Palette (Ctrl+Cmd+Leertaste)
+   funktionieren deshalb nicht - obwohl die UI auf Chinesisch übersetzt ist.
+   Tottasten der deutschen Tastatur (`^`, `´`, `` ` `` + Buchstabe)
+   vermutlich ebenso; am Mac prüfen. Umbau des Tastatur-Pfads in shim.m,
+   inklusive Anzeige des vorläufigen (marked) Texts.
+2. **Zeilenenden.** Keine Erkennung/Umwandlung: bei Windows-Dateien (CRLF)
+   bleibt `\r` als unsichtbares Zusatzzeichen am Zeilenende im Puffer
+   (Ende/Spalten/Suche sehen es), alte Mac-Dateien (nur CR) erscheinen als
+   eine einzige Zeile. Gewünscht: beim Laden erkennen, intern `\n`, beim
+   Sichern das ursprüngliche Format schreiben, Anzeige in der Statuszeile.
+3. **Einrücken.** Return übernimmt die Einrückung der vorigen Zeile nicht
+   (kein Auto-Indent). Tab mit Selektion ersetzt die Selektion durch einen
+   Tab, statt die Zeilen einzurücken; Shift+Tab (Ausrücken) fehlt.
+4. **Maus und Scrollen.** Keine Scrollbar, kein Autoscroll beim Ziehen einer
+   Selektion über den Fensterrand, Mauszeiger bleibt ein Pfeil statt
+   I-Beam, Datei aufs Fenster ziehen öffnet sie nicht (Drag & Drop).
+5. **Schutz der Arbeit.** Keine Erkennung, wenn ein anderes Programm eine
+   offene Datei auf der Platte ändert (Neu laden anbieten). Kein Autosave /
+   keine Wiederherstellung nach Absturz - wichtiger, seit Speichermangel im
+   Gap-Buffer bewusst mit `abort()` endet.
+6. **Standard-Tastenkürzel.** Weitersuchen/Rückwärtssuchen (⌘G / ⇧⌘G),
+   "Auswahl zum Suchen verwenden" (⌘E), Tab-Wechsel per Tastatur (Ctrl+Tab
+   bzw. ⇧⌘[ / ⇧⌘]), Fenster-Menü mit Im Dock ablegen (⌘M) und Vollbild.
+7. **Code-Editor-Funktionen.** Kommentar umschalten (⌘/), Zeile duplizieren,
+   Zeile(n) hoch/runter verschieben, unsichtbare Zeichen anzeigen,
+   Wortumbruch an/aus, Kodierung beim Öffnen/Sichern wählen (heute: Bytes
+   unverändert, Anzeige als UTF-8 mit Latin-1-Fallback), Suche über alle
+   Tabs.
+
 ## Bekannte Einschränkungen (bewusst zurückgestellt, kein akuter Bug)
 
 - Jedes Zeichen (gültige UTF-8-Sequenz, sonst ein einzelnes Byte als
