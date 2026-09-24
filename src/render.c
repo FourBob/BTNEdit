@@ -180,10 +180,13 @@ static CTFontRef get_font(void) {
 }
 
 void btn_render_set_font_size(double size) {
-    if (size < BTN_MIN_FONT_SIZE) {
+    /* Negiert formuliert, damit auch NaN (z.B. "nan" in ~/.btnedit_prefs,
+     * das fscanf("%lf") klaglos liest) geklemmt wird: jeder Vergleich mit
+     * NaN ist falsch, "size < MIN" liess es durch. */
+    if (!(size >= BTN_MIN_FONT_SIZE)) {
         size = BTN_MIN_FONT_SIZE;
     }
-    if (size > BTN_MAX_FONT_SIZE) {
+    if (!(size <= BTN_MAX_FONT_SIZE)) {
         size = BTN_MAX_FONT_SIZE;
     }
     if (size == g_font_size) {
@@ -379,8 +382,8 @@ static long chars_per_row_for(double text_width) {
 static void rows_push(BtnRow **rows, size_t *count, size_t *cap,
                        size_t start, size_t len, size_t logical_line, int is_continuation) {
     if (*count == *cap) {
-        *cap = *cap ? *cap * 2 : 64;
-        *rows = realloc(*rows, (*cap) * sizeof(BtnRow));
+        *cap = *cap ? btn_xmul(*cap, 2) : 64;
+        *rows = btn_xrealloc(*rows, btn_xmul(*cap, sizeof(BtnRow)));
     }
     (*rows)[*count].start = start;
     (*rows)[*count].len = len;
@@ -394,15 +397,18 @@ static void rows_push(BtnRow **rows, size_t *count, size_t *cap,
  * Zeichen), weil editor_line_bounds selbst jedes Mal von vorn scannt) -
  * Zeilenenden ('\n') und Umbruchpunkte werden in derselben Schleife
  * erkannt, macht die Layout-Berechnung O(Zeichen) statt O(Zeilen*Zeichen). */
-static BtnRow *layout_build(Editor *ed, long chars_per_row, size_t *out_row_count, size_t *out_word_count) {
+static BtnRow *layout_build(Editor *ed, long chars_per_row, size_t *out_row_count, size_t *out_word_count,
+                            size_t *out_char_count) {
     size_t cap = 0, count = 0;
-    /* Woerter im selben Durchlauf zaehlen (dieselbe Regel wie
-     * editor_word_count()) - spart der Statuszeile einen eigenen Vollscan
-     * pro Frame. Gezaehlt wird nur dort, wo i tatsaechlich vorrueckt: nach
-     * einem erzwungenen Umbruch wird dasselbe Zeichen erneut betrachtet.
-     * Zeichenweise statt byteweise zu zaehlen ergibt dieselbe Zahl, weil
-     * kein Byte >= 0x80 als Wortzeichen gilt. */
+    /* Woerter und Zeichen im selben Durchlauf zaehlen (Woerter nach
+     * derselben Regel wie editor_word_count(), Zeichen nach
+     * btn_utf8_char_len() inkl. '\n') - spart der Statuszeile eigene
+     * Vollscans pro Frame. Gezaehlt wird nur dort, wo i tatsaechlich
+     * vorrueckt: nach einem erzwungenen Umbruch wird dasselbe Zeichen erneut
+     * betrachtet. Zeichenweise statt byteweise Woerter zu zaehlen ergibt
+     * dieselbe Zahl, weil kein Byte >= 0x80 als Wortzeichen gilt. */
     size_t words = 0;
+    size_t chars = 0;
     int in_word = 0;
     BtnRow *rows = NULL;
 
@@ -423,6 +429,9 @@ static BtnRow *layout_build(Editor *ed, long chars_per_row, size_t *out_row_coun
             last_break = (size_t)-1;
             col = 0;
             in_word = 0;
+            if (i < total_len) {
+                chars++;
+            }
             i++;
             continue;
         }
@@ -459,6 +468,7 @@ static BtnRow *layout_build(Editor *ed, long chars_per_row, size_t *out_row_coun
         }
         in_word = w;
         col = new_col;
+        chars++;
         i += clen;
     }
 
@@ -466,11 +476,14 @@ static BtnRow *layout_build(Editor *ed, long chars_per_row, size_t *out_row_coun
     if (out_word_count) {
         *out_word_count = words;
     }
+    if (out_char_count) {
+        *out_char_count = chars;
+    }
     return rows;
 }
 
 BtnRow *btn_layout_build(Editor *ed, double text_width, size_t *out_row_count) {
-    return layout_build(ed, chars_per_row_for(text_width), out_row_count, NULL);
+    return layout_build(ed, chars_per_row_for(text_width), out_row_count, NULL, NULL);
 }
 
 /* Ein-Eintrags-Cache fuer das Bildschirm-Layout des gerade gezeichneten
@@ -487,13 +500,15 @@ static struct {
     BtnRow *rows;
     size_t row_count;
     size_t word_count;
+    size_t char_count;
 } g_layout;
 
 const BtnRow *btn_layout_get(Editor *ed, double text_width, size_t *out_row_count) {
     long chars_per_row = chars_per_row_for(text_width);
     if (!g_layout.valid || g_layout.edit_seq != ed->edit_seq || g_layout.chars_per_row != chars_per_row) {
         free(g_layout.rows);
-        g_layout.rows = layout_build(ed, chars_per_row, &g_layout.row_count, &g_layout.word_count);
+        g_layout.rows = layout_build(ed, chars_per_row, &g_layout.row_count, &g_layout.word_count,
+                                     &g_layout.char_count);
         g_layout.edit_seq = ed->edit_seq;
         g_layout.chars_per_row = chars_per_row;
         g_layout.valid = 1;
@@ -621,6 +636,46 @@ static void draw_gutter(CGContextRef ctx, CGRect bounds, const BtnRow *rows, siz
     /* attrs ist gecacht (siehe get_gutter_attrs()) - keine Freigabe hier. */
 }
 
+/* Uebersetzte Formate der Statuszeile - render.c kennt strings.h bewusst
+ * nicht, main.c reicht sie nach btn_strings_set_language() einmal herein
+ * (wie die Suchleisten-Beschriftungen). Englisch, bis das passiert. */
+static const char *g_footer_pos_fmt = "Line %zu, Column %zu";
+static const char *g_footer_stats_fmt = "%zu lines | %zu words | %zu characters | UTF-8";
+
+/* 1, wenn fmt genau n Mal "%zu" und sonst nur "%%" als Konversion enthaelt -
+ * die Formate gehen an snprintf() mit genau so vielen size_t-Argumenten. */
+int btn_footer_format_ok(const char *fmt, int n) {
+    if (!fmt) {
+        return 0;
+    }
+    int found = 0;
+    for (const char *p = fmt; *p; p++) {
+        if (*p != '%') {
+            continue;
+        }
+        if (p[1] == '%') {
+            p++;
+        } else if (p[1] == 'z' && p[2] == 'u') {
+            found++;
+            p += 2;
+        } else {
+            return 0;
+        }
+    }
+    return found == n;
+}
+
+void btn_render_set_footer_formats(const char *pos_fmt, const char *stats_fmt) {
+    /* Ein fehlerhaft uebersetztes Format fiele sonst erst als Absturz in
+     * snprintf() auf - dann bleibt es beim bisherigen. */
+    if (btn_footer_format_ok(pos_fmt, 2)) {
+        g_footer_pos_fmt = pos_fmt;
+    }
+    if (btn_footer_format_ok(stats_fmt, 3)) {
+        g_footer_stats_fmt = stats_fmt;
+    }
+}
+
 static void draw_footer(CGContextRef ctx, CGRect bounds, Editor *ed, const BtnRow *rows, size_t row_count) {
     set_fill(ctx, col_footer_bg());
     CGContextFillRect(ctx, CGRectMake(0, 0, bounds.size.width, BTN_FOOTER_HEIGHT));
@@ -642,11 +697,10 @@ static void draw_footer(CGContextRef ctx, CGRect bounds, Editor *ed, const BtnRo
     size_t line_count = rows[row_count - 1].logical_line + 1;
 
     char left[64];
-    snprintf(left, sizeof(left), "Zeile %zu, Spalte %zu", cur_line + 1, col + 1);
+    snprintf(left, sizeof(left), g_footer_pos_fmt, cur_line + 1, col + 1);
 
     char right[160];
-    snprintf(right, sizeof(right), "%zu Zeilen | %zu Woerter | %zu Zeichen | UTF-8",
-             line_count, g_layout.word_count, editor_length(ed));
+    snprintf(right, sizeof(right), g_footer_stats_fmt, line_count, g_layout.word_count, g_layout.char_count);
 
     double text_y = (BTN_FOOTER_HEIGHT - g_font_size) / 2.0 + 3.0;
 
@@ -697,6 +751,37 @@ static double draw_cfstring_at(CGContextRef ctx, CFStringRef str, double x, doub
  * ueber decode_row_for_display(). */
 static double draw_text_at(CGContextRef ctx, const char *text, double x, double y, CFDictionaryRef attrs) {
     return draw_cfstring_at(ctx, CFStringCreateWithCString(NULL, text, kCFStringEncodingUTF8), x, y, attrs);
+}
+
+/* Wie draw_text_at(), aber hoechstens max_width breit - laengerer Text wird
+ * am Ende mit "..." gekuerzt statt ueber den Fensterrand zu laufen. */
+static void draw_text_truncated_at(CGContextRef ctx, const char *text, double x, double y, double max_width,
+                                   CFDictionaryRef attrs) {
+    if (max_width <= 0.0) {
+        return;
+    }
+    CFStringRef str = CFStringCreateWithCString(NULL, text, kCFStringEncodingUTF8);
+    if (!str) {
+        return;
+    }
+    CFAttributedStringRef attrStr = CFAttributedStringCreate(NULL, str, attrs);
+    CTLineRef line = CTLineCreateWithAttributedString(attrStr);
+    CFStringRef ellipsis = CFStringCreateWithCString(NULL, "\xE2\x80\xA6", kCFStringEncodingUTF8); /* U+2026 */
+    CFAttributedStringRef tokenStr = CFAttributedStringCreate(NULL, ellipsis, attrs);
+    CTLineRef token = CTLineCreateWithAttributedString(tokenStr);
+    /* NULL, wenn nicht einmal das "..." passt - dann gar nichts zeichnen. */
+    CTLineRef truncated = CTLineCreateTruncatedLine(line, max_width, kCTLineTruncationEnd, token);
+    if (truncated) {
+        CGContextSetTextPosition(ctx, x, y);
+        CTLineDraw(truncated, ctx);
+        CFRelease(truncated);
+    }
+    CFRelease(token);
+    CFRelease(tokenStr);
+    CFRelease(ellipsis);
+    CFRelease(line);
+    CFRelease(attrStr);
+    CFRelease(str);
 }
 
 /* Rueckt pos zurueck, bis es nicht mehr auf ein UTF-8-Fortsetzungsbyte
@@ -824,18 +909,18 @@ void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labe
 
 /* Zeichnet den Inhalt eines Suchen/Ersetzen-Feldes samt Selektions-
  * Hervorhebung und (falls focused und ohne Selektion) Cursor - dieselbe
- * Zeichen-Regel wie beim Hauptdokument, aber ohne Tabs/Wortumbruch, weil
- * main.c niemals '\n'/'\t' in diese Felder einfuegt (siehe editor_move()-
- * Kommentar in editor.h: BTN_MOVE_DOC_START/END sind fuer ein Feld ohne
- * Zeilenumbrueche bereits genau Pos1/Ende). */
+ * Zeichen-Regel wie beim Hauptdokument, aber ohne Wortumbruch, weil diese
+ * Felder nie ein '\n' enthalten (siehe editor_set_single_line();
+ * BTN_MOVE_DOC_START/END sind dort bereits genau Pos1/Ende). Tabs rechnen
+ * Spalten- und Zeichenlogik beide mit Tabstopps ab Spalte 0. */
 static void draw_find_field(CGContextRef ctx, Editor *ed, double field_x, double text_y, double bar_top,
                              CFDictionaryRef attrs, double char_width, int focused) {
     int has_sel = editor_has_selection(ed);
     /* Byte-Offsets (Cursor/Selektion) in Zeichenspalten umrechnen - dieselbe
      * Logik wie beim Hauptdokument (editor_visual_column_in_range zaehlt
      * Codepoints, nicht Bytes), sonst wandert der Cursor bei jedem Umlaut
-     * im Suchfeld eine Spalte zu weit nach rechts. Die Felder sind
-     * garantiert tab-frei (siehe Kommentar oben), range_start=0 reicht. */
+     * im Suchfeld eine Spalte zu weit nach rechts. Das Feld ist eine
+     * einzige Zeile ab Spalte 0, range_start=0 reicht. */
     if (has_sel) {
         size_t sel_start_col = editor_visual_column_in_range(ed, 0, editor_selection_start(ed));
         size_t sel_end_col = editor_visual_column_in_range(ed, 0, editor_selection_end(ed));
@@ -939,7 +1024,11 @@ void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_lab
     draw_text_at(ctx, replace_all_label, replace_all_x + 6.0, text_y, attrs);
 
     if (status && status[0] != '\0') {
-        draw_text_at(ctx, status, status_x, text_y, dimAttrs);
+        /* Rest der Fensterbreite - bei der Mindestbreite von 1080pt gut
+         * 230pt, zu wenig fuer manche Uebersetzungen oder "Treffer 100000
+         * von 100000". */
+        draw_text_truncated_at(ctx, status, status_x, text_y, bounds.size.width - status_x - BTN_FIND_BAR_PADDING,
+                               dimAttrs);
     }
 
     set_stroke(ctx, col_divider());
@@ -1303,6 +1392,15 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
     draw_footer(ctx, bounds, ed, rows, row_count);
     /* rows gehoert dem Layout-Cache (btn_layout_get()) - nicht freigeben. */
     /* attrs ist gecacht (siehe get_text_attrs()) - keine Freigabe hier. */
+}
+
+long btn_visible_row_capacity(double content_height) {
+    /* Row k (0 = oberste sichtbare) hat top_y = H - TOP_PADDING - (k+1) *
+     * LINE_HEIGHT (siehe btn_render_frame()) und ist ganz sichtbar, solange
+     * top_y >= BTN_FOOTER_HEIGHT. */
+    double usable = content_height - TOP_PADDING - BTN_FOOTER_HEIGHT;
+    long n = usable > 0.0 ? (long)(usable / LINE_HEIGHT) : 0;
+    return n > 0 ? n : 1;
 }
 
 size_t btn_rows_per_page(double page_height) {

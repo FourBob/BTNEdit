@@ -238,6 +238,16 @@ static void load_recent_files(void) {
     char line[4096];
     while (g_recent_count < BTN_MAX_RECENT_FILES && fgets(line, sizeof(line), f)) {
         size_t len = strlen(line);
+        /* Zeile laenger als der Puffer (kein '\n' und noch nicht am
+         * Dateiende): fgets() lieferte nur ihren Anfang, der Rest kaeme als
+         * eigene "Zeile" - beides waeren Pfade, die es so nicht gibt (und die
+         * im Zweifel eine ganz andere Datei treffen). Ganze Zeile verwerfen. */
+        if (len > 0 && line[len - 1] != '\n' && !feof(f)) {
+            int c;
+            while ((c = fgetc(f)) != EOF && c != '\n') {
+            }
+            continue;
+        }
         while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
             line[--len] = '\0';
         }
@@ -342,9 +352,7 @@ static CGRect content_bounds(void) {
 }
 
 static long visible_line_capacity(void) {
-    double content_height = content_bounds().size.height - BTN_FOOTER_HEIGHT;
-    long n = (long)(content_height / BTN_LINE_HEIGHT);
-    return n > 0 ? n : 1;
+    return btn_visible_row_capacity(content_bounds().size.height);
 }
 
 /* Zeilenumbruch-Layout fuer die momentane Fensterbreite aus render.c's
@@ -518,6 +526,29 @@ static void regex_escape_literal(const char *src, char *out, size_t out_cap) {
     out[o] = '\0';
 }
 
+/* Regex-Modus: "\t" im Suchmuster ist ein Tabulator. POSIX-ERE kennt kein
+ * \t (regcomp() las es als 't'), und die Tab-Taste wechselt in der
+ * Suchleiste das Feld - ohne das war ein Tab nur ueber [[:blank:]]
+ * erreichbar. Alle anderen Escapes gehen unveraendert an regcomp(), "\\t"
+ * bleibt also Backslash + t. out braucht Platz fuer len + 1 Bytes. */
+static void regex_translate_tab_escapes(const char *in, size_t len, char *out) {
+    size_t o = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (in[i] == '\\' && i + 1 < len) {
+            if (in[i + 1] == 't') {
+                out[o++] = '\t';
+            } else {
+                out[o++] = in[i];
+                out[o++] = in[i + 1];
+            }
+            i++;
+            continue;
+        }
+        out[o++] = in[i];
+    }
+    out[o] = '\0';
+}
+
 static int compile_search_regex(regex_t *re) {
     size_t query_len;
     char *query = editor_copy_all(&g_search_editor, &query_len);
@@ -533,7 +564,7 @@ static int compile_search_regex(regex_t *re) {
     size_t cap = query_len * 2 + 1;
     char *pattern = malloc(cap);
     if (g_search_regex) {
-        snprintf(pattern, cap, "%s", query);
+        regex_translate_tab_escapes(query, query_len, pattern);
     } else {
         regex_escape_literal(query, pattern, cap);
     }
@@ -860,6 +891,104 @@ static void set_match_count_status(size_t match_start) {
  * springt/scrollt bereits zum naechsten Treffer ab g_search_anchor, damit
  * sich Tippen wie eine echte Live-Suche anfuehlt statt nur nachtraeglich
  * eingefaerbt zu werden. */
+/* Obergrenze fuer {n,m}-Wiederholungen in der Live-Suche - siehe unten. */
+#define BTN_LIVE_REGEX_MAX_REPEAT 64
+
+/* 1, wenn ein Regex-Muster fuer die Live-Suche (regcomp() bei JEDEM
+ * Tastendruck) zu teuer ist: Apples TRE kopiert fuer {n,m} den ganzen
+ * Teilbaum n- bzw. m-mal, verschachtelt multipliziert sich das -
+ * ((a{255}){255}){255} sind rund 16 Mio. Knoten, sekundenlanges Haengen und
+ * Gigabytes Speicher pro Tastendruck. Abgelehnt wird eine Wiederholung
+ * ueber BTN_LIVE_REGEX_MAX_REPEAT oder eine {..}-Wiederholung einer Gruppe,
+ * die selbst schon eine {..}-Wiederholung enthaelt (bzw. direkt auf eine
+ * folgt, a{9}{9}). Nur die Live-Vorschau
+ * faellt dann aus - Return sucht wie immer (bewusst ohne Deckel, der Nutzer
+ * hat es ausdruecklich angefordert). Kein Sicherheitsproblem, nur
+ * selbstverschuldet: das Muster tippt der Nutzer selbst. */
+static int regex_too_expensive_for_live_search(const char *p, size_t len) {
+    enum { MAX_DEPTH = 64 };
+    int has_repeat[MAX_DEPTH + 1] = { 0 }; /* {..} innerhalb der offenen Gruppe je Tiefe */
+    int depth = 0;
+    int last_group_repeats = 0;            /* hatte die gerade geschlossene Gruppe {..}? */
+    for (size_t i = 0; i < len; i++) {
+        char c = p[i];
+        int prev_was_group = last_group_repeats;
+        last_group_repeats = 0;
+        if (c == '\\') {
+            i++; /* Escape: naechstes Zeichen ist literal */
+        } else if (c == '[') {
+            /* Klammerausdruck ueberspringen; ']' direkt am Anfang (auch nach
+             * '^') ist literal, ebenso [:klasse:] */
+            size_t j = i + 1;
+            if (j < len && p[j] == '^') {
+                j++;
+            }
+            if (j < len && p[j] == ']') {
+                j++;
+            }
+            while (j < len && p[j] != ']') {
+                if (p[j] == '[' && j + 1 < len && (p[j + 1] == ':' || p[j + 1] == '.' || p[j + 1] == '=')) {
+                    char kind = p[j + 1];
+                    j += 2;
+                    while (j + 1 < len && !(p[j] == kind && p[j + 1] == ']')) {
+                        j++;
+                    }
+                    j += 2;
+                    continue;
+                }
+                j++;
+            }
+            i = j;
+        } else if (c == '(') {
+            if (depth < MAX_DEPTH) {
+                depth++;
+                has_repeat[depth] = 0;
+            } else {
+                return 1; /* absurd tief verschachtelt - auch zu teuer */
+            }
+        } else if (c == ')') {
+            if (depth > 0) {
+                last_group_repeats = has_repeat[depth];
+                depth--;
+                if (last_group_repeats) {
+                    has_repeat[depth] = 1; /* Wiederholung steckt auch in der aeusseren Gruppe */
+                }
+            }
+        } else if (c == '{' && i + 1 < len && isdigit((unsigned char)p[i + 1])) {
+            unsigned long max = 0;
+            size_t j = i + 1;
+            while (j < len && (isdigit((unsigned char)p[j]) || p[j] == ',')) {
+                if (isdigit((unsigned char)p[j])) {
+                    unsigned long v = 0;
+                    while (j < len && isdigit((unsigned char)p[j])) {
+                        v = v * 10 + (unsigned long)(p[j] - '0');
+                        if (v > 1000000) {
+                            v = 1000000;
+                        }
+                        j++;
+                    }
+                    if (v > max) {
+                        max = v;
+                    }
+                } else {
+                    j++;
+                }
+            }
+            if (max > BTN_LIVE_REGEX_MAX_REPEAT || prev_was_group) {
+                return 1;
+            }
+            has_repeat[depth] = 1;
+            if (j < len && p[j] == '}') {
+                i = j;
+                /* a{64}{64}{64} multipliziert sich wie eine verschachtelte
+                 * Gruppe - direkt folgendes {..} ebenso behandeln. */
+                last_group_repeats = 1;
+            }
+        }
+    }
+    return 0;
+}
+
 static void perform_live_search(void) {
     Document *d = active_doc();
     Editor *ed = &d->editor;
@@ -881,6 +1010,19 @@ static void perform_live_search(void) {
                  btn_tr(BTN_STR_FIND_LIVE_SEARCH_TOO_LARGE));
         btn_app_request_redraw();
         return;
+    }
+
+    if (g_search_regex) {
+        size_t qlen;
+        char *query = editor_copy_all(&g_search_editor, &qlen);
+        int expensive = regex_too_expensive_for_live_search(query, qlen);
+        free(query);
+        if (expensive) {
+            g_match_count = 0;
+            snprintf(g_search_status, sizeof(g_search_status), "%s", btn_tr(BTN_STR_FIND_LIVE_SEARCH_TOO_LARGE));
+            btn_app_request_redraw();
+            return;
+        }
     }
 
     size_t len;
@@ -982,9 +1124,22 @@ static int replacement_has_backreferences(const char *raw, size_t raw_len) {
     return 0;
 }
 
+/* Muss der Ersetzungstext im Regex-Modus ueberhaupt umgebaut werden?
+ * Rueckreferenzen (siehe oben) oder die Escapes "\t" (Tabulator) und "\\"
+ * (ein Backslash - damit "\t" auch woertlich schreibbar bleibt). */
+static int replacement_needs_expansion(const char *raw, size_t raw_len) {
+    for (size_t i = 0; i + 1 < raw_len; i++) {
+        if (raw[i] == '\\' && (raw[i + 1] == 't' || raw[i + 1] == '\\')) {
+            return 1;
+        }
+    }
+    return replacement_has_backreferences(raw, raw_len);
+}
+
 /* Baut den tatsaechlichen Ersetzungstext aus g_replace_editor auf: im
- * Literal-Modus (g_search_regex == 0) oder ohne Rueckreferenzen (siehe
- * replacement_has_backreferences() oben) unveraendert, sonst mit $1..$9
+ * Literal-Modus (g_search_regex == 0) oder ohne Rueckreferenzen/Escapes
+ * (siehe replacement_needs_expansion() oben) unveraendert, sonst mit "\t"
+ * als Tabulator, "\\" als Backslash und $1..$9
  * (bzw. \1..\9) ersetzt durch die jeweilige Erfassungsgruppe des Treffers
  * bei [match_start, match_end) in text ($0/\0 = kompletter Treffer). Der
  * Treffer wird hier erneut per regexec() ab match_start gesucht - mit
@@ -1014,21 +1169,22 @@ static char *expand_replacement(const char *text, size_t text_len, size_t match_
                                 int flags, size_t *out_len) {
     size_t raw_len;
     char *raw = editor_copy_all(&g_replace_editor, &raw_len);
-    if (!g_search_regex || !replacement_has_backreferences(raw, raw_len)) {
+    if (!g_search_regex || !replacement_needs_expansion(raw, raw_len)) {
         *out_len = raw_len;
         return raw;
     }
 
-    regex_t re;
-    if (!compile_search_regex(&re)) {
-        *out_len = raw_len;
-        return raw;
-    }
+    /* Gruppen nur ermitteln, wenn der Text sie auch benutzt (bei reinem
+     * "\t" reicht der bekannte Treffer). */
     regmatch_t groups[BTN_MAX_REGEX_GROUPS];
-    groups[0].rm_so = (regoff_t)match_start;
-    groups[0].rm_eo = (regoff_t)text_len;
-    int ok = regexec(&re, text, BTN_MAX_REGEX_GROUPS, groups, flags) == 0;
-    regfree(&re);
+    int ok = 0;
+    regex_t re;
+    if (replacement_has_backreferences(raw, raw_len) && compile_search_regex(&re)) {
+        groups[0].rm_so = (regoff_t)match_start;
+        groups[0].rm_eo = (regoff_t)text_len;
+        ok = regexec(&re, text, BTN_MAX_REGEX_GROUPS, groups, flags) == 0;
+        regfree(&re);
+    }
     if (!ok || (size_t)groups[0].rm_so != match_start || (size_t)groups[0].rm_eo != match_end) {
         groups[0].rm_so = (regoff_t)match_start;
         groups[0].rm_eo = (regoff_t)match_end;
@@ -1057,7 +1213,11 @@ static char *expand_replacement(const char *text, size_t text_len, size_t match_
             break;
         }
         char c = raw[i];
-        if ((c == '$' || c == '\\') && i + 1 < raw_len && isdigit((unsigned char)raw[i + 1])) {
+        if (c == '\\' && i + 1 < raw_len && (raw[i + 1] == 't' || raw[i + 1] == '\\')) {
+            /* "\t" -> Tabulator, "\\" -> ein Backslash (dann unten normal anhaengen). */
+            i++;
+            c = (raw[i] == 't') ? '\t' : '\\';
+        } else if ((c == '$' || c == '\\') && i + 1 < raw_len && isdigit((unsigned char)raw[i + 1])) {
             int g = raw[i + 1] - '0';
             i++;
             if (g < BTN_MAX_REGEX_GROUPS && groups[g].rm_so >= 0) {
@@ -1161,8 +1321,8 @@ static void perform_replace_all(void) {
         return;
     }
 
-    /* Nur wenn der Ersetzungstext tatsaechlich Rueckreferenzen enthaelt
-     * (siehe replacement_has_backreferences()), unterscheidet sich der
+    /* Nur wenn der Ersetzungstext tatsaechlich Rueckreferenzen oder Escapes
+     * enthaelt (siehe replacement_needs_expansion()), unterscheidet sich der
      * tatsaechliche Ersetzungstext von Treffer zu Treffer und muss pro
      * Treffer per expand_replacement() neu aufgebaut werden - sonst reicht
      * (wie vor der Rueckreferenzen-Funktion) eine einzige Kopie vor der
@@ -1173,7 +1333,7 @@ static void perform_replace_all(void) {
     {
         size_t raw_len;
         char *raw = editor_copy_all(&g_replace_editor, &raw_len);
-        per_match_expansion = g_search_regex && replacement_has_backreferences(raw, raw_len);
+        per_match_expansion = g_search_regex && replacement_needs_expansion(raw, raw_len);
         if (per_match_expansion) {
             free(raw);
         } else {
@@ -1198,6 +1358,8 @@ static void perform_replace_all(void) {
     size_t match_count = collect_all_matches_unbounded(orig_text, orig_len, &starts, &ends);
 
     long delta = 0;
+    /* Alle Ersetzungen zusammen ein Undo-Schritt (sonst zwei pro Treffer). */
+    editor_begin_undo_group(ed);
     for (size_t i = 0; i < match_count; i++) {
         size_t match_start = starts[i];
         size_t match_end = ends[i];
@@ -1228,6 +1390,7 @@ static void perform_replace_all(void) {
             free(replace_text);
         }
     }
+    editor_end_undo_group(ed);
     int count = (int)match_count;
     free(starts);
     free(ends);
@@ -1314,25 +1477,65 @@ static void move_row_edge(int to_end, int extend) {
     commit_cursor(new_offset, extend, (size_t)-1);
 }
 
-static char *read_file_contents(const char *path, size_t *out_len) {
+/* Obergrenze fuer zu oeffnende Dateien. Der Inhalt liegt danach mehrfach im
+ * Speicher (Lesepuffer waehrend des Ladens, Gap-Buffer, Kopien fuer Suche
+ * und Sichern, Row-Layout) - bei einer 2-TB-Sparse-Datei oder einem
+ * Laufwerks-Image scheiterte vorher malloc() und fread() schrieb nach NULL. */
+#define BTN_MAX_FILE_MB 1024
+#define BTN_MAX_FILE_SIZE ((off_t)BTN_MAX_FILE_MB * 1024 * 1024)
+
+typedef enum {
+    BTN_READ_OK = 0,
+    BTN_READ_FAILED,    /* nicht lesbar, keine regulaere Datei, kein Speicher */
+    BTN_READ_TOO_LARGE  /* groesser als BTN_MAX_FILE_SIZE */
+} BtnReadResult;
+
+/* Liest die ganze Datei (NUL-terminiert, *out_len ohne das NUL). NULL bei
+ * jedem Fehler, *out_result sagt welcher. */
+static char *read_file_contents(const char *path, size_t *out_len, BtnReadResult *out_result) {
+    *out_result = BTN_READ_FAILED;
     FILE *f = fopen(path, "rb");
     if (!f) {
         return NULL;
     }
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    if (size < 0) {
+    /* fstat statt fseek/ftell: liefert die Groesse als off_t und erkennt
+     * Verzeichnisse (fopen() auf ein Verzeichnis klappt, fread() liefert
+     * dann 0 Bytes - das wurde als leere Datei geoeffnet). */
+    struct stat st;
+    if (fstat(fileno(f), &st) != 0 || !S_ISREG(st.st_mode)) {
         fclose(f);
         return NULL;
     }
-    fseek(f, 0, SEEK_SET);
-
-    char *buf = malloc((size_t)size + 1);
-    size_t read_n = fread(buf, 1, (size_t)size, f);
+    if (st.st_size > BTN_MAX_FILE_SIZE) {
+        fclose(f);
+        *out_result = BTN_READ_TOO_LARGE;
+        return NULL;
+    }
+    size_t size = (size_t)st.st_size;
+    char *buf = malloc(size + 1);
+    if (!buf) {
+        fclose(f);
+        return NULL;
+    }
+    size_t read_n = fread(buf, 1, size, f);
+    int failed = ferror(f);
     fclose(f);
+    if (failed) {
+        free(buf);
+        return NULL;
+    }
     buf[read_n] = '\0';
     *out_len = read_n;
+    *out_result = BTN_READ_OK;
     return buf;
+}
+
+/* Meldung fuer einen fehlgeschlagenen Lade-/Sichervorgang - vorher ging das
+ * nur nach stderr, das eine GUI-App nie jemand sieht. */
+static void show_file_error(BtnStringId title_fmt, const char *path, const char *info) {
+    char title[512];
+    snprintf(title, sizeof(title), btn_tr(title_fmt), basename_of(path));
+    btn_show_error_alert(title, info);
 }
 
 /* Schreibt einen bereits offenen Stream vollstaendig durch und prueft JEDEN
@@ -1459,7 +1662,8 @@ static int looks_binary(const char *data, size_t len) {
  * Tab-Auswahl/-Erzeugung davor). */
 static void open_file_path(Document *d, const char *path) {
     size_t len;
-    char *contents = read_file_contents(path, &len);
+    BtnReadResult result;
+    char *contents = read_file_contents(path, &len, &result);
     if (contents) {
         if (looks_binary(contents, len) && !btn_show_binary_file_warning(basename_of(path))) {
             free(contents);
@@ -1474,8 +1678,12 @@ static void open_file_path(Document *d, const char *path) {
          * (und dieser Speicher dabei freigegeben wird) - path waere in dem
          * Fall hier bereits ein haengender Zeiger. */
         add_recent_file(d->path);
+    } else if (result == BTN_READ_TOO_LARGE) {
+        char info[256];
+        snprintf(info, sizeof(info), btn_tr(BTN_STR_FILE_TOO_LARGE_INFO_FMT), BTN_MAX_FILE_MB);
+        show_file_error(BTN_STR_OPEN_FAILED_TITLE_FMT, path, info);
     } else {
-        fprintf(stderr, "BTNEdit: Datei konnte nicht gelesen werden: %s\n", path);
+        show_file_error(BTN_STR_OPEN_FAILED_TITLE_FMT, path, btn_tr(BTN_STR_OPEN_FAILED_INFO));
     }
 }
 
@@ -1551,7 +1759,7 @@ static int perform_save_doc(Document *d, int force_save_as) {
         /* d->path statt path: siehe Begruendung in open_file_path(). */
         add_recent_file(d->path);
     } else {
-        fprintf(stderr, "BTNEdit: Datei konnte nicht geschrieben werden: %s\n", path);
+        show_file_error(BTN_STR_SAVE_FAILED_TITLE_FMT, path, btn_tr(BTN_STR_SAVE_FAILED_INFO));
     }
 
     if (must_free_path) {
@@ -2293,7 +2501,7 @@ static void on_menu(int tag) {
         case BTN_MENU_PASTE: {
             size_t clip_len;
             clip = btn_pasteboard_copy_string(&clip_len);
-            /* Kein manuelles Saeubern von '\n'/'\r'/'\t' mehr noetig hier -
+            /* Kein manuelles Saeubern von '\n'/'\r' mehr noetig hier -
              * editor_insert_text() macht das jetzt zentral fuer jeden
              * einzeiligen Editor (siehe editor_set_single_line() in main(),
              * editor.h/.c), egal ueber welchen Weg Text eingefuegt wird.
@@ -2369,6 +2577,7 @@ int main(void) {
      * Sprachumschalter im Menue) - muss vor btn_app_build_menu() gesetzt
      * sein, das die Menuetitel bereits in der aktiven Sprache aufbaut. */
     btn_strings_set_language(btn_app_detect_system_language());
+    btn_render_set_footer_formats(btn_tr(BTN_STR_FOOTER_POS_FMT), btn_tr(BTN_STR_FOOTER_STATS_FMT));
     btn_app_set_draw_callback(on_draw);
     btn_app_set_key_callback(on_key);
     btn_app_set_resize_callback(on_resize);

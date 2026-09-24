@@ -21,6 +21,9 @@ typedef struct {
     size_t len;
     size_t capacity;
     char *text;       /* inserted text (insert record) or deleted text (delete record) */
+    /* 0 = eigenstaendiger Schritt; sonst die Gruppe (editor_begin_undo_group()),
+     * deren aufeinanderfolgende Records Undo/Redo gemeinsam anwenden. */
+    unsigned long group;
 } UndoRecord;
 
 typedef struct {
@@ -28,6 +31,9 @@ typedef struct {
     size_t count;     /* total records currently valid */
     size_t capacity;
     size_t pos;       /* records[0..pos) are applied; pos==count means nothing to redo */
+    unsigned long open_group;  /* Gruppe fuer neue Records, 0 = keine offen */
+    unsigned long last_group;  /* zuletzt vergebene Gruppen-ID */
+    int group_depth;           /* Verschachtelung von begin/end */
 } UndoStack;
 
 typedef struct {
@@ -63,7 +69,7 @@ typedef struct {
      * siehe editor_set_single_line()) - zentral hier statt an jeder
      * Einfuege-Stelle einzeln zu pruefen, damit kein neuer Einfuegeweg
      * (Drag&Drop, IME) die Regel vergessen kann. editor_insert_text()/
-     * editor_set_text() ersetzen '\n'/'\r'/'\t' durch ' ', bevor sie
+     * editor_set_text() ersetzen '\n'/'\r' durch ' ', bevor sie
      * einfuegen; editor_delete_backward() lässt dafuer die "leeres
      * Klammerpaar auf einen Schlag loeschen"-Sonderbehandlung aus, weil
      * ein einzeiliges Feld nie ueber editor_handle_bracket_key() (das
@@ -92,7 +98,7 @@ void editor_free(Editor *ed);
 /* Ersetzt den gesamten Inhalt (z.B. beim Laden einer Datei), setzt Cursor
  * und Undo-Verlauf zurueck - das Laden selbst ist nicht rueckgaengig machbar.
  * Ist single_line gesetzt (siehe editor_set_single_line()), werden '\n'/
- * '\r'/'\t' in text durch ' ' ersetzt. */
+ * '\r' in text durch ' ' ersetzt (Tabs bleiben). */
 void editor_set_text(Editor *ed, const char *text, size_t len);
 
 /* Markiert ed als einzeiliges Feld (Suchen/Ersetzen-Leiste) - siehe den
@@ -202,6 +208,13 @@ char *editor_get_selection_text(Editor *ed);
 
 void editor_undo(Editor *ed);
 void editor_redo(Editor *ed);
+
+/* Alle Aenderungen zwischen begin und end werden EIN Undo-Schritt (z.B.
+ * "Alle ersetzen": vorher je Treffer zwei Records, bei 5000 Treffern also
+ * 10 000x Cmd+Z). Verschachtelbar, nur das aeusserste Paar zaehlt. Jedes
+ * begin braucht genau ein end. */
+void editor_begin_undo_group(Editor *ed);
+void editor_end_undo_group(Editor *ed);
 
 #ifdef __cplusplus
 }

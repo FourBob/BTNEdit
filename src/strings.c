@@ -24,7 +24,7 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "%d replaced",
         "Match %d of %d",
         "Help", "Keyboard Shortcuts...", "Keyboard Shortcuts",
-        "⌘N — New\n⌘O — Open\n⌘S — Save\n⇧⌘S — Save As\n⌘W — Close\n⌘Z — Undo\n⇧⌘Z — Redo\n⌘X — Cut\n⌘C — Copy\n⌘V — Paste\n⌘A — Select All\n⌘F — Find & Replace\n⌘L — Go to Line\n⌘+/⌘- — Zoom In/Out\n⌘0 — Actual Size\n⌥←/→ — Jump by word\n⌘←/→ — Line start/end\nEsc — Close find bar\nReturn (search field) — Next match\n⇧Return (search field) — Previous match\nReturn (replace field) — Replace + Next\n⌘Return (replace field) — Replace All",
+        "⌘N — New\n⌘O — Open\n⌘S — Save\n⇧⌘S — Save As\n⌘W — Close\n⌘Z — Undo\n⇧⌘Z — Redo\n⌘X — Cut\n⌘C — Copy\n⌘V — Paste\n⌘A — Select All\n⌘F — Find & Replace\n⌘L — Go to Line\n⌘+/⌘- — Zoom In/Out\n⌘0 — Actual Size\n⌥←/→ — Jump by word\n⌘←/→ — Line start/end\nEsc — Close find bar\nReturn (search field) — Next match\n⇧Return (search field) — Previous match\nReturn (replace field) — Replace + Next\n⌘Return (replace field) — Replace All\n\\t (find/replace field) — Tab character",
         "Replace All",
         "“%s” may not be a text file.",
         "This file appears to contain binary data. Editing and saving it could corrupt it.",
@@ -36,7 +36,14 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Zoom In",
         "Zoom Out",
         "Actual Size",
-        "Document too large for live search - press Return to search"
+        "No live search – press Return",
+        "Line %zu, Column %zu",
+        "%zu lines | %zu words | %zu characters | UTF-8",
+        "“%s” could not be opened.",
+        "The file could not be read.",
+        "The file is larger than %d MB, the maximum size BTNEdit can open.",
+        "“%s” could not be saved.",
+        "Check that the folder exists and that you have write permission. Your changes are still open."
     },
     /* BTN_LANG_DE */
     {
@@ -53,7 +60,7 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "%d ersetzt",
         "Treffer %d von %d",
         "Hilfe", "Tastenkürzel...", "Tastenkürzel",
-        "⌘N — Neu\n⌘O — Öffnen\n⌘S — Sichern\n⇧⌘S — Sichern unter\n⌘W — Schließen\n⌘Z — Widerrufen\n⇧⌘Z — Wiederholen\n⌘X — Ausschneiden\n⌘C — Kopieren\n⌘V — Einfügen\n⌘A — Alles auswählen\n⌘F — Suchen und Ersetzen\n⌘L — Gehe zu Zeile\n⌘+/⌘- — Vergrößern/Verkleinern\n⌘0 — Tatsächliche Größe\n⌥←/→ — Wortsprung\n⌘←/→ — Zeilenanfang/-ende\nEsc — Suchleiste schließen\nReturn (Suchfeld) — Nächster Treffer\n⇧Return (Suchfeld) — Voriger Treffer\nReturn (Ersetzen-Feld) — Ersetzen + Weiter\n⌘Return (Ersetzen-Feld) — Alle ersetzen",
+        "⌘N — Neu\n⌘O — Öffnen\n⌘S — Sichern\n⇧⌘S — Sichern unter\n⌘W — Schließen\n⌘Z — Widerrufen\n⇧⌘Z — Wiederholen\n⌘X — Ausschneiden\n⌘C — Kopieren\n⌘V — Einfügen\n⌘A — Alles auswählen\n⌘F — Suchen und Ersetzen\n⌘L — Gehe zu Zeile\n⌘+/⌘- — Vergrößern/Verkleinern\n⌘0 — Tatsächliche Größe\n⌥←/→ — Wortsprung\n⌘←/→ — Zeilenanfang/-ende\nEsc — Suchleiste schließen\nReturn (Suchfeld) — Nächster Treffer\n⇧Return (Suchfeld) — Voriger Treffer\nReturn (Ersetzen-Feld) — Ersetzen + Weiter\n⌘Return (Ersetzen-Feld) — Alle ersetzen\n\\t (Suchen-/Ersetzen-Feld) — Tabulator",
         "Alle ersetzen",
         "„%s“ ist möglicherweise keine Textdatei.",
         "Diese Datei scheint binäre Daten zu enthalten. Bearbeiten und Sichern könnten sie beschädigen.",
@@ -65,7 +72,14 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Vergrößern",
         "Verkleinern",
         "Tatsächliche Größe",
-        "Dokument zu groß für Live-Suche - Return zum Suchen drücken"
+        "Keine Live-Suche – Return",
+        "Zeile %zu, Spalte %zu",
+        "%zu Zeilen | %zu Wörter | %zu Zeichen | UTF-8",
+        "„%s“ konnte nicht geöffnet werden.",
+        "Die Datei konnte nicht gelesen werden.",
+        "Die Datei ist größer als %d MB – das ist die maximale Größe, die BTNEdit öffnen kann.",
+        "„%s“ konnte nicht gesichert werden.",
+        "Prüfe, ob der Ordner existiert und du Schreibrechte hast. Deine Änderungen sind weiterhin geöffnet."
     },
     /* BTN_LANG_FR */
     {
@@ -82,7 +96,7 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "%d remplacement(s)",
         "Correspondance %d sur %d",
         "Aide", "Raccourcis clavier...", "Raccourcis clavier",
-        "⌘N — Nouveau\n⌘O — Ouvrir\n⌘S — Enregistrer\n⇧⌘S — Enregistrer sous\n⌘W — Fermer\n⌘Z — Annuler\n⇧⌘Z — Rétablir\n⌘X — Couper\n⌘C — Copier\n⌘V — Coller\n⌘A — Tout sélectionner\n⌘F — Rechercher et remplacer\n⌘L — Aller à la ligne\n⌘+/⌘- — Zoom avant/arrière\n⌘0 — Taille réelle\n⌥←/→ — Saut de mot\n⌘←/→ — Début/fin de ligne\nÉchap — Fermer la barre de recherche\nRetour (champ de recherche) — Occurrence suivante\n⇧Retour (champ de recherche) — Occurrence précédente\nRetour (champ de remplacement) — Remplacer + suivant\n⌘Retour (champ de remplacement) — Tout remplacer",
+        "⌘N — Nouveau\n⌘O — Ouvrir\n⌘S — Enregistrer\n⇧⌘S — Enregistrer sous\n⌘W — Fermer\n⌘Z — Annuler\n⇧⌘Z — Rétablir\n⌘X — Couper\n⌘C — Copier\n⌘V — Coller\n⌘A — Tout sélectionner\n⌘F — Rechercher et remplacer\n⌘L — Aller à la ligne\n⌘+/⌘- — Zoom avant/arrière\n⌘0 — Taille réelle\n⌥←/→ — Saut de mot\n⌘←/→ — Début/fin de ligne\nÉchap — Fermer la barre de recherche\nRetour (champ de recherche) — Occurrence suivante\n⇧Retour (champ de recherche) — Occurrence précédente\nRetour (champ de remplacement) — Remplacer + suivant\n⌘Retour (champ de remplacement) — Tout remplacer\n\\t (champ de recherche/remplacement) — Tabulation",
         "Tout remplacer",
         "« %s » n'est peut-être pas un fichier texte.",
         "Ce fichier semble contenir des données binaires. Le modifier et l'enregistrer pourrait l'endommager.",
@@ -94,7 +108,14 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Zoom avant",
         "Zoom arrière",
         "Taille réelle",
-        "Document trop volumineux pour la recherche en direct - Retour pour rechercher"
+        "Recherche : touche Retour",
+        "Ligne %zu, colonne %zu",
+        "%zu lignes | %zu mots | %zu caractères | UTF-8",
+        "Impossible d’ouvrir « %s ».",
+        "Le fichier n’a pas pu être lu.",
+        "Le fichier dépasse %d Mo, la taille maximale que BTNEdit peut ouvrir.",
+        "Impossible d’enregistrer « %s ».",
+        "Vérifiez que le dossier existe et que vous avez le droit d’écriture. Vos modifications restent ouvertes."
     },
     /* BTN_LANG_ES */
     {
@@ -111,7 +132,7 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "%d reemplazos",
         "Coincidencia %d de %d",
         "Ayuda", "Atajos de teclado...", "Atajos de teclado",
-        "⌘N — Nuevo\n⌘O — Abrir\n⌘S — Guardar\n⇧⌘S — Guardar como\n⌘W — Cerrar\n⌘Z — Deshacer\n⇧⌘Z — Rehacer\n⌘X — Cortar\n⌘C — Copiar\n⌘V — Pegar\n⌘A — Seleccionar todo\n⌘F — Buscar y reemplazar\n⌘L — Ir a la línea\n⌘+/⌘- — Acercar/Alejar\n⌘0 — Tamaño real\n⌥←/→ — Salto de palabra\n⌘←/→ — Inicio/fin de línea\nEsc — Cerrar barra de búsqueda\nIntro (campo de búsqueda) — Siguiente coincidencia\n⇧Intro (campo de búsqueda) — Coincidencia anterior\nIntro (campo de reemplazo) — Reemplazar + siguiente\n⌘Intro (campo de reemplazo) — Reemplazar todo",
+        "⌘N — Nuevo\n⌘O — Abrir\n⌘S — Guardar\n⇧⌘S — Guardar como\n⌘W — Cerrar\n⌘Z — Deshacer\n⇧⌘Z — Rehacer\n⌘X — Cortar\n⌘C — Copiar\n⌘V — Pegar\n⌘A — Seleccionar todo\n⌘F — Buscar y reemplazar\n⌘L — Ir a la línea\n⌘+/⌘- — Acercar/Alejar\n⌘0 — Tamaño real\n⌥←/→ — Salto de palabra\n⌘←/→ — Inicio/fin de línea\nEsc — Cerrar barra de búsqueda\nIntro (campo de búsqueda) — Siguiente coincidencia\n⇧Intro (campo de búsqueda) — Coincidencia anterior\nIntro (campo de reemplazo) — Reemplazar + siguiente\n⌘Intro (campo de reemplazo) — Reemplazar todo\n\\t (campo de búsqueda/reemplazo) — Tabulador",
         "Reemplazar todo",
         "“%s” puede no ser un archivo de texto.",
         "Este archivo parece contener datos binarios. Editarlo y guardarlo podría dañarlo.",
@@ -123,7 +144,14 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Acercar",
         "Alejar",
         "Tamaño real",
-        "Documento demasiado grande para la búsqueda en vivo - pulsa Intro para buscar"
+        "Búsqueda: pulsa Intro",
+        "Línea %zu, columna %zu",
+        "%zu líneas | %zu palabras | %zu caracteres | UTF-8",
+        "No se pudo abrir “%s”.",
+        "No se pudo leer el archivo.",
+        "El archivo supera los %d MB, el tamaño máximo que BTNEdit puede abrir.",
+        "No se pudo guardar “%s”.",
+        "Comprueba que la carpeta existe y que tienes permiso de escritura. Tus cambios siguen abiertos."
     },
     /* BTN_LANG_ZH (Simplified) */
     {
@@ -143,7 +171,7 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "已替换 %d 处",
         "第 %d/%d 个匹配项",
         "帮助", "键盘快捷键…", "键盘快捷键",
-        "⌘N — 新建\n⌘O — 打开\n⌘S — 存储\n⇧⌘S — 存储为\n⌘W — 关闭\n⌘Z — 撤销\n⇧⌘Z — 重做\n⌘X — 剪切\n⌘C — 拷贝\n⌘V — 粘贴\n⌘A — 全选\n⌘F — 查找和替换\n⌘L — 跳转到行\n⌘+/⌘- — 放大/缩小\n⌘0 — 实际大小\n⌥←/→ — 按词跳转\n⌘←/→ — 行首/行尾\nEsc — 关闭查找栏\n回车（查找框）— 下一个匹配项\n⇧回车（查找框）— 上一个匹配项\n回车（替换框）— 替换并查找下一个\n⌘回车（替换框）— 全部替换",
+        "⌘N — 新建\n⌘O — 打开\n⌘S — 存储\n⇧⌘S — 存储为\n⌘W — 关闭\n⌘Z — 撤销\n⇧⌘Z — 重做\n⌘X — 剪切\n⌘C — 拷贝\n⌘V — 粘贴\n⌘A — 全选\n⌘F — 查找和替换\n⌘L — 跳转到行\n⌘+/⌘- — 放大/缩小\n⌘0 — 实际大小\n⌥←/→ — 按词跳转\n⌘←/→ — 行首/行尾\nEsc — 关闭查找栏\n回车（查找框）— 下一个匹配项\n⇧回车（查找框）— 上一个匹配项\n回车（替换框）— 替换并查找下一个\n⌘回车（替换框）— 全部替换\n\\t（查找/替换框）— 制表符",
         "全部替换",
         "“%s”可能不是文本文件。",
         "该文件似乎包含二进制数据。编辑并存储可能会损坏它。",
@@ -155,7 +183,14 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "放大",
         "缩小",
         "实际大小",
-        "文档过大，无法实时搜索 - 按回车键搜索"
+        "按回车键搜索",
+        "第 %zu 行，第 %zu 列",
+        "%zu 行 | %zu 词 | %zu 字符 | UTF-8",
+        "无法打开“%s”。",
+        "无法读取该文件。",
+        "文件大于 %d MB，超出了 BTNEdit 可打开的最大大小。",
+        "无法存储“%s”。",
+        "请检查文件夹是否存在以及您是否有写入权限。您的更改仍保持打开状态。"
     }
 };
 

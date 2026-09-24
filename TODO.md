@@ -49,9 +49,6 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
   Suchfelds (Cmd+F übernimmt die aktuelle Selektion) an der Stelle des
   NUL-Bytes abschneiden (`strlen`/`strchr` auf einem Puffer, der theoretisch
   eingebettete NULs enthalten kann).
-- Undo/Redo beim Klammern-Umschließen einer Selektion erzeugt 3 einzelne
-  Undo-Schritte (öffnende Klammer, wiedereingefügter Text, schließende
-  Klammer) statt einem zusammengefassten - ein Undo braucht dafür 3x Cmd+Z.
 
 - Sichern ist atomar (Tempdatei + `rename()`), damit ein Schreibfehler nie
   das Original zerstört. Nebenwirkung: die Datei bekommt eine neue Inode -
@@ -59,6 +56,21 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
   Quarantäne-Flag, ACLs) und das Erstellungsdatum gehen verloren. Symlinks
   werden aufgelöst (das Ziel wird geschrieben, der Link bleibt), und
   schreibgeschützte Dateien werden weiterhin abgelehnt.
+
+- Dateien über 1 GB (`BTN_MAX_FILE_MB`) werden mit einer Meldung
+  abgelehnt; der Inhalt liegt sonst mehrfach im Speicher (Gap-Buffer, Kopien
+  für Suche/Sichern, Row-Layout). Geht beim Bearbeiten trotzdem der Speicher
+  aus, bricht die App im Gap-Buffer bzw. Layout mit einer Meldung ab
+  (`btn_xmalloc`) - dort ist ein sauberer Rückweg durch jede Bearbeitungs-
+  funktion nicht vorgesehen. Nur der Undo-Verlauf behandelt es weich: er
+  wird dann verworfen, die Bearbeitung selbst bleibt.
+- Live-Suche im Regex-Modus fällt für Muster mit `{n,m}` über 64 oder
+  verschachtelten/verketteten `{..}` aus (`regex_too_expensive_for_live_search`,
+  Apples TRE kopiert den Teilbaum pro Wiederholung). Return sucht weiterhin
+  ohne Deckel. Andere teure Muster (viele Alternativen o.ä.) sind nicht
+  abgedeckt.
+- Suchen-/Ersetzen-Felder scrollen nicht horizontal: sehr langer Text läuft
+  über das 200pt-Feld hinaus in die Umschalter.
 
 ## Reuse/Efficiency-Findings aus Code-Reviews, nicht behoben (niedrige Priorität)
 

@@ -231,6 +231,9 @@ static void undo_stack_init(UndoStack *st) {
     st->count = 0;
     st->capacity = 0;
     st->pos = 0;
+    st->open_group = 0;
+    st->last_group = 0;
+    st->group_depth = 0;
 }
 
 static void undo_stack_free(UndoStack *st) {
@@ -247,26 +250,59 @@ static void undo_stack_truncate_redo(UndoStack *st) {
     st->count = st->pos;
 }
 
+/* Antwort auf eine fehlgeschlagene Allokation im Undo-Stack: den ganzen
+ * Verlauf verwerfen. Die Bearbeitung selbst bleibt gueltig, sie ist nur
+ * nicht mehr rueckgaengig machbar. Ein fehlender oder halb geschriebener
+ * Record wuerde dagegen spaetere Undos an falscher Stelle anwenden - und
+ * realloc() direkt auf den Besitzer-Zeiger verlor vorher den alten Block
+ * und schrieb dann ueber NULL. Eine offene Gruppe bleibt offen. */
+static void undo_drop_history(UndoStack *st) {
+    unsigned long open_group = st->open_group, last_group = st->last_group;
+    int depth = st->group_depth;
+    undo_stack_free(st);
+    undo_stack_init(st);
+    st->open_group = open_group;
+    st->last_group = last_group;
+    st->group_depth = depth;
+}
+
 static UndoRecord *undo_stack_push_new(UndoStack *st) {
     undo_stack_truncate_redo(st);
     if (st->count == st->capacity) {
-        st->capacity = st->capacity ? st->capacity * 2 : 64;
-        st->records = realloc(st->records, st->capacity * sizeof(UndoRecord));
+        size_t new_cap = st->capacity ? st->capacity * 2 : 64;
+        UndoRecord *grown = NULL;
+        if (new_cap <= (size_t)-1 / sizeof(UndoRecord)) {
+            grown = realloc(st->records, new_cap * sizeof(UndoRecord));
+        }
+        if (!grown) {
+            undo_drop_history(st);
+            return NULL;
+        }
+        st->records = grown;
+        st->capacity = new_cap;
     }
     UndoRecord *r = &st->records[st->count++];
     st->pos = st->count;
     return r;
 }
 
-static void record_grow(UndoRecord *r, size_t extra) {
+/* 1 = Platz fuer extra weitere Bytes, 0 = Allokation fehlgeschlagen (r
+ * unveraendert). */
+static int record_grow(UndoRecord *r, size_t extra) {
     if (r->len + extra <= r->capacity) {
-        return;
+        return 1;
     }
-    r->capacity = r->capacity ? r->capacity * 2 : 16;
-    if (r->capacity < r->len + extra) {
-        r->capacity = r->len + extra;
+    size_t new_cap = r->capacity ? r->capacity * 2 : 16;
+    if (new_cap < r->len + extra) {
+        new_cap = r->len + extra;
     }
-    r->text = realloc(r->text, r->capacity);
+    char *grown = realloc(r->text, new_cap);
+    if (!grown) {
+        return 0;
+    }
+    r->text = grown;
+    r->capacity = new_cap;
+    return 1;
 }
 
 /* Legt einen frischen UndoRecord an und fuellt ihn - der gemeinsame Kern
@@ -274,12 +310,23 @@ static void record_grow(UndoRecord *r, size_t extra) {
  * brauchen (neuer Insert, neuer Delete, Block-Delete einer Selektion). */
 static void undo_record_fill(UndoStack *st, int is_insert, size_t pos, const char *src, size_t len) {
     UndoRecord *r = undo_stack_push_new(st);
+    if (!r) {
+        return;
+    }
+    char *text = malloc(len ? len : 1);
+    if (!text) {
+        st->count--;
+        st->pos = st->count;
+        undo_drop_history(st);
+        return;
+    }
+    memcpy(text, src, len);
     r->is_insert = is_insert;
     r->pos = pos;
     r->len = len;
     r->capacity = len;
-    r->text = malloc(len ? len : 1);
-    memcpy(r->text, src, len);
+    r->text = text;
+    r->group = st->open_group;
 }
 
 static void undo_push_insert(Editor *ed, size_t pos, const char *text, size_t len) {
@@ -291,10 +338,13 @@ static void undo_push_insert(Editor *ed, size_t pos, const char *text, size_t le
         /* Genau EIN Zeichen (auch mehrbytig - "ae" sind 2 Bytes), nicht nur
          * len == 1: sonst begann jeder Umlaut einen neuen Undo-Schritt, und
          * Cmd+Z nahm deutsche Saetze in Bruchstuecken zurueck. */
-        if (last->is_insert && last->pos + last->len == pos &&
+        if (last->is_insert && last->group == st->open_group && last->pos + last->len == pos &&
             btn_utf8_char_len((const unsigned char *)text, len) == len &&
             text[0] != '\n' && (last->len == 0 || last->text[last->len - 1] != '\n')) {
-            record_grow(last, len);
+            if (!record_grow(last, len)) {
+                undo_drop_history(st);
+                return;
+            }
             memcpy(last->text + last->len, text, len);
             last->len += len;
             return;
@@ -310,9 +360,12 @@ static void undo_push_delete(Editor *ed, size_t pos, const char *deleted, size_t
     if (!blocked && st->pos > 0 && st->pos == st->count &&
         btn_utf8_char_len((const unsigned char *)deleted, len) == len && deleted[0] != '\n') {
         UndoRecord *last = &st->records[st->pos - 1];
-        if (!last->is_insert) {
+        if (!last->is_insert && last->group == st->open_group) {
             if (backward && pos + len == last->pos) {
-                record_grow(last, len);
+                if (!record_grow(last, len)) {
+                    undo_drop_history(st);
+                    return;
+                }
                 memmove(last->text + len, last->text, last->len);
                 memcpy(last->text, deleted, len);
                 last->len += len;
@@ -320,7 +373,10 @@ static void undo_push_delete(Editor *ed, size_t pos, const char *deleted, size_t
                 return;
             }
             if (!backward && pos == last->pos) {
-                record_grow(last, len);
+                if (!record_grow(last, len)) {
+                    undo_drop_history(st);
+                    return;
+                }
                 memcpy(last->text + last->len, deleted, len);
                 last->len += len;
                 return;
@@ -357,19 +413,22 @@ void editor_set_single_line(Editor *ed, int single_line) {
     ed->single_line = single_line;
 }
 
-/* Ersetzt '\n'/'\r'/'\t' durch ' ' in einer Kopie von text, falls ed
- * einzeilig ist - genutzt von editor_insert_text()/editor_set_text(), damit
- * KEIN Einfuegeweg (Tippen, Einfuegen aus der Zwischenablage, künftige Wege
- * wie Drag&Drop/IME) das einzeilig-Feld je mit einem echten Zeilenumbruch
- * oder Tab durcheinanderbringen kann (ein Tab im einzeiligen Feld waere fuer
- * den Nutzer nicht von Leerzeichen zu unterscheiden). Gibt NULL zurueck, wenn keine Ersetzung noetig war
+/* Ersetzt '\n'/'\r' durch ' ' in einer Kopie von text, falls ed einzeilig
+ * ist - genutzt von editor_insert_text()/editor_set_text(), damit KEIN
+ * Einfuegeweg (Tippen, Einfuegen aus der Zwischenablage, künftige Wege wie
+ * Drag&Drop/IME) das einzeilige Feld je mit einem echten Zeilenumbruch
+ * durcheinanderbringen kann. Tabs bleiben: das Feld zeichnet und rechnet
+ * Spalten mit denselben Tabstopps (decode_row_for_display()/
+ * editor_visual_column_in_range() ab Spalte 0), und nur so findet die
+ * Suche nach einer vorbefuellten Selektion wie "a<Tab>b" den Tab im
+ * Dokument (vorher wurde daraus "a b" - "Nicht gefunden"). Gibt NULL zurueck, wenn keine Ersetzung noetig war
  * (Aufrufer nutzt dann weiter das Original); sonst einen neu allokierten,
  * gleich langen Puffer (Ersetzung ist immer 1:1, keine Laengenaenderung).
  */
 static char *sanitize_single_line(const char *text, size_t len) {
     int needs_sanitizing = 0;
     for (size_t i = 0; i < len; i++) {
-        if (text[i] == '\n' || text[i] == '\r' || text[i] == '\t') {
+        if (text[i] == '\n' || text[i] == '\r') {
             needs_sanitizing = 1;
             break;
         }
@@ -377,10 +436,10 @@ static char *sanitize_single_line(const char *text, size_t len) {
     if (!needs_sanitizing) {
         return NULL;
     }
-    char *out = malloc(len);
+    char *out = btn_xmalloc(len);
     for (size_t i = 0; i < len; i++) {
         char c = text[i];
-        out[i] = (c == '\n' || c == '\r' || c == '\t') ? ' ' : c;
+        out[i] = (c == '\n' || c == '\r') ? ' ' : c;
     }
     return out;
 }
@@ -745,10 +804,13 @@ static void wrap_selection_with(Editor *ed, char open_c, char close_c) {
      * verschluckt. */
     size_t sel_len = editor_selection_end(ed) - start;
     char *sel = editor_get_selection_text(ed);
+    /* Ein Undo-Schritt statt drei (Loeschen, Klammer, Text, Klammer). */
+    editor_begin_undo_group(ed);
     editor_delete_selection(ed);
     editor_insert_text(ed, &open_c, 1);
     editor_insert_text(ed, sel, sel_len);
     editor_insert_text(ed, &close_c, 1);
+    editor_end_undo_group(ed);
     free(sel);
     ed->anchor = start + 1;
     ed->cursor = start + 1 + sel_len;
@@ -1019,7 +1081,7 @@ char *editor_copy_all(Editor *ed, size_t *out_len) {
 
 char *editor_get_selection_text(Editor *ed) {
     if (!editor_has_selection(ed)) {
-        char *empty = malloc(1);
+        char *empty = btn_xmalloc(1);
         empty[0] = '\0';
         return empty;
     }
@@ -1030,24 +1092,34 @@ char *editor_get_selection_text(Editor *ed) {
 
 /* ---- Undo/Redo ---- */
 
+/* Wendet records[pos-1] rueckwaerts an (Undo) bzw. records[pos] vorwaerts
+ * (Redo) und setzt den Cursor ans Ende der wiederhergestellten Stelle. */
+static void undo_apply_one(Editor *ed, int undo) {
+    UndoStack *st = &ed->undo;
+    UndoRecord *r = undo ? &st->records[--st->pos] : &st->records[st->pos++];
+    if (r->is_insert == !undo) {
+        gb_insert(&ed->buffer, r->pos, r->text, r->len);
+        ed->cursor = r->pos + r->len;
+    } else {
+        gb_delete(&ed->buffer, r->pos, r->len);
+        ed->cursor = r->pos;
+    }
+    mark_content_changed(ed, r->pos);
+}
+
 void editor_undo(Editor *ed) {
     UndoStack *st = &ed->undo;
     if (st->pos == 0) {
         return;
     }
-    st->pos--;
-    UndoRecord *r = &st->records[st->pos];
-    if (r->is_insert) {
-        gb_delete(&ed->buffer, r->pos, r->len);
-        ed->cursor = r->pos;
-    } else {
-        gb_insert(&ed->buffer, r->pos, r->text, r->len);
-        ed->cursor = r->pos + r->len;
-    }
+    /* Eine ganze Gruppe (siehe editor_begin_undo_group()) auf einmal. */
+    unsigned long group = st->records[st->pos - 1].group;
+    do {
+        undo_apply_one(ed, 1);
+    } while (group != 0 && st->pos > 0 && st->records[st->pos - 1].group == group);
     ed->anchor = ed->cursor;
     ed->desired_col = UNSET_COL;
     editor_mark_cursor_moved(ed);
-    mark_content_changed(ed, r->pos);
 }
 
 void editor_redo(Editor *ed) {
@@ -1055,17 +1127,28 @@ void editor_redo(Editor *ed) {
     if (st->pos == st->count) {
         return;
     }
-    UndoRecord *r = &st->records[st->pos];
-    if (r->is_insert) {
-        gb_insert(&ed->buffer, r->pos, r->text, r->len);
-        ed->cursor = r->pos + r->len;
-    } else {
-        gb_delete(&ed->buffer, r->pos, r->len);
-        ed->cursor = r->pos;
-    }
-    st->pos++;
+    unsigned long group = st->records[st->pos].group;
+    do {
+        undo_apply_one(ed, 0);
+    } while (group != 0 && st->pos < st->count && st->records[st->pos].group == group);
     ed->anchor = ed->cursor;
     ed->desired_col = UNSET_COL;
     editor_mark_cursor_moved(ed);
-    mark_content_changed(ed, r->pos);
+}
+
+void editor_begin_undo_group(Editor *ed) {
+    UndoStack *st = &ed->undo;
+    if (st->group_depth++ == 0) {
+        st->open_group = ++st->last_group;
+    }
+}
+
+void editor_end_undo_group(Editor *ed) {
+    UndoStack *st = &ed->undo;
+    if (st->group_depth > 0 && --st->group_depth == 0) {
+        st->open_group = 0;
+        /* Naechster Tastendruck nicht in den letzten Record der Gruppe
+         * hineinfassen. */
+        ed->suppress_coalesce = 1;
+    }
 }

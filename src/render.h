@@ -78,6 +78,13 @@ void btn_render_set_font_size(double size);
 double btn_render_get_font_size(void);
 /* Kurzformen fuer Cmd+/Cmd-/Cmd+0 (main.c's Zoom-Menuepunkte) - je 1pt
  * Schritt, Reset auf BTN_DEFAULT_FONT_SIZE. */
+/* Uebersetzte Statuszeilen-Formate (Zeiger muessen gueltig bleiben, z.B.
+ * aus btn_tr()): pos_fmt mit zwei "%zu" (Zeile, Spalte), stats_fmt mit drei
+ * (Zeilen, Woerter, Zeichen). Ein Format mit anderen Konversionen wird
+ * ignoriert (btn_footer_format_ok()). */
+void btn_render_set_footer_formats(const char *pos_fmt, const char *stats_fmt);
+int btn_footer_format_ok(const char *fmt, int n);
+
 void btn_render_zoom_in(void);
 void btn_render_zoom_out(void);
 void btn_render_zoom_reset(void);
@@ -169,6 +176,12 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
  * nicht geflippten NSView) auf einen logischen Buffer-Offset ab,
  * unter Beruecksichtigung der aktuellen Scroll-Position. */
 size_t btn_hit_test(Editor *ed, CGRect bounds, double x, double y, long scroll_row);
+
+/* Wie viele Rows bei dieser Inhaltshoehe (ohne Tab-/Suchleiste) VOLL ueber
+ * dem Footer sichtbar sind - mit demselben oberen Innenabstand, den
+ * btn_render_frame() vor die erste Row setzt (mindestens 1). main.c's
+ * Scroll-Klemmung und "Cursor sichtbar halten" rechnen damit. */
+long btn_visible_row_capacity(double content_height);
 
 /* Wieviele Rows auf eine Druckseite der gegebenen Hoehe (in Punkten) passen -
  * main.c braucht das vor dem Druck, um die per btn_layout_build() erzeugten

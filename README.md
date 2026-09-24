@@ -22,12 +22,16 @@ Graphics/Core Text gezeichnet.
   Live-Hervorhebung aller Treffer beim Tippen samt Trefferzähler ("3 von 12
   Treffern"), Rückmeldung nach Ersetzen einzelner Treffer; Umschalter für
   Groß-/Kleinschreibung und ganzes Wort; Rückreferenzen im Ersetzen-Feld
-  (`$1`/`\1` bzw. `$0`/`\0` für den kompletten Treffer) im Regex-Modus
+  (`$1`/`\1` bzw. `$0`/`\0` für den kompletten Treffer) im Regex-Modus,
+  dort außerdem `\t` für einen Tabulator (Such- und Ersetzen-Feld, `\\` für
+  einen Backslash im Ersetzen-Feld); "Alle ersetzen" ist ein einziger
+  Undo-Schritt
 - Gehe zu Zeile (`⌘L`)
 - Dark Mode - folgt automatisch dem System-Erscheinungsbild
 - Schriftgröße anpassen (`⌘+`/`⌘-`/`⌘0` für Zurücksetzen) - wird über
   Neustarts hinweg gemerkt
 - Undo/Redo mit Coalescing aufeinanderfolgender Tastendrücke
+- Dateien bis 1 GB (größere werden mit einer Meldung abgelehnt)
 - Klammern und Anführungszeichen: Auto-Vervollständigung/Typdurchlauf für
   `()`, `[]`, `{}`, `""`, `''`, sowie Hervorhebung des zusammengehörigen Paars
 - UI-Sprache folgt der Systemeinstellung: Deutsch, Englisch, Französisch,

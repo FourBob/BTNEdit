@@ -275,8 +275,24 @@ static void add_item(NSMenu *menu, NSString *title, NSString *key, int tag) {
  * ein rohes C-const-char* zurueck (siehe strings.h), damit main.c dieselbe
  * Tabelle ohne Foundation nutzen kann; hier im Shim wird daraus erst bei
  * Bedarf ein NSString. */
+/* C-String -> NSString fuer Text, der nicht garantiert gueltiges UTF-8 ist
+ * (Dateinamen/Pfade auf SMB/NFS/FAT-Volumes, per snprintf gekuerzte
+ * Meldungen): erst UTF-8, sonst ISO-8859-1 (nimmt jedes Byte). Nie nil -
+ * nil in setTitle:/addItemWithTitle:/setMessageText: wirft eine Exception
+ * bzw. zeigt nichts an. */
+static NSString *ns_from_c(const char *s) {
+    if (!s) {
+        return @"";
+    }
+    NSString *r = [NSString stringWithUTF8String:s];
+    if (!r) {
+        r = [[[NSString alloc] initWithBytes:s length:strlen(s) encoding:NSISOLatin1StringEncoding] autorelease];
+    }
+    return r ? r : @"";
+}
+
 static NSString *trs(BtnStringId id) {
-    return [NSString stringWithUTF8String:btn_tr(id)];
+    return ns_from_c(btn_tr(id));
 }
 
 BtnUiLang btn_app_detect_system_language(void) {
@@ -412,7 +428,7 @@ void btn_app_set_recent_files(const char **paths, int count) {
         }
         [g_recentMenu removeAllItems];
         for (int i = 0; i < count; i++) {
-            NSString *full = [NSString stringWithUTF8String:paths[i]];
+            NSString *full = ns_from_c(paths[i]);
             NSMenuItem *item = [g_recentMenu addItemWithTitle:[full lastPathComponent]
                                                         action:@selector(menuAction:)
                                                  keyEquivalent:@""];
@@ -445,14 +461,14 @@ void btn_app_run(void) {
                                                   backing:NSBackingStoreBuffered
                                                     defer:NO];
         [g_window setTitle:trs(BTN_STR_UNTITLED)];
-        /* Breite 1080 statt z.B. 400: die Suchen/Ersetzen-Leiste (render.c)
-         * braucht bei sichtbarem "Alle ersetzen"-Knopf samt den drei
-         * Umschaltern (".*"/"Aa"/"\b") und Statustext ueber 1000pt, bevor
-         * ueberhaupt der Statustext anfaengt - bei einer kleineren Mindest-
-         * breite waeren Knopf und/oder Statustext im schmalsten Fenster
-         * abgeschnitten. shim.m kennt render.h's Layout-Konstanten bewusst
-         * nicht (reine Chrome), daher hier als grosszuegig bemessener,
-         * eigener Wert statt eines Verweises auf sie. */
+        /* Breite 1080 statt z.B. 400: Felder, die drei Umschalter
+         * (".*"/"Aa"/"\b") und der "Alle ersetzen"-Knopf der Suchen/Ersetzen-
+         * Leiste (render.c) reichen bis x = 840pt, dahinter beginnt der
+         * Statustext. Bei 1080pt bleiben ihm gut 230pt; laengere Meldungen
+         * kuerzt render.c mit "..." (btn_render_find_bar()). Bei einer
+         * kleineren Mindestbreite waere der Knopf selbst abgeschnitten.
+         * shim.m kennt render.h's Layout-Konstanten bewusst nicht (reine
+         * Chrome), daher hier als eigener Wert statt eines Verweises. */
         [g_window setMinSize:NSMakeSize(1080, 300)];
 
         g_view = [[BTNContentView alloc] initWithFrame:frame];
@@ -543,7 +559,7 @@ char *btn_show_save_panel(const char *suggested_path) {
     @autoreleasepool {
         NSSavePanel *panel = [NSSavePanel savePanel];
         if (suggested_path) {
-            NSString *s = [NSString stringWithUTF8String:suggested_path];
+            NSString *s = ns_from_c(suggested_path);
             [panel setDirectoryURL:[[NSURL fileURLWithPath:s] URLByDeletingLastPathComponent]];
             [panel setNameFieldStringValue:[s lastPathComponent]];
         } else {
@@ -564,8 +580,9 @@ int btn_show_unsaved_changes_alert(const char *display_name) {
         char msg[512];
         snprintf(msg, sizeof(msg), btn_tr(BTN_STR_SAVE_PROMPT_TITLE_FMT),
                  display_name ? display_name : btn_tr(BTN_STR_UNTITLED));
-        NSAlert *alert = [[NSAlert alloc] init];
-        [alert setMessageText:[NSString stringWithUTF8String:msg]];
+        /* autorelease: ohne ARC leakte jeder Dialog sein NSAlert samt Panel. */
+        NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+        [alert setMessageText:ns_from_c(msg)];
         [alert setInformativeText:trs(BTN_STR_SAVE_PROMPT_INFO)];
         [alert addButtonWithTitle:trs(BTN_STR_BTN_SAVE)];
         [alert addButtonWithTitle:trs(BTN_STR_BTN_DONT_SAVE)];
@@ -586,8 +603,8 @@ int btn_show_binary_file_warning(const char *display_name) {
         char msg[512];
         snprintf(msg, sizeof(msg), btn_tr(BTN_STR_BINARY_WARNING_TITLE_FMT),
                  display_name ? display_name : btn_tr(BTN_STR_UNTITLED));
-        NSAlert *alert = [[NSAlert alloc] init];
-        [alert setMessageText:[NSString stringWithUTF8String:msg]];
+        NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+        [alert setMessageText:ns_from_c(msg)];
         [alert setInformativeText:trs(BTN_STR_BINARY_WARNING_INFO)];
         [alert addButtonWithTitle:trs(BTN_STR_BTN_OPEN_ANYWAY)];
         [alert addButtonWithTitle:trs(BTN_STR_BTN_CANCEL)];
@@ -601,9 +618,9 @@ int btn_show_goto_line_dialog(long max_line, long *out_line) {
         char info[128];
         snprintf(info, sizeof(info), btn_tr(BTN_STR_GOTO_LINE_INFO_FMT), (int)max_line);
 
-        NSAlert *alert = [[NSAlert alloc] init];
+        NSAlert *alert = [[[NSAlert alloc] init] autorelease];
         [alert setMessageText:trs(BTN_STR_GOTO_LINE)];
-        [alert setInformativeText:[NSString stringWithUTF8String:info]];
+        [alert setInformativeText:ns_from_c(info)];
         [alert addButtonWithTitle:trs(BTN_STR_BTN_OK)];
         [alert addButtonWithTitle:trs(BTN_STR_BTN_CANCEL)];
 
@@ -637,16 +654,27 @@ int btn_show_goto_line_dialog(long max_line, long *out_line) {
 
 void btn_show_help_alert(void) {
     @autoreleasepool {
-        NSAlert *alert = [[NSAlert alloc] init];
+        NSAlert *alert = [[[NSAlert alloc] init] autorelease];
         [alert setMessageText:trs(BTN_STR_HELP_TITLE)];
         [alert setInformativeText:trs(BTN_STR_HELP_BODY)];
         [alert runModal];
     }
 }
 
+void btn_show_error_alert(const char *title, const char *info) {
+    @autoreleasepool {
+        NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+        [alert setAlertStyle:NSAlertStyleWarning];
+        [alert setMessageText:ns_from_c(title)];
+        [alert setInformativeText:ns_from_c(info)];
+        [alert addButtonWithTitle:trs(BTN_STR_BTN_OK)];
+        [alert runModal];
+    }
+}
+
 void btn_set_window_title(const char *title) {
     @autoreleasepool {
-        [g_window setTitle:[NSString stringWithUTF8String:title ? title : btn_tr(BTN_STR_UNTITLED)]];
+        [g_window setTitle:ns_from_c(title ? title : btn_tr(BTN_STR_UNTITLED))];
     }
 }
 

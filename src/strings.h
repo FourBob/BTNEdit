@@ -80,11 +80,26 @@ typedef enum {
     BTN_STR_ZOOM_IN,
     BTN_STR_ZOOM_OUT,
     BTN_STR_ZOOM_RESET,
-    /* Ersetzt den Trefferzaehler in der Statusanzeige, wenn das aktive
-     * Dokument fuer einen Live-Suche-Vollscan bei jedem Tastendruck zu
-     * gross ist (siehe BTN_LIVE_SEARCH_MAX_DOC_LEN in main.c) - Suchen
-     * funktioniert weiterhin ganz normal per Return. */
+    /* Ersetzt den Trefferzaehler in der Statusanzeige, wenn die Live-Suche
+     * fuer diesen Tastendruck ausfaellt: Dokument zu gross (siehe
+     * BTN_LIVE_SEARCH_MAX_DOC_LEN in main.c) oder Regex zu aufwendig (siehe
+     * regex_too_expensive_for_live_search()) - Suchen funktioniert weiterhin
+     * ganz normal per Return. Kurz halten: bei Mindestfensterbreite passen
+     * rund 29 Zeichen. */
     BTN_STR_FIND_LIVE_SEARCH_TOO_LARGE,
+    /* Statuszeile links: genau zwei "%zu" (Zeile, Spalte) - render.c
+     * formatiert mit size_t und prueft das per btn_footer_format_ok(). */
+    BTN_STR_FOOTER_POS_FMT,
+    /* Statuszeile rechts: genau drei "%zu" (Zeilen, Woerter, Zeichen). */
+    BTN_STR_FOOTER_STATS_FMT,
+    /* Fehlermeldungen beim Oeffnen/Sichern (btn_show_error_alert()). Die
+     * *_TITLE_FMT enthalten ein "%s" fuer den Dateinamen, TOO_LARGE ein "%d"
+     * fuer die Obergrenze in MB - siehe BTN_STR_SAVE_PROMPT_TITLE_FMT. */
+    BTN_STR_OPEN_FAILED_TITLE_FMT,
+    BTN_STR_OPEN_FAILED_INFO,
+    BTN_STR_FILE_TOO_LARGE_INFO_FMT,
+    BTN_STR_SAVE_FAILED_TITLE_FMT,
+    BTN_STR_SAVE_FAILED_INFO,
     BTN_STR_COUNT
 } BtnStringId;
 

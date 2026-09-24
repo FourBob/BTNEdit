@@ -159,6 +159,10 @@ int btn_app_is_dark_mode(void);
  * fuer eine simple, statische Liste. */
 void btn_show_help_alert(void);
 
+/* Einfache Fehlermeldung mit OK-Knopf (z.B. Datei nicht lesbar/zu gross).
+ * title/info duerfen ungueltiges UTF-8 enthalten (Latin-1-Fallback). */
+void btn_show_error_alert(const char *title, const char *info);
+
 void btn_set_window_title(const char *title);
 void btn_app_set_document_edited(int edited);
 void btn_app_close_window(void);
