@@ -15,9 +15,12 @@ CC       := clang
 # Abhilfe: eine aeltere, auf der Maschine bereits vorhandene SDK-Version
 # erzwingen, z.B.:
 #   make clean
-#   make SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
-SDKROOT  ?=
-SDKFLAG  := $(if $(SDKROOT),-isysroot $(SDKROOT),)
+#   make BTN_SDK=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
+# Bewusst NICHT "SDKROOT": das ist eine Standard-Umgebungsvariable von
+# Xcode/xcrun - ein "?=" darauf wuerde eine zufaellig gesetzte, womoeglich
+# unpassende SDK aus der Umgebung stillschweigend als -isysroot uebernehmen.
+BTN_SDK  ?=
+SDKFLAG  := $(if $(BTN_SDK),-isysroot $(BTN_SDK),)
 CFLAGS   := -Wall -Wextra -std=c11 -O2 -Isrc $(SDKFLAG)
 OBJCFLAGS:= -Wall -Wextra -fno-objc-arc -O2 -Isrc $(SDKFLAG)
 FRAMEWORKS := -framework Cocoa -framework CoreText -framework CoreGraphics $(SDKFLAG)

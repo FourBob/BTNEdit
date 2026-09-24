@@ -80,7 +80,7 @@ bereits auf der Maschine vorhandene SDK-Version erzwingen (Pfad ggf. mit
 
 ```bash
 make clean
-make SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
+make BTN_SDK=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
 ```
 
 ## Tastenkürzel
