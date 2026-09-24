@@ -64,11 +64,14 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
   (`btn_xmalloc`) - dort ist ein sauberer Rückweg durch jede Bearbeitungs-
   funktion nicht vorgesehen. Nur der Undo-Verlauf behandelt es weich: er
   wird dann verworfen, die Bearbeitung selbst bleibt.
-- Live-Suche im Regex-Modus fällt für Muster mit `{n,m}` über 64 oder
-  verschachtelten/verketteten `{..}` aus (`regex_too_expensive_for_live_search`,
-  Apples TRE kopiert den Teilbaum pro Wiederholung). Return sucht weiterhin
-  ohne Deckel. Andere teure Muster (viele Alternativen o.ä.) sind nicht
-  abgedeckt.
+- Live-Suche im Regex-Modus fällt aus, wenn verschachtelte/verkettete
+  `{n,m}` zusammen mehr als 1000 Kopien eines Teilausdrucks ergäben
+  (`regex_too_expensive_for_live_search`, Apples TRE kopiert den Teilbaum pro
+  Wiederholung). Return sucht weiterhin ohne Deckel. Andere teure Muster
+  (sehr viele Alternativen o.ä.) sind nicht abgedeckt.
+- Alert-Titel mit einem Dateinamen ohne gültiges UTF-8 fallen als Ganzes auf
+  Latin-1 zurück - die übersetzten Anführungszeichen erscheinen dann als
+  `â€œ`. Nur bei Dateinamen von SMB/NFS/FAT-Volumes.
 - Suchen-/Ersetzen-Felder scrollen nicht horizontal: sehr langer Text läuft
   über das 200pt-Feld hinaus in die Umschalter.
 

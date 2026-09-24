@@ -745,12 +745,18 @@ static double draw_cfstring_at(CGContextRef ctx, CFStringRef str, double x, doub
 
 /* draw_cfstring_at() fuer einen UTF-8-C-String - fuer die festen Texte der
  * Oberflaeche (Tab-Label, Schliessen-Kreuz, "+"-Knopf, Beschriftungen).
- * Ungueltiges UTF-8 liefert NULL und zeichnet nichts; Tab-Labels sind
- * Dateinamen (gueltiges UTF-8) und werden per utf8_safe_cut() nur an
- * Zeichengrenzen gekuerzt. Nutzertext (Dokument, Suchfelder) geht dagegen
+ * Ungueltiges UTF-8 wird als Latin-1 gezeichnet (Tab-Labels aus Dateinamen
+ * fremder Volumes); gueltige Labels kuerzt utf8_safe_cut() nur an
+ * Zeichengrenzen. Nutzertext (Dokument, Suchfelder) geht dagegen
  * ueber decode_row_for_display(). */
 static double draw_text_at(CGContextRef ctx, const char *text, double x, double y, CFDictionaryRef attrs) {
-    return draw_cfstring_at(ctx, CFStringCreateWithCString(NULL, text, kCFStringEncodingUTF8), x, y, attrs);
+    CFStringRef str = CFStringCreateWithCString(NULL, text, kCFStringEncodingUTF8);
+    if (!str) {
+        /* Dateiname auf SMB/NFS/FAT ohne gueltiges UTF-8: als Latin-1
+         * zeigen (wie der Fenstertitel in shim.m) statt gar nicht. */
+        str = CFStringCreateWithCString(NULL, text, kCFStringEncodingISOLatin1);
+    }
+    return draw_cfstring_at(ctx, str, x, y, attrs);
 }
 
 /* Wie draw_text_at(), aber hoechstens max_width breit - laengerer Text wird

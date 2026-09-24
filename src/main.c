@@ -891,34 +891,36 @@ static void set_match_count_status(size_t match_start) {
  * springt/scrollt bereits zum naechsten Treffer ab g_search_anchor, damit
  * sich Tippen wie eine echte Live-Suche anfuehlt statt nur nachtraeglich
  * eingefaerbt zu werden. */
-/* Obergrenze fuer {n,m}-Wiederholungen in der Live-Suche - siehe unten. */
-#define BTN_LIVE_REGEX_MAX_REPEAT 64
+/* Hoechstens so viele Kopien eines Teilausdrucks darf die Live-Suche
+ * erzeugen - siehe regex_too_expensive_for_live_search(). */
+#define BTN_LIVE_REGEX_MAX_COPIES 1000
 
 /* 1, wenn ein Regex-Muster fuer die Live-Suche (regcomp() bei JEDEM
- * Tastendruck) zu teuer ist: Apples TRE kopiert fuer {n,m} den ganzen
- * Teilbaum n- bzw. m-mal, verschachtelt multipliziert sich das -
- * ((a{255}){255}){255} sind rund 16 Mio. Knoten, sekundenlanges Haengen und
- * Gigabytes Speicher pro Tastendruck. Abgelehnt wird eine Wiederholung
- * ueber BTN_LIVE_REGEX_MAX_REPEAT oder eine {..}-Wiederholung einer Gruppe,
- * die selbst schon eine {..}-Wiederholung enthaelt (bzw. direkt auf eine
- * folgt, a{9}{9}). Nur die Live-Vorschau
- * faellt dann aus - Return sucht wie immer (bewusst ohne Deckel, der Nutzer
- * hat es ausdruecklich angefordert). Kein Sicherheitsproblem, nur
- * selbstverschuldet: das Muster tippt der Nutzer selbst. */
+ * Tastendruck) zu teuer ist: Apples TRE kopiert fuer x{n,m} den Teilbaum x
+ * max(n,m)-mal, verschachtelte oder verkettete Wiederholungen multiplizieren
+ * sich - ((a{255}){255}){255} sind rund 16 Mio. Knoten, sekundenlanges
+ * Haengen und Gigabytes Speicher pro Tastendruck. Deshalb wird pro Atom das
+ * Produkt der Wiederholungszahlen verfolgt, die es (samt allem, was darin
+ * steckt) vervielfachen; ueber BTN_LIVE_REGEX_MAX_COPIES faellt nur die
+ * Live-Vorschau aus. Uebliche Muster wie ([0-9]{1,3}\.){3}[0-9]{1,3}
+ * (Faktor 9) bleiben live. '*', '+', '?' kopieren nicht, reichen den Faktor
+ * aber weiter (a{60}*{60} = 3600). Return sucht wie immer ohne Deckel - der
+ * Nutzer hat es ausdruecklich angefordert. Kein Sicherheitsproblem, das
+ * Muster tippt der Nutzer selbst. */
 static int regex_too_expensive_for_live_search(const char *p, size_t len) {
     enum { MAX_DEPTH = 64 };
-    int has_repeat[MAX_DEPTH + 1] = { 0 }; /* {..} innerhalb der offenen Gruppe je Tiefe */
+    unsigned long group_max[MAX_DEPTH + 1]; /* groesster Faktor innerhalb der offenen Gruppe */
     int depth = 0;
-    int last_group_repeats = 0;            /* hatte die gerade geschlossene Gruppe {..}? */
+    unsigned long atom = 0;                 /* Faktor des zuletzt gelesenen Atoms, 0 = keins */
+    group_max[0] = 1;
     for (size_t i = 0; i < len; i++) {
         char c = p[i];
-        int prev_was_group = last_group_repeats;
-        last_group_repeats = 0;
         if (c == '\\') {
-            i++; /* Escape: naechstes Zeichen ist literal */
+            i++; /* Escape: naechstes Zeichen ist ein literales Atom */
+            atom = 1;
         } else if (c == '[') {
-            /* Klammerausdruck ueberspringen; ']' direkt am Anfang (auch nach
-             * '^') ist literal, ebenso [:klasse:] */
+            /* Klammerausdruck = ein Atom; ']' direkt am Anfang (auch nach
+             * '^') ist literal, ebenso [:klasse:] / [.x.] / [=x=] */
             size_t j = i + 1;
             if (j < len && p[j] == '^') {
                 j++;
@@ -939,51 +941,58 @@ static int regex_too_expensive_for_live_search(const char *p, size_t len) {
                 j++;
             }
             i = j;
+            atom = 1;
         } else if (c == '(') {
-            if (depth < MAX_DEPTH) {
-                depth++;
-                has_repeat[depth] = 0;
-            } else {
+            if (depth == MAX_DEPTH) {
                 return 1; /* absurd tief verschachtelt - auch zu teuer */
             }
+            group_max[++depth] = 1;
+            atom = 0;
         } else if (c == ')') {
             if (depth > 0) {
-                last_group_repeats = has_repeat[depth];
-                depth--;
-                if (last_group_repeats) {
-                    has_repeat[depth] = 1; /* Wiederholung steckt auch in der aeusseren Gruppe */
-                }
+                atom = group_max[depth--]; /* Gruppe = Atom mit ihrem groessten Innenfaktor */
+            } else {
+                atom = 1;
             }
-        } else if (c == '{' && i + 1 < len && isdigit((unsigned char)p[i + 1])) {
-            unsigned long max = 0;
+        } else if (c == '|') {
+            atom = 0;
+        } else if (c == '*' || c == '+' || c == '?') {
+            /* keine Kopie, Faktor des Atoms bleibt fuer ein folgendes {..} */
+        } else if (c == '{' && i + 1 < len && (isdigit((unsigned char)p[i + 1]) || p[i + 1] == ',')) {
+            /* {n}, {n,}, {n,m}, {,m}: TRE kopiert max(n,m) Mal */
+            unsigned long count = 0;
             size_t j = i + 1;
             while (j < len && (isdigit((unsigned char)p[j]) || p[j] == ',')) {
-                if (isdigit((unsigned char)p[j])) {
-                    unsigned long v = 0;
-                    while (j < len && isdigit((unsigned char)p[j])) {
-                        v = v * 10 + (unsigned long)(p[j] - '0');
-                        if (v > 1000000) {
-                            v = 1000000;
-                        }
-                        j++;
+                unsigned long v = 0;
+                while (j < len && isdigit((unsigned char)p[j])) {
+                    v = v * 10 + (unsigned long)(p[j] - '0');
+                    if (v > BTN_LIVE_REGEX_MAX_COPIES) {
+                        v = BTN_LIVE_REGEX_MAX_COPIES + 1;
                     }
-                    if (v > max) {
-                        max = v;
-                    }
-                } else {
+                    j++;
+                }
+                if (v > count) {
+                    count = v;
+                }
+                if (j < len && p[j] == ',') {
                     j++;
                 }
             }
-            if (max > BTN_LIVE_REGEX_MAX_REPEAT || prev_was_group) {
-                return 1;
-            }
-            has_repeat[depth] = 1;
             if (j < len && p[j] == '}') {
+                unsigned long base = atom ? atom : 1;
+                atom = base * (count ? count : 1);
+                if (atom > BTN_LIVE_REGEX_MAX_COPIES) {
+                    return 1;
+                }
                 i = j;
-                /* a{64}{64}{64} multipliziert sich wie eine verschachtelte
-                 * Gruppe - direkt folgendes {..} ebenso behandeln. */
-                last_group_repeats = 1;
+            } else {
+                atom = 1; /* kein vollstaendiges {..}: literales '{' */
             }
+        } else {
+            atom = 1;
+        }
+        if (atom > group_max[depth]) {
+            group_max[depth] = atom;
         }
     }
     return 0;
@@ -1091,11 +1100,16 @@ static int perform_find(int forward) {
  * editor_insert_text() selbst kehrt bei len==0 sofort zurueck (Guard gegen
  * No-Op-Inserts), was die Selektion in genau diesem Fall stehen liesse. */
 static void replace_selection(Editor *ed, const char *text, size_t len) {
+    /* Ein Undo-Schritt: Loeschen der Selektion und Einfuegen landen sonst in
+     * zwei Records - das erste Cmd+Z nach "Ersetzen" oder Einfuegen ueber
+     * eine Selektion liess den Treffer geloescht, ohne Ersetzung. */
+    editor_begin_undo_group(ed);
     if (len == 0) {
         editor_delete_selection(ed);
     } else {
         editor_insert_text(ed, text, len);
     }
+    editor_end_undo_group(ed);
 }
 
 #define BTN_MAX_REGEX_GROUPS 10
@@ -1494,6 +1508,12 @@ typedef enum {
  * jedem Fehler, *out_result sagt welcher. */
 static char *read_file_contents(const char *path, size_t *out_len, BtnReadResult *out_result) {
     *out_result = BTN_READ_FAILED;
+    /* Erst per stat() pruefen: fopen() auf eine Named Pipe (FIFO) blockiert,
+     * bis jemand hineinschreibt - die App hinge. */
+    struct stat pre;
+    if (stat(path, &pre) != 0 || !S_ISREG(pre.st_mode)) {
+        return NULL;
+    }
     FILE *f = fopen(path, "rb");
     if (!f) {
         return NULL;
