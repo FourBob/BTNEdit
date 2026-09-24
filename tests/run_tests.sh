@@ -5,6 +5,8 @@
 #                    (clang dort oft ohne ASan-Laufzeit).
 #   SANITIZE=0       ohne AddressSanitizer/UBSan bauen (schneller, weniger streng)
 #   ONLY=name        nur Tests, deren Name "name" enthaelt
+#   TEST_EXTRA_CFLAGS zusaetzliche Flags fuer Compiler und Linker (make test
+#                    setzt hier z.B. -isysroot aus BTN_SDK)
 #
 # Die Tests laufen ohne macOS-Frameworks: editor.c, eol.c, gapbuffer.c, highlight.c
 # und strings.c werden direkt gelinkt, die reinen C-Teile aus main.c/render.c
@@ -19,7 +21,7 @@ mkdir -p "$OUT"
 
 python3 tests/gen_headers.py src "$GEN" || { echo "Header-Erzeugung fehlgeschlagen"; exit 1; }
 
-CFLAGS="-std=gnu11 -g -O1 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter -Isrc -I$GEN -Itests"
+CFLAGS="-std=gnu11 -g -O1 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter -Isrc -I$GEN -Itests ${TEST_EXTRA_CFLAGS:-}"
 if [ "${SANITIZE:-1}" != 0 ]; then
     CFLAGS="$CFLAGS -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer"
 fi

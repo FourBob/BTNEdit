@@ -70,13 +70,15 @@ run: all
 	open $(APP_DIR)
 
 # Alle Tests unter tests/ mit AddressSanitizer/UBSan - siehe tests/run_tests.sh.
+# SDKFLAG (BTN_SDK) auch hier: die Tests linken gegen libSystem, und ein
+# kaputtes Standard-SDK scheitert daran genauso wie die App.
 test:
-	CC=$(TEST_CC) tests/run_tests.sh
+	CC=$(TEST_CC) TEST_EXTRA_CFLAGS="$(SDKFLAG)" tests/run_tests.sh
 
 # Laufzeit pro Tastendruck bei grossen Dokumenten (kein Test, nur Messwerte).
 bench:
 	python3 tests/gen_headers.py src $(BUILD_DIR)/tests/gen
-	$(TEST_CC) -std=gnu11 -O2 -Isrc -I$(BUILD_DIR)/tests/gen -o $(BUILD_DIR)/tests/bench_layout \
+	$(TEST_CC) -std=gnu11 -O2 -Isrc -I$(BUILD_DIR)/tests/gen $(SDKFLAG) -o $(BUILD_DIR)/tests/bench_layout \
 		tests/bench_layout.c src/editor.c src/eol.c src/gapbuffer.c src/highlight.c -lm
 	$(BUILD_DIR)/tests/bench_layout
 

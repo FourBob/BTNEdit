@@ -51,17 +51,30 @@ else
 fi
 echo ">> Stand: $(git log --oneline -1)"
 
-make clean
+SDK_ARG=()
 if [ -d "$SDK" ]; then
-    make BTN_SDK="$SDK"
+    SDK_ARG=(BTN_SDK="$SDK")
 else
     echo ">> $SDK nicht gefunden - baue mit Standard-SDK"
-    make
 fi
 
+make clean
+make ${SDK_ARG[@]+"${SDK_ARG[@]}"}
+
+# Tests brauchen dasselbe SDK wie die App. Schlagen sie fehl, wird die App
+# trotzdem geoeffnet - das Ergebnis steht dann am Ende.
+TEST_RESULT=""
 if [ "$RUN_TESTS" = 1 ]; then
-    make test
+    if make test ${SDK_ARG[@]+"${SDK_ARG[@]}"}; then
+        TEST_RESULT=">> Tests: alle bestanden"
+    else
+        TEST_RESULT=">> Tests: FEHLGESCHLAGEN (Logs in $DIR/build/tests/*.log)"
+    fi
 fi
 
 echo ">> Fertig: $DIR/build/BTNEdit.app"
 open build/BTNEdit.app
+if [ -n "$TEST_RESULT" ]; then
+    echo "$TEST_RESULT"
+    [[ "$TEST_RESULT" != *FEHLGESCHLAGEN* ]]
+fi
