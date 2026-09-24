@@ -13,25 +13,22 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
    Tottasten der deutschen Tastatur (`^`, `´`, `` ` `` + Buchstabe)
    vermutlich ebenso; am Mac prüfen. Umbau des Tastatur-Pfads in shim.m,
    inklusive Anzeige des vorläufigen (marked) Texts.
-2. **Einrücken.** Return übernimmt die Einrückung der vorigen Zeile nicht
-   (kein Auto-Indent). Tab mit Selektion ersetzt die Selektion durch einen
-   Tab, statt die Zeilen einzurücken; Shift+Tab (Ausrücken) fehlt.
-3. **Maus und Scrollen.** Keine Scrollbar, kein Autoscroll beim Ziehen einer
+2. **Maus und Scrollen.** Keine Scrollbar, kein Autoscroll beim Ziehen einer
    Selektion über den Fensterrand, Mauszeiger bleibt ein Pfeil statt
    I-Beam, Datei aufs Fenster ziehen öffnet sie nicht (Drag & Drop).
-4. **Schutz der Arbeit.** Keine Erkennung, wenn ein anderes Programm eine
+3. **Schutz der Arbeit.** Keine Erkennung, wenn ein anderes Programm eine
    offene Datei auf der Platte ändert (Neu laden anbieten). Kein Autosave /
    keine Wiederherstellung nach Absturz - wichtiger, seit Speichermangel im
    Gap-Buffer bewusst mit `abort()` endet.
-5. **Standard-Tastenkürzel.** Weitersuchen/Rückwärtssuchen (⌘G / ⇧⌘G),
+4. **Standard-Tastenkürzel.** Weitersuchen/Rückwärtssuchen (⌘G / ⇧⌘G),
    "Auswahl zum Suchen verwenden" (⌘E), Tab-Wechsel per Tastatur (Ctrl+Tab
    bzw. ⇧⌘[ / ⇧⌘]), Fenster-Menü mit Im Dock ablegen (⌘M) und Vollbild.
-6. **Code-Editor-Funktionen.** Kommentar umschalten (⌘/), Zeile duplizieren,
+5. **Code-Editor-Funktionen.** Kommentar umschalten (⌘/), Zeile duplizieren,
    Zeile(n) hoch/runter verschieben, unsichtbare Zeichen anzeigen,
    Wortumbruch an/aus, Kodierung beim Öffnen/Sichern wählen (heute: Bytes
    unverändert, Anzeige als UTF-8 mit Latin-1-Fallback), Suche über alle
    Tabs.
-7. **KI-Vervollständigung mit lokalem LLM (optional, standardmäßig aus).**
+6. **KI-Vervollständigung mit lokalem LLM (optional, standardmäßig aus).**
    Kein eingebautes Modell: BTNEdit fragt per HTTP einen lokal laufenden
    Server an (Ollama oder llama-server), Adresse und Modellname in der
    Prefs-Datei; ohne Server fehlt die Funktion einfach. Code-Modell mit
@@ -47,6 +44,12 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
 
 ## Bekannte Einschränkungen (bewusst zurückgestellt, kein akuter Bug)
 
+- Einrücken: Return übernimmt nur die vorhandene Einrückung - kein
+  zusätzliches Einrücken nach `{` oder `:` und kein Aufteilen von `{}` auf
+  drei Zeilen (bräuchte Sprachwissen aus highlight.c). Drückt man Return auf
+  einer Zeile, die nur aus Einrückung besteht, bleibt diese Einrückung als
+  Leerraum am Zeilenende stehen. Die Stil-Erkennung (Tab oder Leerzeichen)
+  liest nur das erste MB der Datei.
 - Zeilenenden: Dateien mit gemischten Zeilenenden (z.B. Logs mit
   Fortschrittszeilen, Patches mit einzelnen CRLF-Zeilen) und Binärdateien
   bleiben Byte für Byte, wie sie sind - ein `\r` darin wird dann wie bisher

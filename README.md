@@ -35,6 +35,10 @@ Graphics/Core Text gezeichnet.
 - Dark Mode - folgt automatisch dem System-Erscheinungsbild
 - Schriftgröße anpassen (`⌘+`/`⌘-`/`⌘0` für Zurücksetzen) - wird über
   Neustarts hinweg gemerkt
+- Einrücken: Return übernimmt die Einrückung der aktuellen Zeile; Tab und
+  ⇧Tab rücken alle Zeilen einer Selektion ein bzw. aus - mit Tab oder vier
+  Leerzeichen, je nachdem, was die Datei überwiegend nutzt (auch ein
+  einzelner Tab wird in einer Leerzeichen-Datei zu Leerzeichen)
 - Undo/Redo mit Coalescing aufeinanderfolgender Tastendrücke
 - Dateien bis 1 GB (größere werden mit einer Meldung abgelehnt)
 - Klammern und Anführungszeichen: Auto-Vervollständigung/Typdurchlauf für
@@ -126,6 +130,7 @@ umbenennt, muss sie dort nachziehen.
 | `test_regex_replace`, `test_tab_search`, `test_regex_budget` | Suchen/Ersetzen, Rückreferenzen, `\t`, Komplexitätsdeckel der Live-Suche |
 | `test_layout_cache`, `test_layout_cache_lang` | Layout- und Kommentar-Cache gegen einen frischen Aufbau |
 | `test_undo` | Undo-Gruppen und Fuzzing mit simulierten Allokationsfehlern |
+| `test_indent` | Auto-Indent bei Return, Tab/⇧Tab über mehrere Zeilen, Tab vs. Leerzeichen, Fuzz: Ausrücken nach Einrücken = Original |
 | `test_save_atomic`, `test_save_links_perms`, `test_file_io` | atomares Sichern, Symlinks, Schreibschutz, Laden, Recent-Liste |
 | `test_close_flow` | Schließen/Beenden verliert nie ungesicherte Änderungen |
 | `test_eol` | Zeilenenden: Erkennung, bytegenauer Round-Trip LF/CRLF/CR, Umwandeln aus zwei Pufferhälften |
@@ -156,3 +161,4 @@ in die Liste `TESTS` eintragen.
 | Gehe zu Zeile | `⌘L` |
 | Vergrößern / Verkleinern / Tatsächliche Größe | `⌘+` / `⌘-` / `⌘0` |
 | Wort-/Zeilensprung, Zeilenanfang/-ende | `⌥←/→`, `⌘←/→`, Pos1/Ende |
+| Zeilen ein-/ausrücken (Selektion über mehrere Zeilen) | `Tab` / `⇧Tab` |

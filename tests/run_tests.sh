@@ -41,6 +41,7 @@ TESTS=(
     "test_undo|$OUT/editor_inject.o src/eol.c src/gapbuffer.c|"
     "test_eol|$EDITOR_SRC|"
     "test_eol_glue|$EDITOR_SRC|"
+    "test_indent|$EDITOR_SRC|"
     "test_oom|src/gapbuffer.c|ASAN_OPTIONS=allocator_may_return_null=1"
     "test_strings|src/strings.c|"
     "test_close_flow||"

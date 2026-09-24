@@ -2311,7 +2311,9 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
             btn_app_request_redraw();
             return;
         case KEYCODE_TAB:
-            editor_insert_text(ed, "\t", 1);
+            /* Tab: Tab-Zeichen bzw. mehrere Zeilen einruecken; Shift+Tab:
+             * ausruecken (siehe editor_tab_key()). */
+            editor_tab_key(ed, shift);
             sync_window_state();
             sync_scroll_to_cursor();
             btn_app_request_redraw();
@@ -2331,7 +2333,7 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
 
     unsigned char c = (unsigned char)characters[0];
     if (c == '\r') {
-        editor_insert_text(ed, "\n", 1);
+        editor_insert_newline(ed); /* mit Einrueckung der aktuellen Zeile */
     } else if (c == 0x7F) {
         editor_delete_backward(ed);
     } else if (c >= 0x20) {

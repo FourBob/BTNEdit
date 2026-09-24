@@ -1152,3 +1152,177 @@ void editor_end_undo_group(Editor *ed) {
         ed->suppress_coalesce = 1;
     }
 }
+
+/* ---- Einruecken ---- */
+
+/* Wie viel vom Dokumentanfang fuer die Stil-Erkennung gelesen wird - Tab
+ * soll auch bei einer 1-GB-Datei sofort reagieren. */
+#define BTN_INDENT_SAMPLE_LEN (1024 * 1024)
+
+static size_t line_start_at(Editor *ed, size_t pos) {
+    while (pos > 0 && gb_char_at(&ed->buffer, pos - 1) != '\n') {
+        pos--;
+    }
+    return pos;
+}
+
+int editor_indent_uses_spaces(Editor *ed) {
+    size_t len = editor_length(ed);
+    size_t limit = len < BTN_INDENT_SAMPLE_LEN ? len : BTN_INDENT_SAMPLE_LEN;
+    size_t tab_lines = 0, space_lines = 0;
+    int at_line_start = 1;
+    for (size_t i = 0; i < limit; i++) {
+        char c = gb_char_at(&ed->buffer, i);
+        if (at_line_start) {
+            if (c == '\t') {
+                tab_lines++;
+            } else if (c == ' ' && i + 1 < len && gb_char_at(&ed->buffer, i + 1) == ' ') {
+                /* mindestens zwei: " * " in Blockkommentaren ist keine Einrueckung */
+                space_lines++;
+            }
+        }
+        at_line_start = (c == '\n');
+    }
+    return space_lines > tab_lines;
+}
+
+/* Eine Einrueckstufe: '\t' oder BTN_TAB_WIDTH Leerzeichen. */
+static size_t indent_unit(Editor *ed, char *buf) {
+    if (editor_indent_uses_spaces(ed)) {
+        memset(buf, ' ', BTN_TAB_WIDTH);
+        return BTN_TAB_WIDTH;
+    }
+    buf[0] = '\t';
+    return 1;
+}
+
+void editor_insert_newline(Editor *ed) {
+    size_t start = editor_selection_start(ed);
+    size_t line = line_start_at(ed, start);
+    size_t n = 0;
+    while (line + n < start) {
+        char c = gb_char_at(&ed->buffer, line + n);
+        if (c != ' ' && c != '\t') {
+            break;
+        }
+        n++;
+    }
+    char *text = btn_xmalloc(n + 1);
+    text[0] = '\n';
+    for (size_t i = 0; i < n; i++) {
+        text[1 + i] = gb_char_at(&ed->buffer, line + i);
+    }
+    /* Selektion ersetzen + Umbruch + Einrueckung = ein Undo-Schritt */
+    editor_begin_undo_group(ed);
+    editor_insert_text(ed, text, ed->single_line ? 1 : n + 1);
+    editor_end_undo_group(ed);
+    free(text);
+}
+
+/* Rueckt alle Zeilen ein bzw. aus, die die Selektion beruehrt (ohne
+ * Selektion: die Zeile des Cursors). Eine Zeile, auf deren Spalte 0 die
+ * Selektion nur endet, zaehlt nicht mit; leere Zeilen werden nicht
+ * eingerueckt. Ein Undo-Schritt, Anker und Cursor bleiben auf ihrem Text. */
+static void indent_lines(Editor *ed, int outdent) {
+    size_t s = editor_selection_start(ed), e = editor_selection_end(ed);
+    size_t last = e;
+    if (e > s && gb_char_at(&ed->buffer, e - 1) == '\n') {
+        last = e - 1;
+    }
+    /* Zeilenanfaenge sammeln (aufsteigend) */
+    size_t cap = 16, count = 0;
+    size_t *starts = btn_xmalloc(cap * sizeof(size_t));
+    starts[count++] = line_start_at(ed, s);
+    for (size_t i = starts[0]; i < last; i++) {
+        if (gb_char_at(&ed->buffer, i) == '\n') {
+            if (count == cap) {
+                cap *= 2;
+                starts = btn_xrealloc(starts, btn_xmul(cap, sizeof(size_t)));
+            }
+            starts[count++] = i + 1;
+        }
+    }
+
+    char unit[BTN_TAB_WIDTH];
+    size_t unit_len = outdent ? 0 : indent_unit(ed, unit);
+    size_t *removed = btn_xmalloc(count * sizeof(size_t)); /* je Zeile: entfernte Bytes */
+    size_t anchor = ed->anchor, cursor = ed->cursor;
+    long anchor_shift = 0, cursor_shift = 0;
+
+    editor_begin_undo_group(ed);
+    /* von hinten nach vorn - fruehere Offsets bleiben so gueltig */
+    for (size_t k = count; k-- > 0;) {
+        size_t line = starts[k];
+        size_t len = editor_length(ed);
+        removed[k] = 0;
+        if (!outdent) {
+            if (line >= len || gb_char_at(&ed->buffer, line) == '\n') {
+                continue; /* leere Zeile */
+            }
+            editor_set_cursor(ed, line, 0);
+            editor_insert_text(ed, unit, unit_len);
+        } else {
+            size_t n = 0;
+            if (line < len && gb_char_at(&ed->buffer, line) == '\t') {
+                n = 1;
+            } else {
+                while (n < BTN_TAB_WIDTH && line + n < len && gb_char_at(&ed->buffer, line + n) == ' ') {
+                    n++;
+                }
+            }
+            if (n == 0) {
+                continue;
+            }
+            editor_set_cursor(ed, line, 0);
+            editor_set_cursor(ed, line + n, 1);
+            editor_delete_selection(ed);
+            removed[k] = n;
+        }
+        /* Verschiebung fuer Anker/Cursor in Originalkoordinaten */
+        size_t pos[2] = { anchor, cursor };
+        long *shift[2] = { &anchor_shift, &cursor_shift };
+        for (int j = 0; j < 2; j++) {
+            if (!outdent) {
+                if (pos[j] > line) {
+                    *shift[j] += (long)unit_len;
+                }
+            } else if (pos[j] > line) {
+                size_t end = line + removed[k];
+                *shift[j] -= (long)((pos[j] < end ? pos[j] : end) - line);
+            }
+        }
+    }
+    editor_end_undo_group(ed);
+
+    editor_set_cursor(ed, (size_t)((long)anchor + anchor_shift), 0);
+    editor_set_cursor(ed, (size_t)((long)cursor + cursor_shift), 1);
+    free(removed);
+    free(starts);
+}
+
+void editor_tab_key(Editor *ed, int outdent) {
+    if (outdent) {
+        indent_lines(ed, 1);
+        return;
+    }
+    size_t s = editor_selection_start(ed), e = editor_selection_end(ed);
+    for (size_t i = s; i < e; i++) {
+        if (gb_char_at(&ed->buffer, i) == '\n') {
+            indent_lines(ed, 0); /* Selektion ueber mehrere Zeilen */
+            return;
+        }
+    }
+    /* Selektion ersetzen + einfuegen = ein Undo-Schritt */
+    editor_begin_undo_group(ed);
+    if (editor_indent_uses_spaces(ed)) {
+        /* bis zum naechsten Tabstopp auffuellen, wie ein Tab aussaehe */
+        size_t col = editor_visual_column_in_range(ed, line_start_at(ed, s), s);
+        size_t n = editor_tab_advance(col) - col;
+        char spaces[BTN_TAB_WIDTH];
+        memset(spaces, ' ', sizeof spaces);
+        editor_insert_text(ed, spaces, n);
+    } else {
+        editor_insert_text(ed, "\t", 1);
+    }
+    editor_end_undo_group(ed);
+}

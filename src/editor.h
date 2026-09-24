@@ -214,6 +214,18 @@ char *editor_get_selection_text(Editor *ed);
 void editor_undo(Editor *ed);
 void editor_redo(Editor *ed);
 
+/* Einruecken. editor_insert_newline(): Return - neue Zeile mit der
+ * Einrueckung (Leerzeichen/Tabs) der aktuellen Zeile bis zum Cursor.
+ * editor_tab_key(): Tab bzw. Shift+Tab (outdent=1). Mit einer Selektion
+ * ueber mehrere Zeilen (oder bei Shift+Tab immer) werden alle beruehrten
+ * Zeilen um eine Stufe ein- bzw. ausgerueckt, sonst wird ein Tab
+ * eingefuegt - in einer Datei, die ueberwiegend mit Leerzeichen einrueckt,
+ * als Leerzeichen bis zum naechsten Tabstopp. Jeweils ein Undo-Schritt.
+ * editor_indent_uses_spaces(): diese Stil-Erkennung (erstes MB der Datei). */
+void editor_insert_newline(Editor *ed);
+void editor_tab_key(Editor *ed, int outdent);
+int editor_indent_uses_spaces(Editor *ed);
+
 /* Alle Aenderungen zwischen begin und end werden EIN Undo-Schritt (z.B.
  * "Alle ersetzen": vorher je Treffer zwei Records, bei 5000 Treffern also
  * 10 000x Cmd+Z). Verschachtelbar, nur das aeusserste Paar zaehlt. Jedes
