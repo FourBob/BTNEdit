@@ -52,7 +52,7 @@ jobs:
         run: make test
 
       - name: Eingabemethoden-Test (echte View aus shim.m)
-        run: make test-objc
+        run: make EXTRA_CFLAGS=-Werror test-objc
 
       - name: Test-Logs bei Fehler
         if: failure()

@@ -102,8 +102,9 @@ typedef struct {
     void (*query)(long *sel_loc, long *sel_len, long *marked_loc, long *marked_len);
     /* Text eines Bereichs als UTF-16 (malloc, NULL = keiner). */
     uint16_t *(*substring)(long loc, long len, long *actual_loc, size_t *n);
-    /* Cursor-Rechteck in View-Koordinaten (Kandidatenfenster). */
-    CGRect (*caret_rect)(void);
+    /* Rechteck der Position loc (-1 = Cursor) in View-Koordinaten - dort
+     * oeffnet macOS das Kandidatenfenster bzw. das Akzent-Menue. */
+    CGRect (*caret_rect)(long loc);
 } BtnTextInputCallbacks;
 
 /* Liest NSLocale.preferredLanguages (Systemeinstellung, nicht der App
@@ -126,6 +127,9 @@ void btn_app_set_text_input_callbacks(const BtnTextInputCallbacks *cb);
 /* Sagt der Eingabemethode, dass ihr vorlaeufiger Text verworfen ist (main.c
  * hat ihn selbst festgeschrieben, z.B. vor einem Tab-Wechsel). */
 void btn_text_input_discard(void);
+/* Nach Scrollen/Groessenaenderung: ein offenes Kandidatenfenster soll der
+ * neuen Cursorposition folgen. */
+void btn_text_input_invalidate(void);
 void btn_app_build_menu(void);
 
 /* Baut das "Zuletzt geoeffnet"-Untermenue komplett neu aus paths[0..count)

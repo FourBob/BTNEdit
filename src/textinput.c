@@ -12,6 +12,30 @@ static size_t units_for(size_t char_len) {
     return char_len == 4 ? 2 : 1;
 }
 
+/* Ein Zeichen (c Bytes nach der Zeichenregel) als UTF-16; Rueckgabe: 1 oder
+ * 2 Einheiten. Ein einzelnes Byte ist ASCII oder Latin-1. */
+static size_t encode_char(const unsigned char *b, size_t c, uint16_t *out) {
+    unsigned long cp;
+    if (c == 1) {
+        cp = b[0];
+    } else if (c == 2) {
+        cp = ((unsigned long)(b[0] & 0x1F) << 6) | (b[1] & 0x3F);
+    } else if (c == 3) {
+        cp = ((unsigned long)(b[0] & 0x0F) << 12) | ((unsigned long)(b[1] & 0x3F) << 6) | (b[2] & 0x3F);
+    } else {
+        cp = ((unsigned long)(b[0] & 0x07) << 18) | ((unsigned long)(b[1] & 0x3F) << 12) |
+             ((unsigned long)(b[2] & 0x3F) << 6) | (b[3] & 0x3F);
+    }
+    if (cp >= 0x10000) {
+        cp -= 0x10000;
+        out[0] = (uint16_t)(0xD800 + (cp >> 10));
+        out[1] = (uint16_t)(0xDC00 + (cp & 0x3FF));
+        return 2;
+    }
+    out[0] = (uint16_t)cp;
+    return 1;
+}
+
 size_t btn_ti_utf16_len(const char *s, size_t len) {
     size_t n = 0, i = 0;
     while (i < len) {
@@ -134,27 +158,67 @@ uint16_t *btn_ti_substring(Editor *ed, size_t loc, size_t len, size_t *actual_lo
         for (size_t k = 0; k < c; k++) {
             b[k] = (unsigned char)gb_char_at(&ed->buffer, i + k);
         }
-        unsigned long cp;
-        if (c == 1) {
-            cp = b[0]; /* ASCII oder einzelnes Byte als Latin-1 */
-        } else if (c == 2) {
-            cp = ((unsigned long)(b[0] & 0x1F) << 6) | (b[1] & 0x3F);
-        } else if (c == 3) {
-            cp = ((unsigned long)(b[0] & 0x0F) << 12) | ((unsigned long)(b[1] & 0x3F) << 6) | (b[2] & 0x3F);
-        } else {
-            cp = ((unsigned long)(b[0] & 0x07) << 18) | ((unsigned long)(b[1] & 0x3F) << 12) |
-                 ((unsigned long)(b[2] & 0x3F) << 6) | (b[3] & 0x3F);
-        }
-        if (cp >= 0x10000) {
-            cp -= 0x10000;
-            out[o++] = (uint16_t)(0xD800 + (cp >> 10));
-            out[o++] = (uint16_t)(0xDC00 + (cp & 0x3FF));
-        } else {
-            out[o++] = (uint16_t)cp;
-        }
+        o += encode_char(b, c, out + o);
         i += c;
     }
     *actual_loc = at;
+    *n = o;
+    return out;
+}
+
+uint16_t *btn_ti_substring_with_marked(Editor *ed, const BtnMarkedText *m, size_t loc, size_t len, size_t *actual_loc,
+                                       size_t *n) {
+    if (!m || m->len == 0) {
+        return btn_ti_substring(ed, loc, len, actual_loc, n);
+    }
+    if (len > BTN_TI_SUBSTRING_CAP) {
+        len = BTN_TI_SUBSTRING_CAP;
+    }
+    size_t caret, sel_len;
+    btn_ti_selection(ed, &caret, &sel_len);
+    size_t mu = btn_ti_utf16_len(m->text, m->len);
+    uint16_t *out = btn_xmalloc((len + 4) * sizeof(uint16_t));
+    size_t o = 0, pos = loc;
+    /* 1. Puffer vor dem Cursor */
+    if (pos < caret && o < len) {
+        size_t take = caret - pos < len ? caret - pos : len;
+        size_t a, k;
+        uint16_t *u = btn_ti_substring(ed, pos, take, &a, &k);
+        if (u) {
+            memcpy(out + o, u, k * sizeof(uint16_t));
+            o += k;
+            free(u);
+        }
+        pos = caret;
+    }
+    /* 2. der vorlaeufige Text selbst */
+    if (pos >= caret && pos < caret + mu && o < len) {
+        uint16_t mark[BTN_TI_SUBSTRING_CAP + 2];
+        size_t mn = 0;
+        for (size_t i = 0; i < m->len && mn < BTN_TI_SUBSTRING_CAP;) {
+            size_t c = btn_utf8_char_len((const unsigned char *)m->text + i, m->len - i);
+            mn += encode_char((const unsigned char *)m->text + i, c, mark + mn);
+            i += c;
+        }
+        for (size_t j = pos - caret; j < mn && o < len; j++) {
+            out[o++] = mark[j];
+        }
+        pos = caret + mu;
+    }
+    /* 3. Puffer hinter dem Cursor - um den vorlaeufigen Text verschoben */
+    if (pos >= caret + mu && o < len) {
+        size_t a, k;
+        uint16_t *u = btn_ti_substring(ed, pos - mu, len - o, &a, &k);
+        if (u) {
+            memcpy(out + o, u, k * sizeof(uint16_t));
+            o += k;
+            free(u);
+        } else if (o == 0) {
+            free(out);
+            return NULL; /* loc hinter dem Ende */
+        }
+    }
+    *actual_loc = loc;
     *n = o;
     return out;
 }

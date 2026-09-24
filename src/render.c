@@ -980,36 +980,64 @@ void btn_render_set_marked_text(const char *utf8, size_t len, size_t caret, int 
     g_marked.target = target;
 }
 
-static size_t count_chars(const unsigned char *s, size_t len) {
-    size_t n = 0;
-    for (size_t i = 0; i < len; i += btn_utf8_char_len(s + i, len - i)) {
-        n++;
-    }
-    return n;
-}
-
-static void draw_marked_overlay(CGContextRef ctx, double x, double box_y, double box_h, double text_y,
-                                CFDictionaryRef attrs, double char_width, BtnColor bg) {
-    const unsigned char *t = (const unsigned char *)g_marked.text;
-    size_t len = g_marked.len;
-    UniChar *u16 = malloc(len * (BTN_TAB_WIDTH > 2 ? BTN_TAB_WIDTH : 2) * sizeof(UniChar));
+/* Zeile fuer UTF-8-Text (Zeichenregel wie im Dokument); *map (falls nicht
+ * NULL) bildet Bytes auf UTF-16-Indizes ab. NULL bei Speichermangel. */
+static CTLineRef make_line(const char *utf8, size_t len, CFDictionaryRef attrs, size_t **map_out) {
+    UniChar *u16 = malloc((len ? len : 1) * (BTN_TAB_WIDTH > 2 ? BTN_TAB_WIDTH : 2) * sizeof(UniChar));
     size_t *map = malloc((len + 1) * sizeof(size_t));
     if (!u16 || !map) {
         free(u16);
         free(map);
+        return NULL;
+    }
+    size_t n = decode_row_for_display((const unsigned char *)utf8, len, u16, map);
+    CFStringRef str = CFStringCreateWithCharacters(NULL, u16, (CFIndex)n);
+    free(u16);
+    CFAttributedStringRef as = CFAttributedStringCreate(NULL, str, attrs);
+    CTLineRef line = CTLineCreateWithAttributedString(as);
+    CFRelease(as);
+    CFRelease(str);
+    if (map_out) {
+        *map_out = map;
+    } else {
+        free(map);
+    }
+    return line;
+}
+
+double btn_render_text_width(const char *utf8, size_t len) {
+    if (len == 0) {
+        return 0.0;
+    }
+    CTLineRef line = make_line(utf8, len, get_text_attrs(), NULL);
+    if (!line) {
+        return 0.0;
+    }
+    double w = CTLineGetTypographicBounds(line, NULL, NULL, NULL);
+    CFRelease(line);
+    return w;
+}
+
+/* Breite und Cursor aus der tatsaechlich gesetzten Zeile, nicht Zeichen mal
+ * Spaltenbreite: chinesische/japanische Glyphen sind breiter als eine
+ * Menlo-Spalte, Box, Unterstreichung und Cursor lagen sonst daneben. */
+static void draw_marked_overlay(CGContextRef ctx, double x, double box_y, double box_h, double text_y,
+                                CFDictionaryRef attrs, BtnColor bg) {
+    size_t *map = NULL;
+    CTLineRef line = make_line(g_marked.text, g_marked.len, attrs, &map);
+    if (!line) {
         return;
     }
-    size_t n = decode_row_for_display(t, len, u16, map);
-    double width = (double)count_chars(t, len) * char_width;
-    double caret_x = x + (double)count_chars(t, g_marked.caret) * char_width;
-
+    double width = CTLineGetTypographicBounds(line, NULL, NULL, NULL);
+    double caret_x = x + CTLineGetOffsetForStringIndex(line, (CFIndex)map[g_marked.caret], NULL);
     set_fill(ctx, bg);
     CGContextFillRect(ctx, CGRectMake(x, box_y, width + 1.0, box_h));
-    draw_cfstring_at(ctx, CFStringCreateWithCharacters(NULL, u16, (CFIndex)n), x, text_y, attrs);
+    CGContextSetTextPosition(ctx, x, text_y);
+    CTLineDraw(line, ctx);
     set_fill(ctx, col_cursor());
     CGContextFillRect(ctx, CGRectMake(x, box_y + 1.0, width, 1.0));          /* Unterstreichung */
     CGContextFillRect(ctx, CGRectMake(caret_x, box_y + 2.0, 1.4, box_h - 4.0)); /* Cursor darin */
-    free(u16);
+    CFRelease(line);
     free(map);
 }
 
@@ -1061,8 +1089,7 @@ static void draw_find_field(CGContextRef ctx, Editor *ed, double field_x, double
         size_t cursor_col = editor_visual_column_in_range(ed, 0, ed->cursor);
         double cx = field_x + (double)cursor_col * char_width;
         if (g_marked.target == marked_target) {
-            draw_marked_overlay(ctx, cx, bar_top + 4.0, BTN_FIND_BAR_HEIGHT - 8.0, text_y, attrs, char_width,
-                                col_find_bar_bg());
+            draw_marked_overlay(ctx, cx, bar_top + 4.0, BTN_FIND_BAR_HEIGHT - 8.0, text_y, attrs, col_find_bar_bg());
         } else {
             set_fill(ctx, col_cursor());
             CGContextFillRect(ctx, CGRectMake(cx, bar_top + 6.0, 1.4, BTN_FIND_BAR_HEIGHT - 12.0));
@@ -1493,7 +1520,7 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
             double cx = GUTTER_WIDTH + LEFT_PADDING + (double)col * char_width;
             double cy = bounds.size.height - TOP_PADDING - (double)(cur_row - (size_t)scroll_row + 1) * LINE_HEIGHT;
             if (g_marked.target == BTN_MARKED_DOCUMENT) {
-                draw_marked_overlay(ctx, cx, cy, LINE_HEIGHT, cy + 4.0, attrs, char_width, col_bg());
+                draw_marked_overlay(ctx, cx, cy, LINE_HEIGHT, cy + 4.0, attrs, col_bg());
             } else {
                 set_fill(ctx, col_cursor());
                 CGContextFillRect(ctx, CGRectMake(cx, cy, 1.4, LINE_HEIGHT - 2));
@@ -1607,22 +1634,22 @@ size_t btn_hit_test(Editor *ed, CGRect bounds, double x, double y, long scroll_r
     return btn_row_offset_for_column(ed, rows, row_count, (size_t)row, (size_t)col);
 }
 
-CGRect btn_render_caret_rect(Editor *ed, CGRect bounds, long scroll_row) {
+CGRect btn_render_caret_rect(Editor *ed, CGRect bounds, long scroll_row, size_t offset) {
     double char_width = get_char_width();
     size_t row_count;
     const BtnRow *rows = btn_layout_get(ed, btn_layout_text_width(bounds), &row_count);
-    size_t cur_row = btn_layout_row_for_offset(rows, row_count, ed->cursor);
-    size_t col = editor_visual_column_in_range(ed, rows[cur_row].start, ed->cursor);
+    size_t cur_row = btn_layout_row_for_offset(rows, row_count, offset);
+    size_t col = editor_visual_column_in_range(ed, rows[cur_row].start, offset);
     double x = GUTTER_WIDTH + LEFT_PADDING + (double)col * char_width;
     double y = bounds.size.height - TOP_PADDING - ((double)cur_row - (double)scroll_row + 1.0) * LINE_HEIGHT;
     return CGRectMake(x, y, char_width, LINE_HEIGHT);
 }
 
-CGRect btn_render_find_caret_rect(CGRect bounds, Editor *field, int replace_field) {
+CGRect btn_render_find_caret_rect(CGRect bounds, Editor *field, int replace_field, size_t offset) {
     FindBarGeometry g = find_bar_geometry();
     double bar_top = bounds.size.height - BTN_TAB_BAR_HEIGHT - BTN_FIND_BAR_HEIGHT;
     double field_x = replace_field ? g.replace_field_x : g.search_field_x;
-    size_t col = editor_visual_column_in_range(field, 0, field->cursor);
+    size_t col = editor_visual_column_in_range(field, 0, offset);
     double char_width = get_char_width();
     return CGRectMake(field_x + (double)col * char_width, bar_top + 4.0, char_width, BTN_FIND_BAR_HEIGHT - 8.0);
 }

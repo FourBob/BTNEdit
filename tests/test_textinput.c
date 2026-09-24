@@ -22,6 +22,7 @@ static Editor g_doc, g_search_editor, g_replace_editor;
 static char g_search_status[128];
 static BtnMarkedText g_marked;
 static int g_live_searches, g_discards, g_redraws;
+static char g_last_on_key[64];
 static void perform_live_search(void) { g_live_searches++; }
 static void sync_window_state(void) {}
 static void sync_scroll_to_cursor(void) {}
@@ -40,6 +41,8 @@ static Editor *focused_editor(void) {
 static void on_key(const char *chars, unsigned short keycode, unsigned long mods) {
     (void)mods;
     CHECK(keycode == KEYCODE_TEXT, "text arrives with KEYCODE_TEXT");
+    snprintf(g_last_on_key, sizeof g_last_on_key, "%s", chars);
+    if (strcmp(chars, "\r") == 0) return; /* Return: im echten on_key() Zeilenumbruch bzw. Suchen */
     if (g_focus == BTN_FOCUS_DOCUMENT) {
         insert_typed_chars(&g_doc, chars);
     } else {
@@ -244,6 +247,35 @@ static void test_glue(void) {
     CHECK(fl == 2 && memcmp(f, "\xC3\xBC", 2) == 0 && g_live_searches >= 1 && doc_is("doc"), "input goes to the focused search field");
     free(f);
     g_focus = BTN_FOCUS_DOCUMENT;
+
+    /* Diktat "neue Zeile" und Text mit Steuerzeichen am Anfang */
+    reset_doc("a", 1);
+    g_last_on_key[0] = 0;
+    ti_insert_text("\n", -1, 0);
+    CHECK(strcmp(g_last_on_key, "\r") == 0 && doc_is("a"), "dictated newline goes through on_key as Return");
+    g_last_on_key[0] = 0;
+    ti_insert_text("\tx\ny", -1, 0);
+    CHECK(doc_is("a\tx\ny") && g_last_on_key[0] == 0, "text starting with a control character is inserted completely");
+
+    /* Textabfrage mit vorlaeufigem Text: "X" + "ni" (vorlaeufig) + "YZ" */
+    reset_doc("XYZ", 1);
+    ti_set_marked_text("ni", 2, 0, -1, 0);
+    long al2;
+    size_t n2;
+    uint16_t *v = ti_substring(0, 5, &al2, &n2);
+    CHECK(v && n2 == 5 && v[0] == 'X' && v[1] == 'n' && v[2] == 'i' && v[3] == 'Y' && v[4] == 'Z', "substring sees marked text at the caret");
+    free(v);
+    v = ti_substring(1, 2, &al2, &n2);
+    CHECK(v && n2 == 2 && v[0] == 'n' && v[1] == 'i', "substring of markedRange returns the marked text");
+    free(v);
+    v = ti_substring(2, 3, &al2, &n2);
+    CHECK(v && n2 == 3 && v[0] == 'i' && v[1] == 'Y' && v[2] == 'Z', "substring across the end of the marked text");
+    free(v);
+    v = ti_substring(3, 2, &al2, &n2);
+    CHECK(v && n2 == 2 && v[0] == 'Y' && v[1] == 'Z', "text after the caret is shifted by the marked length");
+    free(v);
+    CHECK(ti_substring(6, 1, &al2, &n2) == NULL, "beyond the end: NULL");
+    ti_insert_text("\xE4\xBD\xA0", -1, 0);
 
     /* substring ueber den Klebecode */
     reset_doc("hello", 5);

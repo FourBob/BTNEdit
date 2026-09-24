@@ -15,6 +15,8 @@ static Document g_docs[MAX_TABS];
 static int g_doc_count = 0;
 static int g_active_doc = 0;
 static void switch_to_tab(int idx) { g_active_doc = idx; }
+static int g_commits = 0;
+static void commit_marked(void) { g_commits++; } /* laufende Eingabe festschreiben */
 static void btn_app_request_redraw(void) {}
 static const char *doc_display_name(Document *d) { (void)d; return "doc"; }
 
@@ -90,6 +92,7 @@ int main(void) {
     /* Kein dirty Tab: sofort 1 */
     g_doc_count = 1; g_docs[0].editor.edit_seq = 3; g_docs[0].saved_edit_seq = 3;
     check(should_close() == 1, "S5 clean doc -> 1 without dialog");
+    check(g_commits > 0, "S5 should_close commits a running input-method composition first");
 
     /* Nur das Zeilenende umgestellt (Inhalt unveraendert): gilt als
      * ungesichert, "Nicht sichern" markiert es sauber. */

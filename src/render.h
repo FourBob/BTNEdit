@@ -186,10 +186,14 @@ enum { BTN_MARKED_NONE = 0, BTN_MARKED_SEARCH = 1, BTN_MARKED_REPLACE = 2, BTN_M
 void btn_render_set_marked_text(const char *utf8, size_t len, size_t caret, int target);
 
 /* Cursor-Rechteck in View-Koordinaten - dort oeffnet macOS das
- * Kandidatenfenster. Dokument (bounds = Inhaltsbereich wie bei
- * btn_render_frame()) bzw. Suchen-/Ersetzen-Feld (bounds = ganzes Fenster). */
-CGRect btn_render_caret_rect(Editor *ed, CGRect bounds, long scroll_row);
-CGRect btn_render_find_caret_rect(CGRect bounds, Editor *field, int replace_field);
+ * Kandidatenfenster - fuer den Byte-Offset offset im Dokument (bounds =
+ * Inhaltsbereich wie bei btn_render_frame()) bzw. im Suchen-/Ersetzen-Feld
+ * (bounds = ganzes Fenster). */
+CGRect btn_render_caret_rect(Editor *ed, CGRect bounds, long scroll_row, size_t offset);
+CGRect btn_render_find_caret_rect(CGRect bounds, Editor *field, int replace_field, size_t offset);
+/* Gesetzte Breite von UTF-8-Text in der Editor-Schrift (vorlaeufiger Text:
+ * Position eines Zeichens darin fuer das Kandidatenfenster). */
+double btn_render_text_width(const char *utf8, size_t len);
 
 /* Wie viele Rows bei dieser Inhaltshoehe (ohne Tab-/Suchleiste) VOLL ueber
  * dem Footer sichtbar sind - mit demselben oberen Innenabstand, den

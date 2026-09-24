@@ -2038,6 +2038,8 @@ static void close_tab(int idx) {
  * Vorgang abbricht - der bereits geschriebene Tab 0 liesse sich dann nicht
  * mehr zurueckholen. */
 static int should_close(void) {
+    /* Cmd+Q / Schliessen-Knopf: eine laufende Eingabe zaehlt als Aenderung. */
+    commit_marked();
     int original_active = g_active_doc;
     int choices[MAX_TABS]; /* -1 = sauber, sonst der Alert-Rueckgabewert */
 
@@ -2273,6 +2275,7 @@ static void handle_find_bar_key(const char *characters, unsigned short keycode, 
         return;
     }
     if (c == '\t') {
+        commit_marked(); /* Eingabe gehoert zum bisherigen Feld */
         g_focus = (g_focus == BTN_FOCUS_SEARCH) ? BTN_FOCUS_REPLACE : BTN_FOCUS_SEARCH;
         btn_app_request_redraw();
         return;
@@ -2480,8 +2483,15 @@ static void ti_insert_text(const char *utf8, long repl_loc, long repl_len) {
     if (!had_marked) {
         select_ti_range(repl_loc, repl_len);
     }
-    if (utf8[0] != '\0') {
+    if (strcmp(utf8, "\r") == 0 || strcmp(utf8, "\n") == 0) {
+        on_key("\r", KEYCODE_TEXT, 0); /* Diktat "neue Zeile": wie Return */
+    } else if ((unsigned char)utf8[0] >= 0x20) {
         on_key(utf8, KEYCODE_TEXT, 0);
+    } else if (utf8[0] != '\0') {
+        /* Beginnt mit einem Steuerzeichen ("\t...", "\nabc"): on_key() sieht
+         * nur das erste Byte und wuerde alles verwerfen - direkt einfuegen. */
+        editor_insert_text(focused_editor(), utf8, strlen(utf8));
+        after_focused_edit();
     } else {
         btn_app_request_redraw();
     }
@@ -2548,21 +2558,48 @@ static uint16_t *ti_substring(long loc, long len, long *actual_loc, size_t *n) {
         return NULL;
     }
     size_t actual = 0;
-    uint16_t *u16 = btn_ti_substring(focused_editor(), (size_t)loc, (size_t)len, &actual, n);
+    uint16_t *u16 = btn_ti_substring_with_marked(focused_editor(), &g_marked, (size_t)loc, (size_t)len, &actual, n);
     *actual_loc = (long)actual;
     return u16;
 }
 
-static CGRect ti_caret_rect(void) {
+/* Rechteck der ursprungsrelativen Position loc (-1 = Cursor): im
+ * vorlaeufigen Text um dessen gesetzte Breite bis dahin verschoben, davor
+ * bzw. dahinter an der entsprechenden Pufferstelle (Akzent-Menue ueber dem
+ * Zeichen, das es ersetzt). */
+static CGRect ti_caret_rect(long loc) {
+    Editor *ed = focused_editor();
+    size_t pos = editor_selection_start(ed);
+    double dx = 0.0;
+    if (loc >= 0) {
+        size_t caret, sel_len;
+        btn_ti_selection(ed, &caret, &sel_len);
+        size_t mu = g_marked.len ? btn_ti_utf16_len(g_marked.text, g_marked.len) : 0;
+        size_t start, end;
+        if (g_marked.len && (size_t)loc >= caret && (size_t)loc <= caret + mu) {
+            dx = btn_render_text_width(g_marked.text, btn_ti_utf16_to_bytes(g_marked.text, g_marked.len, (size_t)loc - caret));
+        } else if ((size_t)loc < caret || !g_marked.len) {
+            if (btn_ti_range_to_bytes(ed, (size_t)loc, 0, &start, &end)) {
+                pos = start;
+            }
+        } else if (btn_ti_range_to_bytes(ed, (size_t)loc - mu, 0, &start, &end)) {
+            pos = start; /* hinter dem vorlaeufigen Text */
+        }
+    }
+    CGRect r;
     if (g_focus == BTN_FOCUS_DOCUMENT) {
         Document *d = active_doc();
-        return btn_render_caret_rect(&d->editor, content_bounds(), d->scroll_row);
+        r = btn_render_caret_rect(&d->editor, content_bounds(), d->scroll_row, pos);
+    } else {
+        r = btn_render_find_caret_rect(g_bounds, ed, g_focus == BTN_FOCUS_REPLACE, pos);
     }
-    return btn_render_find_caret_rect(g_bounds, focused_editor(), g_focus == BTN_FOCUS_REPLACE);
+    r.origin.x += dx;
+    return r;
 }
 
 static void on_resize(CGSize size) {
     g_bounds = CGRectMake(0, 0, size.width, size.height);
+    btn_text_input_invalidate();
     /* sync_scroll_to_cursor() ruft clamp_scroll() intern mit auf - reines
      * Clamping reicht hier nicht: Verkleinern des Fensters kann den Text
      * neu umbrechen und die Cursor-Zeile weit aus dem sichtbaren Bereich
@@ -2627,6 +2664,7 @@ static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, 
 }
 
 static void on_scroll(double delta_y) {
+    btn_text_input_invalidate(); /* Kandidatenfenster folgt dem Cursor */
     Document *doc = active_doc();
     doc->scroll_accum += delta_y;
     long lines = (long)(doc->scroll_accum / BTN_LINE_HEIGHT);

@@ -49,7 +49,8 @@ static uint16_t *ti_substring(long loc, long len, long *actual_loc, size_t *n) {
     *n = 3;
     return u;
 }
-static CGRect ti_caret(void) { return CGRectMake(10, 20, 8, 18); }
+static long last_rect_loc = -2;
+static CGRect ti_caret(long loc) { last_rect_loc = loc; return CGRectMake(10, 20, 8, 18); }
 static void key_cb(const char *chars, unsigned short keycode, unsigned long mods) {
     snprintf(last_key_chars, sizeof last_key_chars, "%s", chars);
     last_keycode = keycode;
@@ -115,7 +116,8 @@ int main(void) {
         NSAttributedString *sub = [view attributedSubstringForProposedRange:NSMakeRange(1, 3) actualRange:&actual];
         CHECK(sub && [[sub string] isEqualToString:@"aäc"] && actual.location == 1, "attributedSubstringForProposedRange");
         NSRect r = [view firstRectForCharacterRange:NSMakeRange(5, 0) actualRange:NULL];
-        CHECK(r.size.width == 8 && r.size.height == 18 && r.origin.x >= 100, "firstRectForCharacterRange in screen coordinates");
+        CHECK(r.size.width == 8 && r.size.height == 18 && r.origin.x >= 100 && last_rect_loc == 5,
+              "firstRectForCharacterRange passes the location, returns screen coordinates");
         CHECK([view characterIndexForPoint:NSZeroPoint] == NSNotFound, "characterIndexForPoint");
 
         /* ---- Tasten durch keyDown: (interpretKeyEvents:) ---- */
@@ -147,6 +149,37 @@ int main(void) {
         [view keyDown:key_event(win, @"e", @"e", 14, 0)];
         printf("info  dead key Option+E, E: %d marked update(s), last insert \"%s\" (%s)\n", marks - m0, last_insert,
                (inserts > i0 && strcmp(last_insert, "\xC3\xA9") == 0) ? "composed" : "layout-dependent, not composed here");
+
+        /* Jede Taste ohne Text genau EIN Key-Callback, kein Text */
+        struct { NSString *chars; unsigned short code; NSEventModifierFlags mods; const char *name; } keys_once[] = {
+            { [NSString stringWithFormat:@"%C", (unichar)NSF5FunctionKey], 96, NSEventModifierFlagFunction, "F5" },
+            { [NSString stringWithFormat:@"%C", (unichar)NSUpArrowFunctionKey], 126,
+              NSEventModifierFlagOption | NSEventModifierFlagFunction | NSEventModifierFlagNumericPad, "Option+Up" },
+            { [NSString stringWithFormat:@"%C", (unichar)NSDownArrowFunctionKey], 125,
+              NSEventModifierFlagOption | NSEventModifierFlagFunction | NSEventModifierFlagNumericPad, "Option+Down" },
+            { @"\x1b", 53, 0, "Escape" },
+            { [NSString stringWithFormat:@"%C", (unichar)NSDeleteFunctionKey], 117, NSEventModifierFlagFunction, "Forward Delete" },
+            { [NSString stringWithFormat:@"%C", (unichar)NSHomeFunctionKey], 115, NSEventModifierFlagFunction, "Home" },
+            { [NSString stringWithFormat:@"%C", (unichar)NSPageDownFunctionKey], 121, NSEventModifierFlagFunction, "Page Down" },
+            { @"\r", 36, 0, "Return" },
+            { @"\x7f", 51, 0, "Backspace" },
+        };
+        for (size_t q = 0; q < sizeof keys_once / sizeof keys_once[0]; q++) {
+            int kb = keys, ib = inserts;
+            [view keyDown:key_event(win, keys_once[q].chars, keys_once[q].chars, keys_once[q].code, keys_once[q].mods)];
+            CHECK(keys == kb + 1 && inserts == ib && last_keycode == keys_once[q].code,
+                  "%s -> exactly one key callback, no text (%d)", keys_once[q].name, keys - kb);
+        }
+
+        /* Cmd+Taste waehrend einer Eingabe: die Eingabemethode darf erst
+         * festschreiben, der Befehl kommt trotzdem genau einmal an */
+        [view setMarkedText:@"k" selectedRange:NSMakeRange(1, 0) replacementRange:NSMakeRange(NSNotFound, 0)];
+        int kb2 = keys;
+        unichar lc = NSLeftArrowFunctionKey;
+        NSString *cl = [NSString stringWithCharacters:&lc length:1];
+        [view keyDown:key_event(win, cl, cl, 123, NSEventModifierFlagCommand | NSEventModifierFlagFunction)];
+        CHECK(keys <= kb2 + 1, "Cmd+Left with marked text: at most one key callback (%d)", keys - kb2);
+        [view unmarkText];
 
         /* Ctrl+Tab kommt mit Ctrl-Flag beim Key-Callback an (Tab-Wechsel) */
         [view keyDown:key_event(win, @"\t", @"\t", 48, NSEventModifierFlagControl)];

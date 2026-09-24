@@ -68,6 +68,7 @@ static long ns_loc(NSRange r) {
  * liegt in main.c/textinput.c; hier wird nur uebersetzt. */
 @interface BTNContentView : NSView <NSTextInputClient> {
     NSEvent *_keyEvent; /* das Event, das gerade interpretKeyEvents: durchlaeuft */
+    BOOL _keyForwarded; /* schon an main.c weitergereicht (hoechstens einmal pro Event) */
 }
 @end
 
@@ -90,30 +91,52 @@ static long ns_loc(NSRange r) {
         forward_key_event(event); /* ohne Eingabemethoden-Callbacks wie frueher */
         return;
     }
+    /* Cmd+Taste ohne Menuepunkt ist ein Befehl, kein Text - direkt wie
+     * frueher. Nur waehrend einer Eingabe geht sie durch die Eingabemethode,
+     * damit die ihren Text erst festschreiben kann. */
+    if (([event modifierFlags] & NSEventModifierFlagCommand) && ![self hasMarkedText]) {
+        forward_key_event(event);
+        return;
+    }
     /* macOS entscheidet: Text (insertText:/setMarkedText:) oder Befehl
      * (doCommandBySelector:). Verschachtelt moeglich, daher sichern. */
     NSEvent *previous = _keyEvent;
+    BOOL previous_forwarded = _keyForwarded;
     _keyEvent = event;
+    _keyForwarded = NO;
     [self interpretKeyEvents:@[ event ]];
     _keyEvent = previous;
+    _keyForwarded = previous_forwarded;
 }
 
 /* Taste ohne Text: das Original-Event an main.c, das Pfeile, Return, Tab,
- * Backspace, Escape usw. per Keycode behandelt wie bisher. */
+ * Backspace, Escape usw. per Keycode behandelt wie bisher. Hoechstens
+ * einmal pro Event: manche Tasten sind in macOS an zwei Befehle gebunden
+ * (Wahl+Pfeil hoch = moveBackward: + moveToBeginningOfParagraph:) und
+ * wuerden sonst doppelt ausgefuehrt. */
 - (void)doCommandBySelector:(SEL)selector {
     (void)selector;
-    if (_keyEvent) {
+    if (_keyEvent && !_keyForwarded) {
+        _keyForwarded = YES;
         forward_key_event(_keyEvent);
     }
 }
 
 - (void)insertText:(id)string replacementRange:(NSRange)replacementRange {
-    /* Cmd+Zeichen ohne Menuepunkt ist ein Befehl, kein Text. */
-    if (_keyEvent && ([_keyEvent modifierFlags] & NSEventModifierFlagCommand)) {
-        forward_key_event(_keyEvent);
-        return;
-    }
     NSString *s = [string isKindOfClass:[NSAttributedString class]] ? [(NSAttributedString *)string string] : string;
+    /* Tasten ohne Belegung (F1-F19, Hilfe, Loeschen auf dem Ziffernblock)
+     * kommen als ein Zeichen aus dem AppKit-Bereich U+F700-U+F7FF - das ist
+     * kein Text (siehe forward_key_event()). */
+    if ([s length] == 1 && ![self hasMarkedText]) {
+        unichar c = [s characterAtIndex:0];
+        if (c >= 0xF700 && c <= 0xF7FF) {
+            if (_keyEvent && !_keyForwarded) {
+                _keyForwarded = YES;
+                forward_key_event(_keyEvent);
+            }
+            return;
+        }
+    }
     const char *utf8 = [s UTF8String];
     if (utf8 && g_ti.insert_text) {
         g_ti.insert_text(utf8, ns_loc(replacementRange), (long)replacementRange.length);
@@ -183,7 +206,7 @@ static long ns_loc(NSRange r) {
     if (actualRange) {
         *actualRange = range;
     }
-    NSRect r = g_ti.caret_rect ? NSRectFromCGRect(g_ti.caret_rect()) : NSZeroRect;
+    NSRect r = g_ti.caret_rect ? NSRectFromCGRect(g_ti.caret_rect(ns_loc(range))) : NSZeroRect;
     NSWindow *window = [self window];
     if (!window) {
         return r;
@@ -503,6 +526,10 @@ void btn_app_set_text_input_callbacks(const BtnTextInputCallbacks *cb) {
 
 void btn_text_input_discard(void) {
     [[g_view inputContext] discardMarkedText];
+}
+
+void btn_text_input_invalidate(void) {
+    [[g_view inputContext] invalidateCharacterCoordinates];
 }
 
 void btn_app_build_menu(void) {

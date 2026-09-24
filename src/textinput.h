@@ -59,6 +59,11 @@ int btn_ti_range_to_bytes(Editor *ed, size_t loc, size_t len, size_t *start, siz
  * hoechstens 4096 Einheiten gekappt. *actual_loc und *n: tatsaechlicher Bereich.
  * NULL, wenn loc hinter dem Dokumentende liegt. Freigabe mit free(). */
 uint16_t *btn_ti_substring(Editor *ed, size_t loc, size_t len, size_t *actual_loc, size_t *n);
+/* Dasselbe, aber mit dem vorlaeufigen Text m an der Cursorposition - so, wie
+ * macOS ihn ueber markedRange gemeldet bekommt (Eingabemethoden lesen den
+ * markierten Bereich zurueck). Ohne vorlaeufigen Text = btn_ti_substring. */
+uint16_t *btn_ti_substring_with_marked(Editor *ed, const BtnMarkedText *m, size_t loc, size_t len, size_t *actual_loc,
+                                       size_t *n);
 
 #ifdef __cplusplus
 }

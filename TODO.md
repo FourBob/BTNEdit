@@ -39,8 +39,10 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
   Editor macOS nur relativ zur aktuellen Zeile (höchstens 1024 Zeichen vor
   dem Cursor) - reicht für Tottasten, Kandidaten, Emoji und das Akzent-Menü,
   aber Funktionen, die weiter entfernten Text brauchen (Rückumwandlung
-  bereits eingefügter Kanji), gehen nicht. Doppelbreite Zeichen im Overlay
-  haben dieselbe Einschränkung wie im Dokument (siehe unten).
+  bereits eingefügter Kanji), gehen nicht. Gedrückthalten eines Buchstabens
+  öffnet (macOS-Standard) das Akzent-Menü statt die Taste zu wiederholen;
+  wer Wiederholung will: `defaults write <bundle-id> ApplePressAndHoldEnabled
+  -bool false`.
 - Einrücken: Return übernimmt nur die vorhandene Einrückung - kein
   zusätzliches Einrücken nach `{` oder `:` und kein Aufteilen von `{}` auf
   drei Zeilen (bräuchte Sprachwissen aus highlight.c). Drückt man Return auf
