@@ -622,6 +622,29 @@ static size_t utf8_safe_cut(const char *s, size_t pos) {
     return pos;
 }
 
+/* Byte-Laenge des Praefixes von s, das die ersten max_chars Zeichen
+ * (Codepoints, nicht Bytes) umfasst - kuerzer, falls s weniger Zeichen hat.
+ * Zaehlt wie editor_visual_column_in_range() nur Lead-Bytes (alles ausser
+ * 10xxxxxx), landet also per Konstruktion immer auf einer Zeichengrenze.
+ * Fuer die Tab-Beschriftung: ein Dateiname mit Umlauten braucht in der
+ * Monospace-Schrift pro ZEICHEN eine Zelle, nicht pro Byte - mit strlen()
+ * als Mass wuerde "Muellerstrasse" mit echten Umlauten frueher als noetig
+ * mit "..." gekuerzt. */
+static size_t utf8_prefix_bytes(const char *s, size_t max_chars) {
+    size_t i = 0;
+    size_t chars = 0;
+    while (s[i] != '\0') {
+        if (((unsigned char)s[i] & 0xC0) != 0x80) {
+            if (chars == max_chars) {
+                break;
+            }
+            chars++;
+        }
+        i++;
+    }
+    return i;
+}
+
 /* Volle Tab-Breite, solange alle Tabs + der "+"-Knopf in window_width
  * passen; sonst wird jeder Tab gleichmaessig schmaler (nie unter 40pt,
  * sonst waere ein Tab nicht mehr bedienbar) - main.c's Hit-Testing ruft
@@ -663,27 +686,24 @@ void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labe
         CGContextStrokeLineSegments(ctx, divider, 2);
 
         /* Label ggf. kuerzen ("...") bis es in die verfuegbare Breite passt.
-         * Monospace-Schrift -> Breite pro Byte ist konstant (get_char_width()),
-         * eine einzige Kapazitaetsrechnung reicht statt iterativem Neumessen;
-         * anders als die Cursor-/Selektionsspalten (editor_visual_column_in_range
-         * zaehlt seit dem UTF-8-Fix echte Zeichen) ist das hier bewusst noch
-         * eine Byte- statt Codepoint-Naeherung (ein Label mit vielen Umlauten
-         * wird hoechstens etwas frueher gekuerzt als noetig), ABER
-         * utf8_safe_cut() stellt sicher, dass der Schnitt selbst nie mitten
-         * in einem mehrbytigen Zeichen landet (sonst wuerde draw_text_at()
-         * ungueltiges UTF-8 bekommen). */
+         * Monospace-Schrift -> Breite pro ZEICHEN ist konstant
+         * (get_char_width()), eine einzige Kapazitaetsrechnung reicht statt
+         * iterativem Neumessen. Gemessen wird in Codepoints (siehe
+         * utf8_prefix_bytes()), nicht in Bytes - sonst wuerde ein Dateiname
+         * mit Umlauten frueher als noetig gekuerzt. utf8_prefix_bytes()
+         * schneidet per Konstruktion nur an Zeichengrenzen; utf8_safe_cut()
+         * sichert das zusaetzlich fuer den reinen Byte-Deckel von buf ab
+         * (sonst wuerde draw_text_at() ungueltiges UTF-8 bekommen). */
         double avail = tab_width - 2.0 * LEFT_PADDING - BTN_TAB_CLOSE_WIDTH;
-        size_t max_bytes = (size_t)(avail / get_char_width());
-        if (max_bytes < 1) {
-            max_bytes = 1;
+        size_t max_chars = (size_t)(avail / get_char_width());
+        if (max_chars < 1) {
+            max_chars = 1;
         }
         char buf[256];
-        size_t label_len = strlen(labels[i]);
-        int truncated = 0;
-        if (label_len > max_bytes) {
-            label_len = max_bytes > 3 ? max_bytes - 3 : max_bytes;
-            label_len = utf8_safe_cut(labels[i], label_len);
-            truncated = 1;
+        size_t label_len = utf8_prefix_bytes(labels[i], max_chars);
+        int truncated = labels[i][label_len] != '\0';
+        if (truncated) {
+            label_len = utf8_prefix_bytes(labels[i], max_chars > 3 ? max_chars - 3 : max_chars);
         }
         if (label_len >= sizeof(buf) - 4) {
             label_len = utf8_safe_cut(labels[i], sizeof(buf) - 4);
@@ -719,11 +739,16 @@ void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labe
 static void draw_find_field(CGContextRef ctx, Editor *ed, double field_x, double text_y, double bar_top,
                              CFDictionaryRef attrs, double char_width, int focused) {
     int has_sel = editor_has_selection(ed);
+    /* Byte-Offsets (Cursor/Selektion) in Zeichenspalten umrechnen - dieselbe
+     * Logik wie beim Hauptdokument (editor_visual_column_in_range zaehlt
+     * Codepoints, nicht Bytes), sonst wandert der Cursor bei jedem Umlaut
+     * im Suchfeld eine Spalte zu weit nach rechts. Die Felder sind
+     * garantiert tab-frei (siehe Kommentar oben), range_start=0 reicht. */
     if (has_sel) {
-        size_t sel_start = editor_selection_start(ed);
-        size_t sel_end = editor_selection_end(ed);
-        double sx = field_x + (double)sel_start * char_width;
-        double sw = (double)(sel_end - sel_start) * char_width;
+        size_t sel_start_col = editor_visual_column_in_range(ed, 0, editor_selection_start(ed));
+        size_t sel_end_col = editor_visual_column_in_range(ed, 0, editor_selection_end(ed));
+        double sx = field_x + (double)sel_start_col * char_width;
+        double sw = (double)(sel_end_col - sel_start_col) * char_width;
         if (sw < 2.0) {
             sw = 2.0;
         }
@@ -737,7 +762,8 @@ static void draw_find_field(CGContextRef ctx, Editor *ed, double field_x, double
     free(text);
 
     if (focused && !has_sel) {
-        double cx = field_x + (double)ed->cursor * char_width;
+        size_t cursor_col = editor_visual_column_in_range(ed, 0, ed->cursor);
+        double cx = field_x + (double)cursor_col * char_width;
         set_fill(ctx, col_cursor());
         CGContextFillRect(ctx, CGRectMake(cx, bar_top + 6.0, 1.4, BTN_FIND_BAR_HEIGHT - 12.0));
     }
