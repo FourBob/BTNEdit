@@ -57,6 +57,23 @@ static void key_cb(const char *chars, unsigned short keycode, unsigned long mods
     keys++;
 }
 
+/* Sucht rekursiv einen Menueeintrag mit Tastenkuerzel key und genau diesen
+ * Modifiern. */
+static NSMenuItem *find_item(NSMenu *menu, NSString *key, NSEventModifierFlags mods) {
+    for (NSMenuItem *item in [menu itemArray]) {
+        if ([[item keyEquivalent] isEqualToString:key] && [item keyEquivalentModifierMask] == mods) {
+            return item;
+        }
+        if ([item hasSubmenu]) {
+            NSMenuItem *found = find_item([item submenu], key, mods);
+            if (found) {
+                return found;
+            }
+        }
+    }
+    return nil;
+}
+
 static NSEvent *key_event(NSWindow *w, NSString *chars, NSString *ignoring, unsigned short code, NSEventModifierFlags mods) {
     return [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:mods timestamp:0
                         windowNumber:[w windowNumber] context:nil characters:chars charactersIgnoringModifiers:ignoring
@@ -130,6 +147,33 @@ int main(void) {
         [view keyDown:key_event(win, @"e", @"e", 14, 0)];
         printf("info  dead key Option+E, E: %d marked update(s), last insert \"%s\" (%s)\n", marks - m0, last_insert,
                (inserts > i0 && strcmp(last_insert, "\xC3\xA9") == 0) ? "composed" : "layout-dependent, not composed here");
+
+        /* Ctrl+Tab kommt mit Ctrl-Flag beim Key-Callback an (Tab-Wechsel) */
+        [view keyDown:key_event(win, @"\t", @"\t", 48, NSEventModifierFlagControl)];
+        CHECK(last_keycode == 48 && (last_mods & NSEventModifierFlagControl), "Ctrl+Tab -> key callback with control");
+
+        /* ---- Menue: Standard-Tastenkuerzel ---- */
+        btn_app_build_menu();
+        NSMenu *menubar = [NSApp mainMenu];
+        NSEventModifierFlags cmd = NSEventModifierFlagCommand;
+        NSMenuItem *it = find_item(menubar, @"g", cmd);
+        CHECK(it && [it tag] == BTN_MENU_FIND_NEXT, "Cmd+G = Find Next");
+        it = find_item(menubar, @"G", cmd);
+        CHECK(it && [it tag] == BTN_MENU_FIND_PREVIOUS, "Shift+Cmd+G = Find Previous");
+        it = find_item(menubar, @"e", cmd);
+        CHECK(it && [it tag] == BTN_MENU_USE_SELECTION_FOR_FIND, "Cmd+E = Use Selection for Find");
+        it = find_item(menubar, @"m", cmd);
+        CHECK(it && [it action] == @selector(performMiniaturize:), "Cmd+M = Minimize");
+        it = find_item(menubar, @"f", NSEventModifierFlagControl | cmd);
+        CHECK(it && [it action] == @selector(toggleFullScreen:), "Ctrl+Cmd+F = Full Screen");
+        it = find_item(menubar, @"}", cmd);
+        CHECK(it && [it tag] == BTN_MENU_NEXT_TAB, "Shift+Cmd+] = Next Tab");
+        it = find_item(menubar, @"{", cmd);
+        CHECK(it && [it tag] == BTN_MENU_PREVIOUS_TAB, "Shift+Cmd+[ = Previous Tab");
+        CHECK([NSApp windowsMenu] != nil && [[NSApp windowsMenu] indexOfItemWithTarget:nil andAction:@selector(performZoom:)] >= 0,
+              "Window menu registered with Zoom");
+        it = find_item(menubar, @"f", cmd);
+        CHECK(it && [it tag] == BTN_MENU_FIND, "Cmd+F still Find (no clash with full screen)");
 
         [win orderOut:nil];
     }

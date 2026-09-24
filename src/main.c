@@ -469,17 +469,28 @@ static void close_find_bar(void) {
  * Suchtext - genau wie Cmd+F das in so gut wie jedem macOS-Editor tut.
  * Mehrzeilige Selektionen werden ignoriert (Zeilenumbrueche/Regex-
  * Sonderzeichen darin ergeben selten einen sinnvollen Suchbegriff). */
+/* Uebernimmt eine einzeilige Selektion des Dokuments als Suchbegriff (Cmd+F
+ * und Cmd+E). Laenge aus den Selektionsgrenzen, nicht strlen(): ein NUL-Byte
+ * in der Selektion schnitt die Vorbelegung vorher dort ab. 1 = uebernommen. */
+static int take_selection_as_search_text(void) {
+    Editor *ed = &active_doc()->editor;
+    if (!editor_has_selection(ed)) {
+        return 0;
+    }
+    size_t len = editor_selection_end(ed) - editor_selection_start(ed);
+    char *sel = editor_get_selection_text(ed);
+    int single_line = memchr(sel, '\n', len) == NULL;
+    if (single_line) {
+        editor_set_text(&g_search_editor, sel, len);
+    }
+    free(sel);
+    return single_line;
+}
+
 static void open_find_bar(void) {
     commit_marked();
     Editor *ed = &active_doc()->editor;
-    if (editor_has_selection(ed)) {
-        char *sel = editor_get_selection_text(ed);
-        size_t sel_len = strlen(sel);
-        if (strchr(sel, '\n') == NULL) {
-            editor_set_text(&g_search_editor, sel, sel_len);
-        }
-        free(sel);
-    }
+    take_selection_as_search_text();
     /* Bestehenden Suchtext komplett selektieren (wie Cmd+F in praktisch
      * jeder Mac-App) - Tippen ersetzt ihn dann sofort, statt ihn zu
      * ergaenzen. */
@@ -1138,6 +1149,53 @@ static int perform_find(int forward) {
     sync_scroll_to_cursor();
     btn_app_request_redraw();
     return found;
+}
+
+/* Bearbeiten > Weitersuchen / Rueckwaerts suchen (Cmd+G / Shift+Cmd+G) - mit
+ * dem letzten Suchbegriff, auch bei geschlossener Suchleiste. Ohne
+ * Suchbegriff oeffnet sich die Leiste. Kein Treffer: Systemton, denn die
+ * Statusmeldung ist bei geschlossener Leiste nicht zu sehen. */
+static void find_next_from_menu(int forward) {
+    if (editor_length(&g_search_editor) == 0) {
+        open_find_bar();
+        return;
+    }
+    if (!perform_find(forward)) {
+        btn_beep();
+    }
+    if (!g_find_bar_visible) {
+        g_match_count = 0; /* Treffer nur bei offener Leiste hervorheben */
+    }
+}
+
+/* Bearbeiten > Auswahl fuer Suche verwenden (Cmd+E). */
+static void use_selection_for_find(void) {
+    if (!take_selection_as_search_text()) {
+        btn_beep();
+        return;
+    }
+    g_search_status[0] = '\0';
+    if (g_find_bar_visible) {
+        editor_select_all(&g_search_editor);
+        perform_live_search();
+    }
+}
+
+/* Index des Tabs delta Schritte weiter, mit Umlauf (Fenster > Naechster/
+ * Vorheriger Tab, Ctrl+Tab / Ctrl+Shift+Tab). */
+static int next_tab_index(int current, int count, int delta) {
+    if (count <= 0) {
+        return 0;
+    }
+    return ((current + delta) % count + count) % count;
+}
+
+/* Wechselt delta Tabs weiter; bei nur einem Tab nichts (switch_to_tab()
+ * wuerde sonst die Suchleiste schliessen, ohne etwas zu wechseln). */
+static void cycle_tab(int delta) {
+    if (g_doc_count > 1) {
+        switch_to_tab(next_tab_index(g_active_doc, g_doc_count, delta));
+    }
 }
 
 /* Ersetzt die aktuelle Selektion durch text/len - anders als
@@ -2278,6 +2336,13 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
         return;
     }
 
+    /* Ctrl+Tab / Ctrl+Shift+Tab: Tab wechseln - auch aus der Suchleiste. */
+    if (keycode == KEYCODE_TAB && (modifierFlags & BTN_MOD_CONTROL)) {
+        cycle_tab(shift ? -1 : 1);
+        btn_app_request_redraw();
+        return;
+    }
+
     if (g_focus != BTN_FOCUS_DOCUMENT) {
         handle_find_bar_key(characters, keycode, shift, option, command);
         return;
@@ -2709,6 +2774,17 @@ static void on_menu(int tag) {
     switch (tag) {
         case BTN_MENU_NEW:
             new_tab_or_reuse_blank();
+            break;
+        case BTN_MENU_FIND_NEXT:
+        case BTN_MENU_FIND_PREVIOUS:
+            find_next_from_menu(tag == BTN_MENU_FIND_NEXT);
+            break;
+        case BTN_MENU_USE_SELECTION_FOR_FIND:
+            use_selection_for_find();
+            break;
+        case BTN_MENU_NEXT_TAB:
+        case BTN_MENU_PREVIOUS_TAB:
+            cycle_tab(tag == BTN_MENU_NEXT_TAB ? 1 : -1);
             break;
         case BTN_MENU_EOL_LF:
         case BTN_MENU_EOL_CRLF:

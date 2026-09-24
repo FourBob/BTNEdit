@@ -36,6 +36,9 @@ HEADERS = {
     "replsel_extracted.h": ("main.c", ["replace_selection"]),
     "doc_extracted.h": ("main.c", ["typedef:Document", "doc_is_dirty", "mark_doc_saved"]),
     "focus_extracted.h": ("main.c", ["typedef:BtnFocus"]),
+    "shortcuts_extracted.h": ("main.c", [
+        "take_selection_as_search_text", "find_next_from_menu", "use_selection_for_find", "next_tab_index",
+        "cycle_tab"]),
     "textinput_glue_extracted.h": ("main.c", [
         "#KEYCODE_TEXT", "insert_typed_chars", "after_focused_edit", "select_ti_range",
         "ti_insert_text", "ti_set_marked_text", "ti_unmark_text", "commit_marked", "ti_query", "ti_substring"]),

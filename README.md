@@ -135,6 +135,7 @@ umbenennt, muss sie dort nachziehen.
 | `test_layout_cache`, `test_layout_cache_lang` | Layout- und Kommentar-Cache gegen einen frischen Aufbau |
 | `test_undo` | Undo-Gruppen und Fuzzing mit simulierten Allokationsfehlern |
 | `test_textinput` | Eingabemethoden: UTF-16-Umrechnung, nachgestellte Abläufe (Tottaste, Pinyin, Akzent-Menü, Emoji, Suchfeld) mit dem Code aus `main.c` |
+| `test_shortcuts` | Weitersuchen, Auswahl für Suche (auch mit NUL-Byte), Tab-Wechsel mit Umlauf |
 | `test_indent` | Auto-Indent bei Return, Tab/⇧Tab über mehrere Zeilen, Tab vs. Leerzeichen, Fuzz: Ausrücken nach Einrücken = Original |
 | `test_save_atomic`, `test_save_links_perms`, `test_file_io` | atomares Sichern, Symlinks, Schreibschutz, Laden, Recent-Liste |
 | `test_close_flow` | Schließen/Beenden verliert nie ungesicherte Änderungen |
@@ -162,6 +163,8 @@ in die Liste `TESTS` eintragen.
 | Ausschneiden / Kopieren / Einfügen | `⌘X` / `⌘C` / `⌘V` |
 | Alles auswählen | `⌘A` |
 | Suchen und Ersetzen öffnen | `⌘F` |
+| Weitersuchen / Rückwärts suchen (auch bei geschlossener Suchleiste) | `⌘G` / `⇧⌘G` |
+| Auswahl für Suche verwenden | `⌘E` |
 | In der Suchleiste: nächster/vorheriger Treffer | `Return` / `⇧Return` |
 | In der Suchleiste: Ersetzen+Weiter / Alle ersetzen | `Return` (im Ersetzen-Feld) / `⌘Return` oder Klick auf den "Alle ersetzen"-Knopf |
 | Suchleiste schließen | `Esc` |
@@ -169,3 +172,5 @@ in die Liste `TESTS` eintragen.
 | Vergrößern / Verkleinern / Tatsächliche Größe | `⌘+` / `⌘-` / `⌘0` |
 | Wort-/Zeilensprung, Zeilenanfang/-ende | `⌥←/→`, `⌘←/→`, Pos1/Ende |
 | Zeilen ein-/ausrücken (Selektion über mehrere Zeilen) | `Tab` / `⇧Tab` |
+| Nächster / vorheriger Tab | `⌃Tab` / `⌃⇧Tab` oder `⇧⌘]` / `⇧⌘[` |
+| Im Dock ablegen / Vollbild | `⌘M` / `⌃⌘F` |

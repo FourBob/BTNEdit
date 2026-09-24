@@ -34,7 +34,12 @@ enum {
      * (BTN_MENU_EOL_LF + BTN_EOL_CRLF == BTN_MENU_EOL_CRLF). */
     BTN_MENU_EOL_LF,
     BTN_MENU_EOL_CRLF,
-    BTN_MENU_EOL_CR
+    BTN_MENU_EOL_CR,
+    BTN_MENU_FIND_NEXT,
+    BTN_MENU_FIND_PREVIOUS,
+    BTN_MENU_USE_SELECTION_FOR_FIND,
+    BTN_MENU_NEXT_TAB,
+    BTN_MENU_PREVIOUS_TAB
 };
 
 /* Tags fuer die dynamischen "Zuletzt geoeffnet"-Menuepunkte liegen ab hier,
@@ -48,6 +53,7 @@ enum {
 /* Rohe NSEvent.ModifierFlags-Bitwerte (von Apple dokumentiert/stabil), damit
  * main.c ohne Cocoa-Header auskommt. */
 #define BTN_MOD_SHIFT   (1u << 17)
+#define BTN_MOD_CONTROL (1u << 18)
 #define BTN_MOD_OPTION  (1u << 19)
 #define BTN_MOD_COMMAND (1u << 20)
 
@@ -129,6 +135,9 @@ void btn_app_build_menu(void);
 void btn_app_set_recent_files(const char **paths, int count);
 
 void btn_app_request_redraw(void);
+
+/* Systemton (z.B. Weitersuchen ohne Treffer bei geschlossener Suchleiste). */
+void btn_beep(void);
 
 /* Setzt das Haekchen im Untermenue Ablage > Zeilenenden auf Eintrag index
  * (0 = LF, 1 = CRLF, 2 = CR, wie BtnEol; -1 = keins, z.B. bei gemischten

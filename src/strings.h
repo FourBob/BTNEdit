@@ -108,6 +108,17 @@ typedef enum {
     /* Statuszeile bei einer Datei mit gemischten Zeilenenden: ein "%s" fuer
      * das vorherrschende Format ("CRLF") - siehe BTN_STR_SAVE_PROMPT_TITLE_FMT. */
     BTN_STR_EOL_MIXED_FMT,
+    /* Bearbeiten: Weitersuchen/Rueckwaerts suchen/Auswahl fuer Suche */
+    BTN_STR_FIND_NEXT,
+    BTN_STR_FIND_PREVIOUS,
+    BTN_STR_USE_SELECTION_FOR_FIND,
+    /* Menue "Fenster" */
+    BTN_STR_WINDOW_MENU,
+    BTN_STR_MINIMIZE,
+    BTN_STR_ZOOM,
+    BTN_STR_FULL_SCREEN,
+    BTN_STR_NEXT_TAB,
+    BTN_STR_PREVIOUS_TAB,
     BTN_STR_COUNT
 } BtnStringId;
 

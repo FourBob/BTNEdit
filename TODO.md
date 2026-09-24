@@ -12,15 +12,12 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
    offene Datei auf der Platte ändert (Neu laden anbieten). Kein Autosave /
    keine Wiederherstellung nach Absturz - wichtiger, seit Speichermangel im
    Gap-Buffer bewusst mit `abort()` endet.
-3. **Standard-Tastenkürzel.** Weitersuchen/Rückwärtssuchen (⌘G / ⇧⌘G),
-   "Auswahl zum Suchen verwenden" (⌘E), Tab-Wechsel per Tastatur (Ctrl+Tab
-   bzw. ⇧⌘[ / ⇧⌘]), Fenster-Menü mit Im Dock ablegen (⌘M) und Vollbild.
-4. **Code-Editor-Funktionen.** Kommentar umschalten (⌘/), Zeile duplizieren,
+3. **Code-Editor-Funktionen.** Kommentar umschalten (⌘/), Zeile duplizieren,
    Zeile(n) hoch/runter verschieben, unsichtbare Zeichen anzeigen,
    Wortumbruch an/aus, Kodierung beim Öffnen/Sichern wählen (heute: Bytes
    unverändert, Anzeige als UTF-8 mit Latin-1-Fallback), Suche über alle
    Tabs.
-5. **KI-Vervollständigung mit lokalem LLM (optional, standardmäßig aus).**
+4. **KI-Vervollständigung mit lokalem LLM (optional, standardmäßig aus).**
    Kein eingebautes Modell: BTNEdit fragt per HTTP einen lokal laufenden
    Server an (Ollama oder llama-server), Adresse und Modellname in der
    Prefs-Datei; ohne Server fehlt die Funktion einfach. Code-Modell mit
@@ -100,10 +97,9 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
   Zeichenbreite aus render.c, die dort bisher privat ist) - Tastatur-
   Navigation (Pfeiltasten, Pos1/Ende, Shift-Selektion, Copy/Paste) ist voll
   unterstützt, Mausklick mittendrin noch nicht.
-- Eingebettete NUL-Bytes in einer Selektion können das Vorbefüllen des
-  Suchfelds (Cmd+F übernimmt die aktuelle Selektion) an der Stelle des
-  NUL-Bytes abschneiden (`strlen`/`strchr` auf einem Puffer, der theoretisch
-  eingebettete NULs enthalten kann).
+- Ein NUL-Byte im Suchbegriff (z.B. per Cmd+E aus einer Binärdatei
+  übernommen) steht zwar vollständig im Suchfeld, die Suche selbst endet aber
+  dort: `regcomp` arbeitet mit C-Strings.
 
 - Sichern ist atomar (Tempdatei + `rename()`), damit ein Schreibfehler nie
   das Original zerstört. Nebenwirkung: die Datei bekommt eine neue Inode -

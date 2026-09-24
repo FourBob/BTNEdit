@@ -566,6 +566,10 @@ void btn_app_build_menu(void) {
         [editMenu addItemWithTitle:trs(BTN_STR_SELECT_ALL) action:@selector(selectAll:) keyEquivalent:@"a"];
         [editMenu addItem:[NSMenuItem separatorItem]];
         add_item(editMenu, trs(BTN_STR_FIND), @"f", BTN_MENU_FIND);
+        /* Grossbuchstabe = mit Shift (wie "S" bei Sichern unter) */
+        add_item(editMenu, trs(BTN_STR_FIND_NEXT), @"g", BTN_MENU_FIND_NEXT);
+        add_item(editMenu, trs(BTN_STR_FIND_PREVIOUS), @"G", BTN_MENU_FIND_PREVIOUS);
+        add_item(editMenu, trs(BTN_STR_USE_SELECTION_FOR_FIND), @"e", BTN_MENU_USE_SELECTION_FOR_FIND);
         add_item(editMenu, trs(BTN_STR_GOTO_LINE), @"l", BTN_MENU_GOTO_LINE);
         [editMenuItem setSubmenu:editMenu];
 
@@ -576,6 +580,25 @@ void btn_app_build_menu(void) {
         add_item(viewMenu, trs(BTN_STR_ZOOM_OUT), @"-", BTN_MENU_ZOOM_OUT);
         add_item(viewMenu, trs(BTN_STR_ZOOM_RESET), @"0", BTN_MENU_ZOOM_RESET);
         [viewMenuItem setSubmenu:viewMenu];
+
+        /* Fenster: die AppKit-Standardaktionen (target nil -> Responder-Kette
+         * bis zum NSWindow) plus Tab-Wechsel. setWindowsMenu: laesst macOS
+         * die Fensterliste selbst anhaengen. */
+        NSMenuItem *windowMenuItem = [NSMenuItem new];
+        [menubar addItem:windowMenuItem];
+        NSMenu *windowMenu = [[NSMenu alloc] initWithTitle:trs(BTN_STR_WINDOW_MENU)];
+        [windowMenu addItemWithTitle:trs(BTN_STR_MINIMIZE) action:@selector(performMiniaturize:) keyEquivalent:@"m"];
+        [windowMenu addItemWithTitle:trs(BTN_STR_ZOOM) action:@selector(performZoom:) keyEquivalent:@""];
+        NSMenuItem *fullScreen = [windowMenu addItemWithTitle:trs(BTN_STR_FULL_SCREEN)
+                                                       action:@selector(toggleFullScreen:)
+                                                keyEquivalent:@"f"];
+        [fullScreen setKeyEquivalentModifierMask:NSEventModifierFlagControl | NSEventModifierFlagCommand];
+        [windowMenu addItem:[NSMenuItem separatorItem]];
+        /* "}"/"{" = Shift+"]"/"[" (US-Layout, wie in Safari) */
+        add_item(windowMenu, trs(BTN_STR_NEXT_TAB), @"}", BTN_MENU_NEXT_TAB);
+        add_item(windowMenu, trs(BTN_STR_PREVIOUS_TAB), @"{", BTN_MENU_PREVIOUS_TAB);
+        [windowMenuItem setSubmenu:windowMenu];
+        [NSApp setWindowsMenu:windowMenu];
 
         NSMenuItem *helpMenuItem = [NSMenuItem new];
         [menubar addItem:helpMenuItem];
@@ -614,6 +637,10 @@ void btn_app_set_line_ending_menu(int index, int enabled) {
     }
 }
 
+void btn_beep(void) {
+    NSBeep();
+}
+
 void btn_app_request_redraw(void) {
     [g_view setNeedsDisplay:YES];
 }
@@ -641,6 +668,8 @@ void btn_app_run(void) {
          * shim.m kennt render.h's Layout-Konstanten bewusst nicht (reine
          * Chrome), daher hier als eigener Wert statt eines Verweises. */
         [g_window setMinSize:NSMakeSize(1080, 300)];
+        /* Fenster > Vollbild (toggleFullScreen:) */
+        [g_window setCollectionBehavior:NSWindowCollectionBehaviorFullScreenPrimary];
 
         g_view = [[BTNContentView alloc] initWithFrame:frame];
         [g_window setContentView:g_view];
