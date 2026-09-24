@@ -347,12 +347,12 @@ static long visible_line_capacity(void) {
     return n > 0 ? n : 1;
 }
 
-/* Baut das aktuelle Zeilenumbruch-Layout fuer die momentane Fensterbreite;
- * caller muss btn_layout_free(*out_rows) aufrufen. */
-static size_t build_current_rows(BtnRow **out_rows) {
+/* Zeilenumbruch-Layout fuer die momentane Fensterbreite aus render.c's
+ * Cache (siehe btn_layout_get()) - NICHT freigeben. */
+static size_t build_current_rows(const BtnRow **out_rows) {
     double width = btn_layout_text_width(content_bounds());
     size_t row_count;
-    *out_rows = btn_layout_build(&active_doc()->editor, width, &row_count);
+    *out_rows = btn_layout_get(&active_doc()->editor, width, &row_count);
     return row_count;
 }
 
@@ -375,9 +375,8 @@ static void clamp_scroll_to_row_count(long row_count) {
 }
 
 static void clamp_scroll(void) {
-    BtnRow *rows;
+    const BtnRow *rows;
     long row_count = (long)build_current_rows(&rows);
-    btn_layout_free(rows);
     clamp_scroll_to_row_count(row_count);
 }
 
@@ -385,11 +384,10 @@ static void clamp_scroll(void) {
  * bei Tastatur-Navigation gibt es sonst keinen anderen Weg, ihn wieder
  * ins Bild zu bekommen. */
 static void sync_scroll_to_cursor(void) {
-    BtnRow *rows;
+    const BtnRow *rows;
     size_t row_count = build_current_rows(&rows);
     Document *d = active_doc();
     long cur_row = (long)btn_layout_row_for_offset(rows, row_count, d->editor.cursor);
-    btn_layout_free(rows);
 
     long capacity = visible_line_capacity();
     if (cur_row < d->scroll_row) {
@@ -1249,7 +1247,7 @@ static void commit_cursor(size_t new_offset, int extend, size_t desired_col) {
  * genau wie editor.c es fuer die (jetzt entfernte) logische Variante tat. */
 static void move_visual_row(int direction, int extend) {
     Editor *ed = &active_doc()->editor;
-    BtnRow *rows;
+    const BtnRow *rows;
     size_t row_count = build_current_rows(&rows);
     size_t cur_row = btn_layout_row_for_offset(rows, row_count, ed->cursor);
 
@@ -1270,7 +1268,6 @@ static void move_visual_row(int direction, int extend) {
         new_offset = editor_offset_for_column_in_range(ed, rows[target_row].start, rows[target_row].len, col);
         new_col = col;
     }
-    btn_layout_free(rows);
     commit_cursor(new_offset, extend, new_col);
 }
 
@@ -1280,11 +1277,10 @@ static void move_visual_row(int direction, int extend) {
  * waehlt zwischen den beiden Row-Grenzen. */
 static void move_row_edge(int to_end, int extend) {
     Editor *ed = &active_doc()->editor;
-    BtnRow *rows;
+    const BtnRow *rows;
     size_t row_count = build_current_rows(&rows);
     size_t cur_row = btn_layout_row_for_offset(rows, row_count, ed->cursor);
     size_t new_offset = to_end ? rows[cur_row].start + rows[cur_row].len : rows[cur_row].start;
-    btn_layout_free(rows);
     commit_cursor(new_offset, extend, (size_t)-1);
 }
 

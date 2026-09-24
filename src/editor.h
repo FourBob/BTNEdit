@@ -41,8 +41,18 @@ typedef struct {
      * Laden gemerkten Wert, um "ungesichert" zu erkennen - bewusst NICHT
      * ueber undo.pos, weil das beim Zusammenfassen (Coalescing) aufeinander
      * folgender Tastendruecke unveraendert bleiben kann, obwohl sich der
-     * Inhalt sehr wohl geaendert hat. */
+     * Inhalt sehr wohl geaendert hat. Kommt aus einem Zaehler ueber ALLE
+     * Editoren: jeder Wert identifiziert genau einen Inhaltsstand genau
+     * eines Editors - auch nach editor_set_text() (neuer Wert statt 0) und
+     * nach dem memmove der Dokumente beim Tab-Schliessen. Darauf verlassen
+     * sich render.c's Layout-/Kommentar-Caches. Nur auf Gleichheit
+     * vergleichen, nie Differenzen bilden. */
     size_t edit_seq;
+    /* Kleinster Byte-Offset, der seit dem Inhaltsstand dirty_base_seq
+     * veraendert wurde ((size_t)-1 = nichts) - siehe
+     * editor_changed_from()/editor_rebase_changes(). */
+    size_t dirty_base_seq;
+    size_t dirty_floor;
     /* Von jeder Cursor-Neupositionierung (Klick, Pfeiltasten, Undo/Redo,
      * Wort-/Zeilen-/Alles-Auswahl) auf 1 gesetzt und vom naechsten Insert/
      * Delete konsumiert: verhindert, dass Tippen nach einem Klick zurueck
@@ -97,6 +107,20 @@ size_t editor_line_count(Editor *ed);
 void editor_line_bounds(Editor *ed, size_t line_index, size_t *out_start, size_t *out_len);
 size_t editor_offset_to_line(Editor *ed, size_t offset);
 size_t editor_word_count(Editor *ed);
+/* Das Wortzeichen-Kriterium von editor_word_count() - render.c zaehlt
+ * Woerter im selben Durchlauf wie das Layout und muss exakt dieselbe Regel
+ * anwenden. */
+int editor_is_word_char(char c);
+
+/* Aenderungsverfolgung fuer inkrementelle Caches: kleinster Byte-Offset,
+ * der sich seit dem Inhaltsstand base_seq (einem frueheren edit_seq dieses
+ * Editors) geaendert haben KANN. (size_t)-1 = unveraendert, 0 = alles bzw.
+ * unbekannt (base_seq ist nicht der letzte Bezugspunkt). Alle Bytes VOR dem
+ * Rueckgabewert sind garantiert unveraendert. editor_rebase_changes() setzt
+ * den Bezugspunkt auf den aktuellen Stand - es gibt genau EINEN Bezugspunkt
+ * pro Editor, also nur einen Verbraucher (render.c's Kommentar-Cache). */
+size_t editor_changed_from(const Editor *ed, size_t base_seq);
+void editor_rebase_changes(Editor *ed);
 
 /* Tab-bewusste visuelle Spalte eines Offsets innerhalb seiner Zeile, bzw.
  * der Zeichen-Offset einer visuellen Spalte in einer gegebenen Zeile

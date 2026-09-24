@@ -19,6 +19,46 @@ static int is_word_char(char c) {
            (c >= '0' && c <= '9') || c == '_';
 }
 
+int editor_is_word_char(char c) {
+    return is_word_char(c);
+}
+
+/* Zaehler ueber alle Editoren, siehe edit_seq-Kommentar in editor.h. */
+static size_t s_last_edit_seq = 0;
+
+/* Nach JEDER Inhaltsaenderung an Offset pos aufzurufen: neuer, global
+ * eindeutiger edit_seq, und dirty_floor merkt sich den kleinsten seit dem
+ * letzten Bezugspunkt veraenderten Offset. */
+static void mark_content_changed(Editor *ed, size_t pos) {
+    ed->edit_seq = ++s_last_edit_seq;
+    if (pos < ed->dirty_floor) {
+        ed->dirty_floor = pos;
+    }
+}
+
+/* Komplett neuer Inhalt (init/set_text): neuer edit_seq, der zugleich der
+ * neue Bezugspunkt ist - kein Cache kann diesen Wert schon kennen. */
+static void reset_content_tracking(Editor *ed) {
+    ed->edit_seq = ++s_last_edit_seq;
+    ed->dirty_base_seq = ed->edit_seq;
+    ed->dirty_floor = (size_t)-1;
+}
+
+size_t editor_changed_from(const Editor *ed, size_t base_seq) {
+    if (base_seq == ed->edit_seq) {
+        return (size_t)-1;
+    }
+    if (base_seq == ed->dirty_base_seq) {
+        return ed->dirty_floor;
+    }
+    return 0;
+}
+
+void editor_rebase_changes(Editor *ed) {
+    ed->dirty_base_seq = ed->edit_seq;
+    ed->dirty_floor = (size_t)-1;
+}
+
 /* "Klammer" umfasst hier auf Wunsch auch Anfuehrungszeichen (einfach und
  * doppelt) - fuers Auto-Vervollstaendigen/die Hervorhebung verhalten sie
  * sich fast wie eine Klammer, nur dass oeffnendes und schliessendes Zeichen
@@ -226,7 +266,7 @@ void editor_init(Editor *ed) {
     ed->cursor = 0;
     ed->anchor = 0;
     ed->desired_col = UNSET_COL;
-    ed->edit_seq = 0;
+    reset_content_tracking(ed);
     ed->suppress_coalesce = 0;
     ed->single_line = 0;
     undo_stack_init(&ed->undo);
@@ -285,7 +325,7 @@ void editor_set_text(Editor *ed, const char *text, size_t len) {
     ed->cursor = 0;
     ed->anchor = 0;
     ed->desired_col = UNSET_COL;
-    ed->edit_seq = 0;
+    reset_content_tracking(ed);
     ed->suppress_coalesce = 0;
 
     undo_stack_free(&ed->undo);
@@ -592,7 +632,7 @@ void editor_delete_selection(Editor *ed) {
     ed->cursor = start;
     ed->anchor = start;
     ed->desired_col = UNSET_COL;
-    ed->edit_seq++;
+    mark_content_changed(ed, start);
 }
 
 void editor_insert_text(Editor *ed, const char *text, size_t len) {
@@ -615,7 +655,7 @@ void editor_insert_text(Editor *ed, const char *text, size_t len) {
     ed->cursor = pos + len;
     ed->anchor = ed->cursor;
     ed->desired_col = UNSET_COL;
-    ed->edit_seq++;
+    mark_content_changed(ed, pos);
     free(sanitized);
 }
 
@@ -736,7 +776,7 @@ void editor_delete_backward(Editor *ed) {
             ed->cursor = pos;
             ed->anchor = pos;
             ed->desired_col = UNSET_COL;
-            ed->edit_seq++;
+            mark_content_changed(ed, pos);
             return;
         }
     }
@@ -750,7 +790,7 @@ void editor_delete_backward(Editor *ed) {
     ed->cursor = pos;
     ed->anchor = pos;
     ed->desired_col = UNSET_COL;
-    ed->edit_seq++;
+    mark_content_changed(ed, pos);
 }
 
 void editor_delete_forward(Editor *ed) {
@@ -768,7 +808,7 @@ void editor_delete_forward(Editor *ed) {
     undo_push_delete(ed, ed->cursor, deleted, n, 0);
     free(deleted);
     ed->desired_col = UNSET_COL;
-    ed->edit_seq++;
+    mark_content_changed(ed, ed->cursor);
 }
 
 /* ---- Bewegung & Selektion ---- */
@@ -936,7 +976,7 @@ void editor_undo(Editor *ed) {
     ed->anchor = ed->cursor;
     ed->desired_col = UNSET_COL;
     editor_mark_cursor_moved(ed);
-    ed->edit_seq++;
+    mark_content_changed(ed, r->pos);
 }
 
 void editor_redo(Editor *ed) {
@@ -956,5 +996,5 @@ void editor_redo(Editor *ed) {
     ed->anchor = ed->cursor;
     ed->desired_col = UNSET_COL;
     editor_mark_cursor_moved(ed);
-    ed->edit_seq++;
+    mark_content_changed(ed, r->pos);
 }

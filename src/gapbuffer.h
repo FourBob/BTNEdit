@@ -16,10 +16,23 @@ typedef struct {
 
 void gb_init(GapBuffer *gb, size_t initial_capacity);
 void gb_free(GapBuffer *gb);
-size_t gb_length(const GapBuffer *gb);
 void gb_insert(GapBuffer *gb, size_t pos, const char *text, size_t len);
 void gb_delete(GapBuffer *gb, size_t pos, size_t len);
-char gb_char_at(const GapBuffer *gb, size_t pos);
+
+/* Inline im Header statt in gapbuffer.c: gb_char_at() laeuft in jeder
+ * Byte-Schleife (Layout, Zeilen-/Wortzaehlung, Suche) - als Funktionsaufruf
+ * ueber die Dateigrenze kostete das bei einem 10-MB-Dokument einen
+ * erheblichen Teil jedes Tastendrucks. */
+static inline size_t gb_length(const GapBuffer *gb) {
+    return gb->capacity - (gb->gap_end - gb->gap_start);
+}
+
+static inline char gb_char_at(const GapBuffer *gb, size_t pos) {
+    if (pos < gb->gap_start) {
+        return gb->data[pos];
+    }
+    return gb->data[pos + (gb->gap_end - gb->gap_start)];
+}
 
 /* Gibt einen neu allokierten, NUL-terminierten Ausschnitt zurueck (caller muss free() aufrufen). */
 char *gb_copy_range(const GapBuffer *gb, size_t start, size_t len);

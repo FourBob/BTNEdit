@@ -60,9 +60,6 @@ void gb_free(GapBuffer *gb) {
     gb->capacity = gb->gap_start = gb->gap_end = 0;
 }
 
-size_t gb_length(const GapBuffer *gb) {
-    return gb->capacity - (gb->gap_end - gb->gap_start);
-}
 
 void gb_insert(GapBuffer *gb, size_t pos, const char *text, size_t len) {
     if (len == 0) {
@@ -86,17 +83,20 @@ void gb_delete(GapBuffer *gb, size_t pos, size_t len) {
     gb->gap_end += len;
 }
 
-char gb_char_at(const GapBuffer *gb, size_t pos) {
-    if (pos < gb->gap_start) {
-        return gb->data[pos];
-    }
-    return gb->data[pos + (gb->gap_end - gb->gap_start)];
-}
 
+/* Hoechstens zwei memcpy (Teil vor und Teil hinter der Luecke) statt
+ * Byte fuer Byte - editor_copy_all() kopiert so das ganze Dokument. */
 char *gb_copy_range(const GapBuffer *gb, size_t start, size_t len) {
     char *out = malloc(len + 1);
-    for (size_t i = 0; i < len; i++) {
-        out[i] = gb_char_at(gb, start + i);
+    size_t before_gap = 0;
+    if (start < gb->gap_start) {
+        size_t end = start + len;
+        before_gap = (end <= gb->gap_start ? end : gb->gap_start) - start;
+        memcpy(out, gb->data + start, before_gap);
+    }
+    if (before_gap < len) {
+        size_t gap = gb->gap_end - gb->gap_start;
+        memcpy(out + before_gap, gb->data + start + before_gap + gap, len - before_gap);
     }
     out[len] = '\0';
     return out;

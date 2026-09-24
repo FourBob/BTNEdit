@@ -86,11 +86,20 @@ void btn_render_zoom_reset(void);
 double btn_layout_text_width(CGRect bounds);
 
 /* Berechnet das komplette Zeilenumbruch-Layout fuer den aktuellen
- * Pufferinhalt bei gegebener Textbreite. Caller muss btn_layout_free()
- * aufrufen. Wird sowohl vom Zeichnen als auch von main.c fuer
- * wortumbruch-bewusste Cursor-Bewegung/Scrolling/Hit-Testing genutzt. */
+ * Pufferinhalt bei gegebener Textbreite als eigene Kopie; Caller muss
+ * btn_layout_free() aufrufen. Nur fuers Drucken gedacht, das die Rows ueber
+ * mehrere Callbacks hinweg haelt. */
 BtnRow *btn_layout_build(Editor *ed, double text_width, size_t *out_row_count);
 void btn_layout_free(BtnRow *rows);
+
+/* Dasselbe Layout, aber aus einem Cache, der nur bei geaendertem Inhalt
+ * (edit_seq) oder geaenderter Zeichen-pro-Zeile-Zahl neu gebaut wird -
+ * fuer Zeichnen, Hit-Testing und main.c's Cursor-Bewegung/Scrolling. Der
+ * Zeiger gehoert dem Cache: NICHT freigeben, und nicht ueber einen
+ * weiteren btn_layout_get()-Aufruf hinaus benutzen, der neu bauen koennte -
+ * das passiert bei geaendertem Inhalt, anderer Breite/Schriftgroesse oder
+ * einem anderen Editor, und gibt das vorige Array frei. */
+const BtnRow *btn_layout_get(Editor *ed, double text_width, size_t *out_row_count);
 
 /* Row-Index, in dem der gegebene Puffer-Offset liegt (Grenzfaelle an
  * einem Zeilenumbruch werden dem Zeilenanfang der naechsten Row

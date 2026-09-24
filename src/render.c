@@ -408,10 +408,14 @@ static void rows_push(BtnRow **rows, size_t *count, size_t *cap,
  * Zeichen), weil editor_line_bounds selbst jedes Mal von vorn scannt) -
  * Zeilenenden ('\n') und Umbruchpunkte werden in derselben Schleife
  * erkannt, macht die Layout-Berechnung O(Zeichen) statt O(Zeilen*Zeichen). */
-BtnRow *btn_layout_build(Editor *ed, double text_width, size_t *out_row_count) {
-    long chars_per_row = chars_per_row_for(text_width);
-
+static BtnRow *layout_build(Editor *ed, long chars_per_row, size_t *out_row_count, size_t *out_word_count) {
     size_t cap = 0, count = 0;
+    /* Woerter im selben Durchlauf zaehlen (dieselbe Regel wie
+     * editor_word_count()) - spart der Statuszeile einen eigenen Vollscan
+     * pro Frame. Gezaehlt wird nur dort, wo i tatsaechlich vorrueckt: nach
+     * einem erzwungenen Umbruch wird dasselbe Byte erneut betrachtet. */
+    size_t words = 0;
+    int in_word = 0;
     BtnRow *rows = NULL;
 
     size_t total_len = editor_length(ed);
@@ -430,6 +434,7 @@ BtnRow *btn_layout_build(Editor *ed, double text_width, size_t *out_row_count) {
             row_start = line_start;
             last_break = (size_t)-1;
             col = 0;
+            in_word = 0;
             i++;
             continue;
         }
@@ -473,25 +478,116 @@ BtnRow *btn_layout_build(Editor *ed, double text_width, size_t *out_row_count) {
         if (c == ' ' || c == '\t') {
             last_break = i + 1;
         }
+        int w = editor_is_word_char(c);
+        if (w && !in_word) {
+            words++;
+        }
+        in_word = w;
         col = new_col;
         i++;
     }
 
     *out_row_count = count;
+    if (out_word_count) {
+        *out_word_count = words;
+    }
     return rows;
+}
+
+BtnRow *btn_layout_build(Editor *ed, double text_width, size_t *out_row_count) {
+    return layout_build(ed, chars_per_row_for(text_width), out_row_count, NULL);
+}
+
+/* Ein-Eintrags-Cache fuer das Bildschirm-Layout des gerade gezeichneten
+ * Dokuments. Vorher baute jede Taste das komplette Layout (voller Durchlauf
+ * ueber den Puffer) zwei- bis dreimal: sync_scroll_to_cursor(), das Zeichnen
+ * selbst, beim Ziehen mit der Maus zusaetzlich btn_hit_test(). Das Layout
+ * haengt nur vom Inhalt (edit_seq - global eindeutig, siehe editor.h) und
+ * von chars_per_row ab; Schriftgroesse/Fensterbreite stecken beide in
+ * chars_per_row. */
+static struct {
+    int valid;
+    size_t edit_seq;
+    long chars_per_row;
+    BtnRow *rows;
+    size_t row_count;
+    size_t word_count;
+} g_layout;
+
+const BtnRow *btn_layout_get(Editor *ed, double text_width, size_t *out_row_count) {
+    long chars_per_row = chars_per_row_for(text_width);
+    if (!g_layout.valid || g_layout.edit_seq != ed->edit_seq || g_layout.chars_per_row != chars_per_row) {
+        free(g_layout.rows);
+        g_layout.rows = layout_build(ed, chars_per_row, &g_layout.row_count, &g_layout.word_count);
+        g_layout.edit_seq = ed->edit_seq;
+        g_layout.chars_per_row = chars_per_row;
+        g_layout.valid = 1;
+    }
+    *out_row_count = g_layout.row_count;
+    return g_layout.rows;
 }
 
 void btn_layout_free(BtnRow *rows) {
     free(rows);
 }
 
+/* Letzte Row mit start <= offset. Die Row-Starts sind streng monoton
+ * steigend (jede Row beginnt hinter der vorherigen, siehe layout_build()),
+ * deshalb binaere statt linearer Suche - wird pro Tastendruck mehrfach
+ * aufgerufen, bei 100k Zeilen waren das sonst 100k Vergleiche pro Aufruf. */
 size_t btn_layout_row_for_offset(const BtnRow *rows, size_t row_count, size_t offset) {
-    for (size_t i = 0; i + 1 < row_count; i++) {
-        if (offset < rows[i + 1].start) {
-            return i;
+    if (row_count == 0) {
+        return 0;
+    }
+    size_t lo = 0, hi = row_count;
+    while (hi - lo > 1) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (rows[mid].start <= offset) {
+            lo = mid;
+        } else {
+            hi = mid;
         }
     }
-    return row_count > 0 ? row_count - 1 : 0;
+    return lo;
+}
+
+/* Index der ersten Row der logischen Zeile, zu der Row r gehoert. */
+static size_t first_row_of_line(const BtnRow *rows, size_t r) {
+    while (r > 0 && rows[r].is_continuation) {
+        r--;
+    }
+    return r;
+}
+
+/* Beginn und Laenge (ohne '\n') der logischen Zeile, zu der Row r gehoert -
+ * aus den Rows abgeleitet statt per editor_line_bounds(), das bei JEDEM
+ * Aufruf ab Byte 0 zaehlt (pro sichtbarer Zeile ein Vollscan des Dokuments,
+ * bei 9 MB rund 0,8 s pro Frame). Die Rows einer Zeile liegen lueckenlos
+ * hintereinander, die letzte endet genau vor dem '\n'. */
+static void line_bounds_from_rows(const BtnRow *rows, size_t row_count, size_t r,
+                                  size_t *out_start, size_t *out_len) {
+    size_t first = first_row_of_line(rows, r);
+    size_t last = r;
+    while (last + 1 < row_count && rows[last + 1].is_continuation) {
+        last++;
+    }
+    *out_start = rows[first].start;
+    *out_len = rows[last].start + rows[last].len - rows[first].start;
+}
+
+/* Index der ersten Row der logischen Zeile line (binaere Suche - logical_line
+ * ist ueber die Rows monoton steigend, jede Zeile hat mindestens eine Row). */
+static size_t row_of_line_start(const BtnRow *rows, size_t row_count, size_t line) {
+    size_t lo = 0, hi = row_count;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (rows[mid].logical_line < line) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo < row_count ? lo : row_count - 1;
 }
 
 /* ---- Zeichnen ---- */
@@ -538,7 +634,7 @@ static void draw_gutter(CGContextRef ctx, CGRect bounds, const BtnRow *rows, siz
     /* attrs ist gecacht (siehe get_gutter_attrs()) - keine Freigabe hier. */
 }
 
-static void draw_footer(CGContextRef ctx, CGRect bounds, Editor *ed) {
+static void draw_footer(CGContextRef ctx, CGRect bounds, Editor *ed, const BtnRow *rows, size_t row_count) {
     set_fill(ctx, col_footer_bg());
     CGContextFillRect(ctx, CGRectMake(0, 0, bounds.size.width, BTN_FOOTER_HEIGHT));
 
@@ -549,15 +645,21 @@ static void draw_footer(CGContextRef ctx, CGRect bounds, Editor *ed) {
 
     CFDictionaryRef attrs = get_footer_attrs();
 
-    size_t cur_line = editor_offset_to_line(ed, ed->cursor);
-    size_t col = editor_visual_column(ed, ed->cursor);
+    /* Alles aus dem ohnehin gebauten Layout statt vier Vollscans pro Frame
+     * (offset_to_line, visual_column mit zwei weiteren, line_count,
+     * word_count). Die Spalte zaehlt ab dem Anfang der LOGISCHEN Zeile (erste
+     * Row der Zeile), nicht ab der umgebrochenen Row - wie vorher. */
+    size_t cur_row = btn_layout_row_for_offset(rows, row_count, ed->cursor);
+    size_t cur_line = rows[cur_row].logical_line;
+    size_t col = editor_visual_column_in_range(ed, rows[first_row_of_line(rows, cur_row)].start, ed->cursor);
+    size_t line_count = rows[row_count - 1].logical_line + 1;
 
     char left[64];
     snprintf(left, sizeof(left), "Zeile %zu, Spalte %zu", cur_line + 1, col + 1);
 
     char right[160];
     snprintf(right, sizeof(right), "%zu Zeilen | %zu Woerter | %zu Zeichen | UTF-8",
-             editor_line_count(ed), editor_word_count(ed), editor_length(ed));
+             line_count, g_layout.word_count, editor_length(ed));
 
     double text_y = (BTN_FOOTER_HEIGHT - g_font_size) / 2.0 + 3.0;
 
@@ -845,32 +947,97 @@ void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_lab
      * get_dim_attrs()/get_accent_attrs()) - keine Freigabe hier. */
 }
 
-/* Kommentar-Zustand direkt vor logical_line, indem alle vorherigen Zeilen
- * einmal (nur fuers Zustands-Tracking, max_tokens=0) tokenisiert werden -
- * noetig, damit mehrzeilige Blockkommentare beim Scrollen mitten ins
- * Dokument korrekt erkannt werden. Ein einziger Vorwaertsdurchlauf (statt
- * pro Zeile editor_line_bounds() aufzurufen, was selbst wieder von vorn
- * scannt) haelt das bei O(Zeichen) statt O(Zeilen*Zeichen). */
-static int comment_state_before_line(Editor *ed, const BtnLangSpec *lang, size_t logical_line) {
-    int state = 0;
-    if (logical_line == 0) {
-        return state;
+/* Kommentar-Zustand VOR jeder logischen Zeile (states[i] = Zustand vor
+ * Zeile i), inkrementell gepflegt. Vorher wurde bei JEDEM Frame jede Zeile
+ * oberhalb des Sichtfensters neu tokenisiert (bei 9 MB rund 0,25 s pro
+ * Tastendruck). Jetzt: nach einer Aenderung bleiben alle Zustaende fuer
+ * Zeilen gueltig, die vor dem kleinsten geaenderten Offset beginnen (die
+ * Bytes davor sind unveraendert, siehe editor_changed_from()); ab dort wird
+ * nur so weit neu tokenisiert, wie das Sichtfenster es braucht. Der Zustand
+ * haengt nur von den vorherigen Zeilen ab, daher ist das exakt. */
+static struct {
+    size_t edit_seq;
+    const BtnLangSpec *lang;
+    int *states;
+    size_t known;
+    size_t cap;
+} g_cstate;
+
+static int cstate_reserve(size_t n) {
+    if (n <= g_cstate.cap) {
+        return 1;
+    }
+    size_t cap = g_cstate.cap ? g_cstate.cap : 256;
+    while (cap < n) {
+        cap *= 2;
+    }
+    int *grown = realloc(g_cstate.states, cap * sizeof(int));
+    if (!grown) {
+        return 0;
+    }
+    g_cstate.states = grown;
+    g_cstate.cap = cap;
+    return 1;
+}
+
+static int comment_state_before_line(Editor *ed, const BtnLangSpec *lang, const BtnRow *rows,
+                                     size_t row_count, size_t target_line) {
+    size_t known = 0;
+    if (g_cstate.known > 0 && g_cstate.lang == lang) {
+        size_t change_at = editor_changed_from(ed, g_cstate.edit_seq);
+        if (change_at == (size_t)-1) {
+            known = g_cstate.known;
+        } else {
+            size_t len = editor_length(ed);
+            if (change_at > len) {
+                change_at = len;
+            }
+            /* Zeilen, die bei oder vor change_at beginnen, haengen nur von
+             * unveraenderten Bytes ab: das sind die Zeilen 0..(Anzahl '\n'
+             * vor change_at) - und diese Anzahl ist die logische Zeile der
+             * Row, in der change_at liegt. */
+            size_t unchanged_lines = rows[btn_layout_row_for_offset(rows, row_count, change_at)].logical_line + 1;
+            known = g_cstate.known < unchanged_lines ? g_cstate.known : unchanged_lines;
+        }
+    }
+    g_cstate.edit_seq = ed->edit_seq;
+    g_cstate.lang = lang;
+    editor_rebase_changes(ed);
+
+    if (known == 0) {
+        if (!cstate_reserve(1)) {
+            g_cstate.known = 0;
+            return 0;
+        }
+        g_cstate.states[0] = 0;
+        known = 1;
+    }
+    g_cstate.known = known;
+    if (target_line < known) {
+        return g_cstate.states[target_line];
     }
 
+    size_t line = known - 1;
+    int state = g_cstate.states[line];
+    size_t line_start = rows[row_of_line_start(rows, row_count, line)].start;
     size_t total_len = editor_length(ed);
-    size_t li = 0;
-    size_t line_start = 0;
-
-    for (size_t i = 0; i <= total_len && li < logical_line; i++) {
-        if (i == total_len || gb_char_at(&ed->buffer, i) == '\n') {
-            size_t line_len = i - line_start;
-            char *text = gb_copy_range(&ed->buffer, line_start, line_len);
-            int ends;
-            btn_highlight_tokenize(text, line_len, lang, state, &ends, NULL, 0);
-            free(text);
-            state = ends;
-            li++;
-            line_start = i + 1;
+    for (size_t i = line_start; i < total_len && line < target_line; i++) {
+        if (gb_char_at(&ed->buffer, i) != '\n') {
+            continue;
+        }
+        size_t line_len = i - line_start;
+        char *text = gb_copy_range(&ed->buffer, line_start, line_len);
+        int ends;
+        btn_highlight_tokenize(text, line_len, lang, state, &ends, NULL, 0);
+        free(text);
+        state = ends;
+        line++;
+        line_start = i + 1;
+        /* Kein Speicher fuers Merken: trotzdem weiterrechnen, damit der
+         * zurueckgegebene Zustand stimmt - nur eben ohne Cache-Gewinn. */
+        if (g_cstate.known == line && cstate_reserve(line + 1)) {
+            g_cstate.states[line] = state;
+            g_cstate.known = line + 1;
         }
     }
     return state;
@@ -916,7 +1083,7 @@ void btn_compute_line_comment_states(Editor *ed, const BtnLangSpec *lang, int *o
  * Kennt bewusst keine Selektion/Cursor/Klammer-Hervorhebung - das bleibt
  * Sache der jeweiligen Aufrufer (Bildschirm hat sie, Druck nicht). */
 static void draw_row_line(CGContextRef ctx, Editor *ed, const BtnLangSpec *lang,
-                           const BtnRow *rows, size_t r, double x, double top_y,
+                           const BtnRow *rows, size_t row_count, size_t r, double x, double top_y,
                            CFDictionaryRef attrs, size_t *cached_line, size_t *cached_line_start,
                            int *comment_state, BtnToken *tokens, size_t *token_count) {
     size_t row_start = rows[r].start;
@@ -927,7 +1094,7 @@ static void draw_row_line(CGContextRef ctx, Editor *ed, const BtnLangSpec *lang,
         size_t ll = rows[r].logical_line;
         if (ll != *cached_line) {
             size_t ls, llen;
-            editor_line_bounds(ed, ll, &ls, &llen);
+            line_bounds_from_rows(rows, row_count, r, &ls, &llen);
             char *text = gb_copy_range(&ed->buffer, ls, llen);
             int ends;
             *token_count = btn_highlight_tokenize(text, llen, lang, *comment_state, &ends,
@@ -1048,7 +1215,7 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
 
     double text_width = btn_layout_text_width(bounds);
     size_t row_count;
-    BtnRow *rows = btn_layout_build(ed, text_width, &row_count);
+    const BtnRow *rows = btn_layout_get(ed, text_width, &row_count);
 
     int has_sel = editor_has_selection(ed);
     size_t sel_start = has_sel ? editor_selection_start(ed) : 0;
@@ -1083,7 +1250,7 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
     int comment_state = 0;
     if (lang && row_count > 0) {
         size_t first_row = (size_t)scroll_row < row_count ? (size_t)scroll_row : row_count - 1;
-        comment_state = comment_state_before_line(ed, lang, rows[first_row].logical_line);
+        comment_state = comment_state_before_line(ed, lang, rows, row_count, rows[first_row].logical_line);
     }
 
     for (size_t r = (size_t)scroll_row; r < row_count; r++) {
@@ -1154,7 +1321,7 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
             }
         }
 
-        draw_row_line(ctx, ed, lang, rows, r, GUTTER_WIDTH + LEFT_PADDING, top_y, attrs,
+        draw_row_line(ctx, ed, lang, rows, row_count, r, GUTTER_WIDTH + LEFT_PADDING, top_y, attrs,
                        &cached_line, &cached_line_start, &comment_state, tokens, &token_count);
     }
 
@@ -1170,9 +1337,8 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
     }
 
     draw_gutter(ctx, bounds, rows, row_count, scroll_row);
-    draw_footer(ctx, bounds, ed);
-
-    btn_layout_free(rows);
+    draw_footer(ctx, bounds, ed, rows, row_count);
+    /* rows gehoert dem Layout-Cache (btn_layout_get()) - nicht freigeben. */
     /* attrs ist gecacht (siehe get_text_attrs()) - keine Freigabe hier. */
 }
 
@@ -1230,7 +1396,7 @@ void btn_render_print_page(CGContextRef ctx, CGRect page_rect, Editor *ed, const
         if (top_y < page_rect.origin.y + PRINT_MARGIN) {
             break;
         }
-        draw_row_line(ctx, ed, lang, rows, r, x, top_y, attrs,
+        draw_row_line(ctx, ed, lang, rows, row_count, r, x, top_y, attrs,
                        &cached_line, &cached_line_start, &comment_state, tokens, &token_count);
     }
 
@@ -1247,7 +1413,7 @@ size_t btn_hit_test(Editor *ed, CGRect bounds, double x, double y, long scroll_r
     double char_width = get_char_width();
     double text_width = btn_layout_text_width(bounds);
     size_t row_count;
-    BtnRow *rows = btn_layout_build(ed, text_width, &row_count);
+    const BtnRow *rows = btn_layout_get(ed, text_width, &row_count);
 
     double rel_y = bounds.size.height - TOP_PADDING - y;
     long row = scroll_row + (long)(rel_y / LINE_HEIGHT);
@@ -1265,6 +1431,5 @@ size_t btn_hit_test(Editor *ed, CGRect bounds, double x, double y, long scroll_r
     }
 
     size_t offset = editor_offset_for_column_in_range(ed, rows[row].start, rows[row].len, (size_t)col);
-    btn_layout_free(rows);
     return offset;
 }
