@@ -5,11 +5,13 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
 
 ## Bekannte Einschränkungen (bewusst zurückgestellt, kein akuter Bug)
 
-- Cursor-/Selektions-/Hit-Testing-Spaltenrechnung (`editor_visual_column_in_range`
-  & co.) zählt UTF-8-**Bytes**, nicht Codepoints - bei nicht-ASCII-Text
-  (Umlaute, Emoji, CJK) kann die Cursor-Darstellung/Klick-Position von der
-  visuellen Spalte leicht abweichen. Durchgängig auf Codepoints umzustellen
-  wäre eine größere, zusammenhängende Änderung an mehreren Stellen.
+- Cursor-/Selektions-/Hit-Testing-Spaltenrechnung zählt seit dem Codepoint-Fix
+  (`editor_visual_column_in_range`) jedes Zeichen als genau EINE Spalte -
+  korrekt für Umlaute/Akzente & die meisten Emoji. Für tatsächlich
+  **doppelbreite** Zeichen (CJK-Schriftzeichen, manche Emoji) stimmt das aber
+  weiterhin nicht exakt mit der von Menlo tatsächlich gerenderten Breite
+  überein (die App kennt keine East-Asian-Width-Klassifizierung) - Cursor-
+  Darstellung/Klick-Position kann bei solchem Text leicht abweichen.
 - Klammer-/Anführungszeichen-Matching (`editor_find_matching_bracket`) kennt
   keine Strings/Kommentare - eine Klammer oder ein Anführungszeichen
   innerhalb eines String-Literals oder Kommentars kann in seltenen Fällen
@@ -45,11 +47,3 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
   könnten sich eine gemeinsame Funktion teilen.
 - `utf16_offset_for_byte_offset` (render.c) und `utf8_forward_len`/
   `utf8_backward_len` (editor.c) sind zwei unabhängige UTF-8-Implementierungen.
-- `perform_replace_all()` kopiert bei jedem gefundenen Treffer das komplette
-  Dokument neu (`editor_copy_all`) statt einmal vorab - O(Treffer × Länge)
-  statt O(Länge). Für die Zielgröße "schlanker Editor" bisher unauffällig.
-- render.c erzeugt Farben/`CFDictionaryRef`-Attribute für Tab-/Suchleiste bei
-  jedem Redraw neu, statt sie wie `get_token_color()` es für Syntax-Farben tut
-  zu cachen.
-- `main.c`s `on_draw()` baut bei jedem Redraw (jeder Tastendruck) alle
-  Tab-Labels neu auf, auch die von unveränderten Hintergrund-Tabs.

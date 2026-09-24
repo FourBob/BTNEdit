@@ -382,10 +382,23 @@ size_t editor_tab_advance(size_t col) {
     return advance_tab_stop(col);
 }
 
+/* Zaehlt Zeichen (Codepoints), nicht Bytes - ein mehrbytiges UTF-8-Zeichen
+ * (Umlaut, Akzent, Emoji, ...) darf nur EINE visuelle Spalte breit sein,
+ * genau wie CoreText es beim tatsaechlichen Zeichnen handhabt (siehe
+ * draw_row_line() in render.c, das den kompletten Zeilentext an CoreText
+ * uebergibt statt selbst Byte fuer Byte zu positionieren). Ohne dieses
+ * Ueberspringen der Fortsetzungsbytes (10xxxxxx) wuerde z.B. "ä" (2 Bytes)
+ * als 2 Spalten zaehlen - der von HIER aus berechnete Cursor/Selektions-x
+ * (col * char_width in render.c) liefe dann bei jedem mehrbytigen Zeichen
+ * in derselben Zeile weiter vom tatsaechlich gezeichneten Text weg. */
 size_t editor_visual_column_in_range(Editor *ed, size_t range_start, size_t offset) {
     size_t col = 0;
     for (size_t i = range_start; i < offset; i++) {
-        col = (gb_char_at(&ed->buffer, i) == '\t') ? advance_tab_stop(col) : col + 1;
+        unsigned char c = (unsigned char)gb_char_at(&ed->buffer, i);
+        if ((c & 0xC0) == 0x80) {
+            continue; /* Fortsetzungsbyte - gehoert zum vorherigen Zeichen */
+        }
+        col = (c == '\t') ? advance_tab_stop(col) : col + 1;
     }
     return col;
 }
@@ -395,8 +408,14 @@ size_t editor_offset_for_column_in_range(Editor *ed, size_t range_start, size_t 
     size_t col = 0;
     size_t i = range_start;
     while (i < range_end && col < target_col) {
-        col = (gb_char_at(&ed->buffer, i) == '\t') ? advance_tab_stop(col) : col + 1;
-        i++;
+        char c = gb_char_at(&ed->buffer, i);
+        col = (c == '\t') ? advance_tab_stop(col) : col + 1;
+        /* Ganze Byte-Laenge des Zeichens ueberspringen (nicht nur 1 Byte),
+         * sonst wuerde i bei einem mehrbytigen Zeichen mitten in dessen
+         * Fortsetzungsbytes stehen bleiben, statt am Anfang des naechsten
+         * echten Zeichens - siehe editor_visual_column_in_range() oben fuer
+         * dasselbe Grundproblem in der jeweils anderen Richtung. */
+        i += utf8_forward_len(ed, i, range_end);
     }
     return i;
 }
