@@ -36,6 +36,19 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
    Wortumbruch an/aus, Kodierung beim Öffnen/Sichern wählen (heute: Bytes
    unverändert, Anzeige als UTF-8 mit Latin-1-Fallback), Suche über alle
    Tabs.
+8. **KI-Vervollständigung mit lokalem LLM (optional, standardmäßig aus).**
+   Kein eingebautes Modell: BTNEdit fragt per HTTP einen lokal laufenden
+   Server an (Ollama oder llama-server), Adresse und Modellname in der
+   Prefs-Datei; ohne Server fehlt die Funktion einfach. Code-Modell mit
+   Fill-in-the-Middle (z.B. Qwen2.5-Coder 1.5B/7B), Kontext vor und nach
+   dem Cursor. Ablauf: Anfrage nach ca. 300 ms Tipppause, jeder Tastendruck
+   bricht sie ab; Vorschlag als grauer Geistertext hinter dem Cursor, Tab
+   übernimmt (ein Undo-Schritt), Escape/Weitertippen verwirft. Umsetzung:
+   `NSURLSession` in shim.m mit Callback (UI blockiert nie), Geistertext in
+   render.c ohne Puffer-Änderung (Umbruch/Cursor beachten), Timer/Abbruch/
+   Tab-Belegung in main.c. Schalter global oder pro Sprache (für Code
+   nützlich, für Fließtext eher störend). Erst nach Punkt 1, weil beide den
+   Tastatur-Pfad in shim.m umbauen.
 
 ## Bekannte Einschränkungen (bewusst zurückgestellt, kein akuter Bug)
 
