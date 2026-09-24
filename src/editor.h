@@ -138,10 +138,20 @@ size_t editor_offset_for_column_in_range(Editor *ed, size_t range_start, size_t 
 /* Naechster Tabstopp ab der gegebenen Spalte. */
 size_t editor_tab_advance(size_t col);
 
-/* Anfang der UTF-8-Sequenz, die das Byte bei pos enthaelt (pos selbst,
- * falls es schon ein Lead-/ASCII-Byte ist). Fuer render.c's Wortumbruch,
- * damit ein erzwungener Umbruch (kein Leerzeichen gefunden) nie mitten in
- * einem mehrbytigen Zeichen landet. */
+/* Was im ganzen Programm als EIN Zeichen gilt: eine gueltige UTF-8-Sequenz
+ * (RFC 3629: keine Ueberlaengen, keine Surrogate, hoechstens U+10FFFF) ist
+ * ein Zeichen; jedes andere Byte (Latin-1-Datei, abgeschnittene Sequenz,
+ * verirrtes Fortsetzungsbyte) ist fuer sich ein Zeichen und wird als
+ * ISO-8859-1 gezeichnet. Cursorbewegung, Loeschen, Spalten, Umbruch, Undo
+ * und Anzeige benutzen alle diese Regel - nur so bleiben sie konsistent.
+ * btn_utf8_char_len: Laenge (1-4) des Zeichens am Anfang von s, avail >= 1
+ * Bytes verfuegbar. editor_char_len: dasselbe fuer den Puffer an pos, nicht
+ * ueber limit hinaus (pos < limit). */
+size_t btn_utf8_char_len(const unsigned char *s, size_t avail);
+size_t editor_char_len(Editor *ed, size_t pos, size_t limit);
+
+/* Anfang des Zeichens (siehe oben), das das Byte bei pos enthaelt - pos
+ * selbst, wenn dort schon ein Zeichen beginnt. */
 size_t editor_utf8_seq_start(Editor *ed, size_t pos);
 
 /* Setzt suppress_coalesce - von jeder Cursor-Neupositionierung ausserhalb

@@ -308,74 +308,60 @@ static double get_char_width(void) {
     return g_char_width;
 }
 
-/* CoreText hat eine eigene, von uns unabhaengige Tab-Stop-Logik - wuerden
- * wir ein rohes '\t'-Byte durchreichen, wuerde die Zeichenposition nicht
- * mehr zu unserer eigenen (tab-bewussten) Spaltenrechnung passen, die auch
- * fuer Cursor/Selektion/Hit-Testing gilt. Deshalb wird pro Row eine reine
- * Anzeige-Kopie erzeugt, in der Tabs bereits zu Leerzeichen expandiert sind. */
-static char *expand_tabs_for_display(const char *text, size_t len, size_t *out_len) {
-    size_t cap = len + 1;
-    char *out = malloc(cap);
+/* Dekodiert eine Row fuer CoreText in UTF-16 - Zeichen fuer Zeichen nach
+ * derselben Regel wie Cursor, Spalten und Umbruch (btn_utf8_char_len()):
+ * gueltige UTF-8-Sequenz -> ihr Codepoint, jedes andere Byte -> das
+ * gleichwertige ISO-8859-1-Zeichen. Vorher wurde die ganze Row entweder als
+ * UTF-8 oder (bei einem einzigen ungueltigen Byte) komplett als Latin-1
+ * dekodiert - dann wurde auch ein korrektes "ae" auf derselben Zeile als zwei
+ * Zeichen gezeichnet, waehrend der Cursor es als eines zaehlte. Tabs werden
+ * gleich hier zu Leerzeichen bis zum naechsten Tabstopp expandiert (CoreText
+ * hat eine eigene Tab-Logik, die nicht zu unserer Spaltenrechnung passt).
+ * byte_to_u16[k] ist der UTF-16-Index des Zeichens, zu dem Byte k gehoert
+ * (byte_to_u16[len] = Gesamtlaenge) - daraus werden die Farbbereiche der
+ * Syntax-Tokens direkt abgelesen. out braucht Platz fuer
+ * len * max(BTN_TAB_WIDTH, 2) Einheiten. */
+static size_t decode_row_for_display(const unsigned char *raw, size_t len, UniChar *out, size_t *byte_to_u16) {
     size_t n = 0;
     size_t col = 0;
-
-    for (size_t i = 0; i < len; i++) {
-        char c = text[i];
-        size_t needed = (c == '\t') ? (editor_tab_advance(col) - col) : 1;
-        if (n + needed > cap) {
-            cap = (n + needed) * 2;
-            out = realloc(out, cap);
+    size_t i = 0;
+    while (i < len) {
+        size_t clen = btn_utf8_char_len(raw + i, len - i);
+        for (size_t k = 0; k < clen; k++) {
+            byte_to_u16[i + k] = n;
         }
-        if (c == '\t') {
-            for (size_t s = 0; s < needed; s++) {
+        unsigned char b = raw[i];
+        if (b == '\t') {
+            size_t stop = editor_tab_advance(col);
+            while (col < stop) {
                 out[n++] = ' ';
+                col++;
             }
-            col += needed;
         } else {
-            out[n++] = c;
+            unsigned long cp;
+            if (clen == 1) {
+                cp = b;
+            } else if (clen == 2) {
+                cp = ((unsigned long)(b & 0x1F) << 6) | (raw[i + 1] & 0x3F);
+            } else if (clen == 3) {
+                cp = ((unsigned long)(b & 0x0F) << 12) | ((unsigned long)(raw[i + 1] & 0x3F) << 6) | (raw[i + 2] & 0x3F);
+            } else {
+                cp = ((unsigned long)(b & 0x07) << 18) | ((unsigned long)(raw[i + 1] & 0x3F) << 12) |
+                     ((unsigned long)(raw[i + 2] & 0x3F) << 6) | (raw[i + 3] & 0x3F);
+            }
+            if (cp >= 0x10000) {
+                cp -= 0x10000;
+                out[n++] = (UniChar)(0xD800 + (cp >> 10));
+                out[n++] = (UniChar)(0xDC00 + (cp & 0x3FF));
+            } else {
+                out[n++] = (UniChar)cp;
+            }
             col++;
         }
+        i += clen;
     }
-
-    *out_len = n;
-    return out;
-}
-
-/* Byte-Offset INNERHALB der von expand_tabs_for_display() erzeugten Anzeige-
- * Kopie, der zum gegebenen Puffer-Bereich [range_start, offset) gehoert -
- * bewusst NICHT dasselbe wie editor_visual_column_in_range() (die zaehlt
- * seit dem UTF-8-Fix dort echte Zeichen/Spalten, nicht Bytes): expand_tabs_
- * for_display() kopiert jedes Nicht-Tab-Byte (auch UTF-8-Fortsetzungsbytes)
- * unveraendert 1:1 und ersetzt nur Tabs durch mehrere Leerzeichen-Bytes -
- * draw_row_line() braucht fuer die Indizierung in disp[] (siehe
- * utf16_offset_for_byte_offset() unten) deshalb weiterhin einen reinen
- * Byte-Zaehler mit Tab-Vorschub, keine Zeichenspalte. */
-static size_t disp_byte_offset_in_range(Editor *ed, size_t range_start, size_t offset) {
-    size_t col = 0;
-    for (size_t i = range_start; i < offset; i++) {
-        col = (gb_char_at(&ed->buffer, i) == '\t') ? editor_tab_advance(col) : col + 1;
-    }
-    return col;
-}
-
-/* CFAttributedString-Ranges zaehlen in UTF-16-Code-Units, waehrend die
- * Offsets, die draw_row_line() hier hereinreicht (siehe
- * disp_byte_offset_in_range()), UTF-8-Bytes sind. Fuer reinen ASCII-Text
- * ist das identisch, aber jedes mehrbytige
- * Zeichen wuerde sonst eine zu lange/falsche CFRange erzeugen. Dekodiert
- * einfach den Praefix bis byte_offset erneut und misst dessen echte Laenge -
- * das ist fuer die kurzen Zeilen, die wir hier behandeln, guenstig genug. */
-static CFIndex utf16_offset_for_byte_offset(const char *utf8, size_t byte_offset) {
-    if (byte_offset == 0) {
-        return 0;
-    }
-    CFStringRef prefix = CFStringCreateWithBytes(NULL, (const UInt8 *)utf8, (CFIndex)byte_offset,
-                                                  kCFStringEncodingUTF8, false);
-    CFIndex len = prefix ? CFStringGetLength(prefix) : 0;
-    if (prefix) {
-        CFRelease(prefix);
-    }
-    return len;
+    byte_to_u16[len] = n;
+    return n;
 }
 
 /* ---- Wortumbruch-Layout ---- */
@@ -413,7 +399,9 @@ static BtnRow *layout_build(Editor *ed, long chars_per_row, size_t *out_row_coun
     /* Woerter im selben Durchlauf zaehlen (dieselbe Regel wie
      * editor_word_count()) - spart der Statuszeile einen eigenen Vollscan
      * pro Frame. Gezaehlt wird nur dort, wo i tatsaechlich vorrueckt: nach
-     * einem erzwungenen Umbruch wird dasselbe Byte erneut betrachtet. */
+     * einem erzwungenen Umbruch wird dasselbe Zeichen erneut betrachtet.
+     * Zeichenweise statt byteweise zu zaehlen ergibt dieselbe Zahl, weil
+     * kein Byte >= 0x80 als Wortzeichen gilt. */
     size_t words = 0;
     int in_word = 0;
     BtnRow *rows = NULL;
@@ -440,34 +428,21 @@ static BtnRow *layout_build(Editor *ed, long chars_per_row, size_t *out_row_coun
         }
 
         char c = gb_char_at(&ed->buffer, i);
-        /* Fortsetzungsbytes (10xxxxxx) treiben col NICHT voran - ein
-         * mehrbytiges UTF-8-Zeichen (Umlaut, Akzent, ...) ist genau EINE
-         * visuelle Spalte breit, exakt wie editor_visual_column_in_range()
-         * in editor.c es fuer Cursor/Selektion zaehlt. Beide MUESSEN
-         * uebereinstimmen, sonst weicht die Umbruchentscheidung hier von
-         * der Spalte ab, an der der Cursor tatsaechlich gezeichnet wird. */
-        int is_continuation = (((unsigned char)c) & 0xC0) == 0x80;
-        long new_col = is_continuation ? col : (c == '\t') ? (long)editor_tab_advance((size_t)col) : col + 1;
+        /* Zeichenweise (btn_utf8_char_len()), nicht byteweise - ein
+         * mehrbytiges Zeichen ist genau EINE Spalte, exakt wie
+         * editor_visual_column_in_range() fuer Cursor/Selektion und
+         * decode_row_for_display() fuers Zeichnen zaehlen. i steht dadurch
+         * immer auf einem Zeichenanfang, ein Umbruch kann nie mitten in
+         * einem Zeichen landen. */
+        /* ASCII ist immer genau ein Zeichen - Schnellpfad, der Umbruch laeuft
+         * bei jeder Inhaltsaenderung ueber das ganze Dokument. */
+        size_t clen = ((unsigned char)c < 0x80) ? 1 : editor_char_len(ed, i, total_len);
+        long new_col = (c == '\t') ? (long)editor_tab_advance((size_t)col) : col + 1;
 
         if (new_col > chars_per_row && i > row_start) {
-            size_t break_at;
-            if (last_break != (size_t)-1 && last_break > row_start) {
-                break_at = last_break;
-            } else {
-                /* Kein Leerzeichen zum Umbrechen gefunden - erzwungener
-                 * Umbruch bei i. Da Fortsetzungsbytes oben col nicht mehr
-                 * vorantreiben, kann dieser Zweig durch eine laufende
-                 * Mehrbyte-Sequenz gar nicht mehr ausgeloest werden (die
-                 * Sequenz haette sonst schon beim Lead-Byte umgebrochen) -
-                 * editor_utf8_seq_start() bleibt trotzdem als Verteidigung
-                 * in der Tiefe stehen, falls i aus einem anderen Grund
-                 * jemals mitten in einer Sequenz landet. Faellt seq_start
-                 * auf oder vor row_start (das Zeichen allein ist breiter
-                 * als die ganze Zeile), bleibt i als letzter Ausweg, um
-                 * weiterhin garantiert voranzukommen. */
-                size_t seq_start = editor_utf8_seq_start(ed, i);
-                break_at = (seq_start > row_start) ? seq_start : i;
-            }
+            /* Umbruch hinter dem letzten Leerzeichen/Tab der Row, sonst
+             * (ein Wort breiter als die Zeile) erzwungen vor diesem Zeichen. */
+            size_t break_at = (last_break != (size_t)-1 && last_break > row_start) ? last_break : i;
             rows_push(&rows, &count, &cap, row_start, break_at - row_start, logical_line, row_start != line_start);
             row_start = break_at;
             col = (long)editor_visual_column_in_range(ed, row_start, i);
@@ -484,7 +459,7 @@ static BtnRow *layout_build(Editor *ed, long chars_per_row, size_t *out_row_coun
         }
         in_word = w;
         col = new_col;
-        i++;
+        i += clen;
     }
 
     *out_row_count = count;
@@ -1114,40 +1089,21 @@ static void draw_row_line(CGContextRef ctx, Editor *ed, const BtnLangSpec *lang,
     }
 
     char *raw = gb_copy_range(&ed->buffer, row_start, row_len);
-    size_t disp_len;
-    char *disp = expand_tabs_for_display(raw, row_len, &disp_len);
-    free(raw);
-
-    CFStringRef lineStr = CFStringCreateWithBytes(NULL, (const UInt8 *)disp,
-                                                   (CFIndex)disp_len, kCFStringEncodingUTF8, false);
-    /* Merkt sich, welche Kodierung tatsaechlich verwendet wurde - die
-     * Token-Farbbereiche unten muessen byte->UTF-16-Offsets passend zu
-     * GENAU dieser Kodierung berechnen, nicht blind UTF-8 annehmen (siehe
-     * Kommentar bei used_latin1_fallback weiter unten). */
-    int used_latin1_fallback = 0;
-    if (!lineStr) {
-        /* disp ist keine gueltige UTF-8-Sequenz - kommt vor, wenn eine
-         * Binaerdatei als Text geoeffnet wird (z.B. eine Binaer-STL-Datei
-         * ganz ohne Zeilenumbruch: dann ist praktisch das gesamte Dokument
-         * bis auf einen etwaigen ASCII-Kopf eine einzige riesige "Zeile"
-         * voller beliebiger Bytes). Ohne Fallback wuerde diese Zeile
-         * komplett uebersprungen (unsichtbar) - bei einer solchen Datei
-         * blieb dadurch quasi nur die allererste, noch gueltige Zeile
-         * sichtbar. ISO-8859-1 bildet JEDEN Byte-Wert 0-255 auf einen
-         * gueltigen Codepoint ab (kann nie fehlschlagen) und zeigt so
-         * wenigstens irgendetwas an, statt die Zeile verschwinden zu
-         * lassen - Speichern bleibt davon unberuehrt (schreibt weiterhin
-         * die rohen Bytes, nicht diese Anzeige-Kodierung). */
-        lineStr = CFStringCreateWithBytes(NULL, (const UInt8 *)disp,
-                                           (CFIndex)disp_len, kCFStringEncodingISOLatin1, false);
-        used_latin1_fallback = (lineStr != NULL);
+    size_t u16_cap = row_len * (BTN_TAB_WIDTH > 2 ? BTN_TAB_WIDTH : 2);
+    UniChar *u16 = malloc(u16_cap * sizeof(UniChar));
+    size_t *byte_to_u16 = malloc((row_len + 1) * sizeof(size_t));
+    if (!raw || !u16 || !byte_to_u16) {
+        free(raw);
+        free(u16);
+        free(byte_to_u16);
+        return;
     }
+    size_t u16_len = decode_row_for_display((const unsigned char *)raw, row_len, u16, byte_to_u16);
+    free(raw);
+    CFStringRef lineStr = CFStringCreateWithCharacters(NULL, u16, (CFIndex)u16_len);
+    free(u16);
     if (!lineStr) {
-        /* Verteidigung in der Tiefe: ISO-8859-1 kann fuer eine Byte-Folge
-         * dieser Laenge eigentlich nie fehlschlagen, aber lieber diese
-         * Zeile ohne Text ueberspringen als mit NULL weiterzurechnen
-         * (Absturz). */
-        free(disp);
+        free(byte_to_u16);
         return;
     }
     CFIndex utf16_len = CFStringGetLength(lineStr);
@@ -1166,35 +1122,15 @@ static void draw_row_line(CGContextRef ctx, Editor *ed, const BtnLangSpec *lang,
         if (clip_start >= clip_end) {
             continue;
         }
-        size_t disp_from = disp_byte_offset_in_range(ed, row_start, clip_start);
-        size_t disp_to = disp_byte_offset_in_range(ed, row_start, clip_end);
-        if (disp_to > disp_len) {
-            disp_to = disp_len;
-        }
-        if (disp_from >= disp_to) {
-            continue;
-        }
-        /* utf16_offset_for_byte_offset() dekodiert intern als UTF-8 - passt
-         * nur, wenn lineStr auch tatsaechlich so gebaut wurde. Nach dem
-         * ISO-8859-1-Fallback ist die Abbildung dagegen denkbar einfach:
-         * jedes Byte ist genau ein UTF-16-Codepunkt, der Byte-Offset IST
-         * bereits der UTF-16-Offset. Ohne diese Unterscheidung wuerden
-         * Token-Farben auf einer solchen Zeile an der falschen Stelle
-         * landen (typischerweise Richtung Zeilenanfang verschoben), weil
-         * der interne UTF-8-Dekodierversuch auf denselben ungueltigen
-         * Bytes scheitert, die schon lineStr selbst zum Fallback gezwungen
-         * haben. */
-        CFIndex u16_from = used_latin1_fallback ? (CFIndex)disp_from : utf16_offset_for_byte_offset(disp, disp_from);
-        CFIndex u16_to = used_latin1_fallback ? (CFIndex)disp_to : utf16_offset_for_byte_offset(disp, disp_to);
-        if (u16_to > utf16_len) {
-            u16_to = utf16_len;
-        }
+        CFIndex u16_from = (CFIndex)byte_to_u16[clip_start - row_start];
+        CFIndex u16_to = (CFIndex)byte_to_u16[clip_end - row_start];
         if (u16_from >= u16_to) {
             continue;
         }
         CFAttributedStringSetAttribute(attrStr, CFRangeMake(u16_from, u16_to - u16_from),
                                         kCTForegroundColorAttributeName, get_token_color(tokens[t].kind));
     }
+    free(byte_to_u16);
 
     CTLineRef ctLine = CTLineCreateWithAttributedString(attrStr);
     CGContextSetTextPosition(ctx, x, top_y + 4.0);
@@ -1202,7 +1138,6 @@ static void draw_row_line(CGContextRef ctx, Editor *ed, const BtnLangSpec *lang,
     CFRelease(ctLine);
     CFRelease(attrStr);
     CFRelease(lineStr);
-    free(disp);
 }
 
 void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_row, const BtnLangSpec *lang,

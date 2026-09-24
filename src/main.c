@@ -1281,6 +1281,16 @@ static void move_row_edge(int to_end, int extend) {
     size_t row_count = build_current_rows(&rows);
     size_t cur_row = btn_layout_row_for_offset(rows, row_count, ed->cursor);
     size_t new_offset = to_end ? rows[cur_row].start + rows[cur_row].len : rows[cur_row].start;
+    /* Bei einer umgebrochenen Zeile ist das Row-Ende zugleich der Anfang der
+     * naechsten Row - dort gezeichnet landete der Cursor am Anfang der
+     * FOLGENDEN Row, ein zweites Ende sprang eine weitere Row weiter und Pos1
+     * schien nichts zu tun. Deshalb vor dem letzten Zeichen der Row bleiben:
+     * beim Umbruch an einem Leerzeichen (der Normalfall) ist das genau hinter
+     * dem letzten Wort; bei einem erzwungenen Umbruch mitten in einem
+     * ueberlangen Wort steht der Cursor ein Zeichen vor dem Row-Ende. */
+    if (to_end && cur_row + 1 < row_count && rows[cur_row + 1].is_continuation && rows[cur_row].len > 0) {
+        new_offset = editor_utf8_seq_start(ed, new_offset - 1);
+    }
     commit_cursor(new_offset, extend, (size_t)-1);
 }
 

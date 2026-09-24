@@ -118,39 +118,94 @@ static size_t word_right(Editor *ed, size_t pos) {
     return i;
 }
 
-/* Byte-Laenge des UTF-8-Zeichens, das VOR pos endet (fuer Backspace) -
- * laeuft rueckwaerts ueber Continuation-Bytes (10xxxxxx) bis zum
- * Lead-Byte, hoechstens 4 Bytes (laengste gueltige UTF-8-Sequenz). Ohne
- * das wuerde Backspace bei jedem mehrbytigen Zeichen (Umlaute, Akzente,
- * nicht-lateinische Schrift) nur ein Byte davon loeschen und ein
- * ungueltiges UTF-8-Fragment im Puffer zuruecklassen. */
-static size_t utf8_backward_len(Editor *ed, size_t pos) {
-    size_t n = 1;
-    while (n < 4 && n < pos && (((unsigned char)gb_char_at(&ed->buffer, pos - n)) & 0xC0) == 0x80) {
-        n++;
+/* Die EINE Regel fuer "ein Zeichen" im ganzen Programm (siehe editor.h):
+ * eine gueltige UTF-8-Sequenz nach RFC 3629 - keine Ueberlaengen, keine
+ * Surrogate, nichts ueber U+10FFFF - ist ein Zeichen; jedes andere Byte ist
+ * fuer sich ein Zeichen und wird von render.c als ISO-8859-1 gezeichnet.
+ * Vorher prueften Cursorbewegung, Loeschen, Spaltenrechnung und Anzeige das
+ * jeweils anders: Entf auf einem Latin-1-"ae" (0xE4 = "3-Byte-Lead") loeschte
+ * die folgenden zwei Bytes mit, auch einen Zeilenumbruch. */
+size_t btn_utf8_char_len(const unsigned char *s, size_t avail) {
+    unsigned char b0 = s[0];
+    if (b0 < 0x80) {
+        return 1;
+    }
+    size_t n;
+    unsigned char lo = 0x80, hi = 0xBF;
+    if (b0 >= 0xC2 && b0 <= 0xDF) {
+        n = 2;
+    } else if (b0 == 0xE0) {
+        n = 3;
+        lo = 0xA0;
+    } else if ((b0 >= 0xE1 && b0 <= 0xEC) || b0 == 0xEE || b0 == 0xEF) {
+        n = 3;
+    } else if (b0 == 0xED) {
+        n = 3;
+        hi = 0x9F;
+    } else if (b0 == 0xF0) {
+        n = 4;
+        lo = 0x90;
+    } else if (b0 >= 0xF1 && b0 <= 0xF3) {
+        n = 4;
+    } else if (b0 == 0xF4) {
+        n = 4;
+        hi = 0x8F;
+    } else {
+        return 1;
+    }
+    if (avail < n || s[1] < lo || s[1] > hi) {
+        return 1;
+    }
+    for (size_t k = 2; k < n; k++) {
+        if ((s[k] & 0xC0) != 0x80) {
+            return 1;
+        }
     }
     return n;
 }
 
-/* Byte-Laenge des UTF-8-Zeichens, das BEI pos beginnt (fuer Forward Delete). */
+size_t editor_char_len(Editor *ed, size_t pos, size_t limit) {
+    unsigned char b[4];
+    b[0] = (unsigned char)gb_char_at(&ed->buffer, pos);
+    if (b[0] < 0x80) {
+        return 1;
+    }
+    size_t avail = limit - pos;
+    if (avail > 4) {
+        avail = 4;
+    }
+    for (size_t k = 1; k < avail; k++) {
+        b[k] = (unsigned char)gb_char_at(&ed->buffer, pos + k);
+    }
+    return btn_utf8_char_len(b, avail);
+}
+
+static int is_continuation_byte(Editor *ed, size_t pos) {
+    return (((unsigned char)gb_char_at(&ed->buffer, pos)) & 0xC0) == 0x80;
+}
+
+/* Byte-Laenge des Zeichens, das VOR pos endet (Backspace, Pfeil links).
+ * Kandidat ist das naechste Nicht-Fortsetzungsbyte hoechstens 3 Bytes davor;
+ * nur wenn von dort genau ein Zeichen bis pos reicht, ist es dieses Zeichen,
+ * sonst steht das Byte vor pos fuer sich (verirrtes Fortsetzungsbyte,
+ * abgeschnittene Sequenz). Jedes Nicht-Fortsetzungsbyte beginnt ein Zeichen,
+ * daher stimmt das exakt mit der Vorwaerts-Zerlegung ueberein. */
+static size_t utf8_backward_len(Editor *ed, size_t pos) {
+    size_t p = pos - 1;
+    size_t steps = 0;
+    while (steps < 3 && p > 0 && is_continuation_byte(ed, p)) {
+        p--;
+        steps++;
+    }
+    if (editor_char_len(ed, p, pos) == pos - p) {
+        return pos - p;
+    }
+    return 1;
+}
+
+/* Byte-Laenge des Zeichens, das BEI pos beginnt (Entf, Pfeil rechts). */
 static size_t utf8_forward_len(Editor *ed, size_t pos, size_t limit) {
-    unsigned char b = (unsigned char)gb_char_at(&ed->buffer, pos);
-    size_t n;
-    if ((b & 0x80) == 0x00) {
-        n = 1;
-    } else if ((b & 0xE0) == 0xC0) {
-        n = 2;
-    } else if ((b & 0xF0) == 0xE0) {
-        n = 3;
-    } else if ((b & 0xF8) == 0xF0) {
-        n = 4;
-    } else {
-        n = 1; /* ungueltiges Lead-Byte - defensiv nur 1 Byte loeschen */
-    }
-    if (pos + n > limit) {
-        n = limit - pos;
-    }
-    return n;
+    return editor_char_len(ed, pos, limit);
 }
 
 /* ---- Undo-Stack ---- */
@@ -217,7 +272,11 @@ static void undo_push_insert(Editor *ed, size_t pos, const char *text, size_t le
     ed->suppress_coalesce = 0;
     if (!blocked && st->pos > 0 && st->pos == st->count) {
         UndoRecord *last = &st->records[st->pos - 1];
-        if (last->is_insert && last->pos + last->len == pos && len == 1 &&
+        /* Genau EIN Zeichen (auch mehrbytig - "ae" sind 2 Bytes), nicht nur
+         * len == 1: sonst begann jeder Umlaut einen neuen Undo-Schritt, und
+         * Cmd+Z nahm deutsche Saetze in Bruchstuecken zurueck. */
+        if (last->is_insert && last->pos + last->len == pos &&
+            btn_utf8_char_len((const unsigned char *)text, len) == len &&
             text[0] != '\n' && (last->len == 0 || last->text[last->len - 1] != '\n')) {
             record_grow(last, len);
             memcpy(last->text + last->len, text, len);
@@ -232,7 +291,8 @@ static void undo_push_delete(Editor *ed, size_t pos, const char *deleted, size_t
     UndoStack *st = &ed->undo;
     int blocked = ed->suppress_coalesce;
     ed->suppress_coalesce = 0;
-    if (!blocked && st->pos > 0 && st->pos == st->count && len == 1 && deleted[0] != '\n') {
+    if (!blocked && st->pos > 0 && st->pos == st->count &&
+        btn_utf8_char_len((const unsigned char *)deleted, len) == len && deleted[0] != '\n') {
         UndoRecord *last = &st->records[st->pos - 1];
         if (!last->is_insert) {
             if (backward && pos + len == last->pos) {
@@ -401,13 +461,16 @@ size_t editor_utf8_seq_start(Editor *ed, size_t pos) {
     if (pos >= len) {
         return pos;
     }
-    size_t start = pos;
+    size_t p = pos;
     size_t steps = 0;
-    while (steps < 3 && start > 0 && (((unsigned char)gb_char_at(&ed->buffer, start)) & 0xC0) == 0x80) {
-        start--;
+    while (steps < 3 && p > 0 && is_continuation_byte(ed, p)) {
+        p--;
         steps++;
     }
-    return start;
+    if (p < pos && editor_char_len(ed, p, len) > pos - p) {
+        return p;
+    }
+    return pos;
 }
 
 void editor_mark_cursor_moved(Editor *ed) {
@@ -422,23 +485,18 @@ size_t editor_tab_advance(size_t col) {
     return advance_tab_stop(col);
 }
 
-/* Zaehlt Zeichen (Codepoints), nicht Bytes - ein mehrbytiges UTF-8-Zeichen
- * (Umlaut, Akzent, Emoji, ...) darf nur EINE visuelle Spalte breit sein,
- * genau wie CoreText es beim tatsaechlichen Zeichnen handhabt (siehe
- * draw_row_line() in render.c, das den kompletten Zeilentext an CoreText
- * uebergibt statt selbst Byte fuer Byte zu positionieren). Ohne dieses
- * Ueberspringen der Fortsetzungsbytes (10xxxxxx) wuerde z.B. "ä" (2 Bytes)
- * als 2 Spalten zaehlen - der von HIER aus berechnete Cursor/Selektions-x
- * (col * char_width in render.c) liefe dann bei jedem mehrbytigen Zeichen
- * in derselben Zeile weiter vom tatsaechlich gezeichneten Text weg. */
+/* Zaehlt Zeichen nach btn_utf8_char_len(), nicht Bytes - jedes Zeichen ist
+ * genau EINE visuelle Spalte (Tab: bis zum naechsten Tabstopp), genau so,
+ * wie render.c's draw_row_line() es zeichnet. Sonst wuerde z.B. "ä"
+ * (2 Bytes) als 2 Spalten zaehlen und der Cursor bei jedem mehrbytigen
+ * Zeichen in derselben Zeile weiter vom gezeichneten Text weglaufen. */
 size_t editor_visual_column_in_range(Editor *ed, size_t range_start, size_t offset) {
     size_t col = 0;
-    for (size_t i = range_start; i < offset; i++) {
+    size_t i = range_start;
+    while (i < offset) {
         unsigned char c = (unsigned char)gb_char_at(&ed->buffer, i);
-        if ((c & 0xC0) == 0x80) {
-            continue; /* Fortsetzungsbyte - gehoert zum vorherigen Zeichen */
-        }
         col = (c == '\t') ? advance_tab_stop(col) : col + 1;
+        i += (c < 0x80) ? 1 : editor_char_len(ed, i, offset);
     }
     return col;
 }

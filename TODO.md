@@ -5,13 +5,18 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
 
 ## Bekannte Einschränkungen (bewusst zurückgestellt, kein akuter Bug)
 
-- Cursor-/Selektions-/Hit-Testing-Spaltenrechnung zählt seit dem Codepoint-Fix
-  (`editor_visual_column_in_range`) jedes Zeichen als genau EINE Spalte -
-  korrekt für Umlaute/Akzente & die meisten Emoji. Für tatsächlich
-  **doppelbreite** Zeichen (CJK-Schriftzeichen, manche Emoji) stimmt das aber
-  weiterhin nicht exakt mit der von Menlo tatsächlich gerenderten Breite
+- Jedes Zeichen (gültige UTF-8-Sequenz, sonst ein einzelnes Byte als
+  Latin-1, siehe `btn_utf8_char_len`) ist genau EINE Spalte - Cursor,
+  Umbruch und Zeichnen sind sich darin einig, auch bei Latin-1-Dateien.
+  Für tatsächlich **doppelbreite** Zeichen (CJK-Schriftzeichen, manche
+  Emoji) stimmt das aber nicht exakt mit der von Menlo gerenderten Breite
   überein (die App kennt keine East-Asian-Width-Klassifizierung) - Cursor-
   Darstellung/Klick-Position kann bei solchem Text leicht abweichen.
+- Ende/Cmd+Rechts auf einer umgebrochenen Zeile setzt den Cursor vor das
+  letzte Zeichen der Row (bei einem Umbruch an einem Leerzeichen also direkt
+  hinter das letzte Wort). Bei einem erzwungenen Umbruch mitten in einem
+  überlangen Wort steht er damit ein Zeichen vor dem Row-Ende; exakt wäre
+  nur eine Cursor-"Affinität" (oberhalb/unterhalb der Umbruchgrenze).
 - Klammer-/Anführungszeichen-Matching (`editor_find_matching_bracket`) kennt
   keine Strings/Kommentare - eine Klammer oder ein Anführungszeichen
   innerhalb eines String-Literals oder Kommentars kann in seltenen Fällen
@@ -52,5 +57,7 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
 
 - Mehrere unabhängige "finde Zeilengrenzen"-Scanner in editor.c/render.c
   könnten sich eine gemeinsame Funktion teilen.
-- `utf16_offset_for_byte_offset` (render.c) und `utf8_forward_len`/
-  `utf8_backward_len` (editor.c) sind zwei unabhängige UTF-8-Implementierungen.
+- render.c's `utf8_safe_cut`/`utf8_prefix_bytes` (Kürzen der Tab-
+  Beschriftung, arbeiten auf C-Strings statt auf dem Editor-Puffer) prüfen
+  nur Fortsetzungsbytes statt `btn_utf8_char_len` zu nutzen - für die
+  gültigen UTF-8-Dateinamen, die dort ankommen, dasselbe Ergebnis.
