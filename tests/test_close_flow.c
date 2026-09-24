@@ -16,6 +16,7 @@ static int g_doc_count = 0;
 static int g_active_doc = 0;
 
 static int doc_is_dirty(Document *d) { return d->editor.edit_seq != d->saved_edit_seq; }
+static void mark_doc_saved(Document *d) { d->saved_edit_seq = d->editor.edit_seq; }
 static void switch_to_tab(int idx) { g_active_doc = idx; }
 static void btn_app_request_redraw(void) {}
 static const char *doc_display_name(Document *d) { (void)d; return "doc"; }

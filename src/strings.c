@@ -43,7 +43,12 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "The file could not be read.",
         "The file is larger than %d MB, the maximum size BTNEdit can open.",
         "“%s” could not be saved.",
-        "Check that the folder exists and that you have write permission. Your changes are still open."
+        "Check that the folder exists and that you have write permission. Your changes are still open.",
+        "Line Endings",
+        "LF – macOS/Unix",
+        "CRLF – Windows",
+        "CR – Classic Mac OS",
+        "%s (mixed)"
     },
     /* BTN_LANG_DE */
     {
@@ -79,7 +84,12 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Die Datei konnte nicht gelesen werden.",
         "Die Datei ist größer als %d MB – das ist die maximale Größe, die BTNEdit öffnen kann.",
         "„%s“ konnte nicht gesichert werden.",
-        "Prüfe, ob der Ordner existiert und du Schreibrechte hast. Deine Änderungen sind weiterhin geöffnet."
+        "Prüfe, ob der Ordner existiert und du Schreibrechte hast. Deine Änderungen sind weiterhin geöffnet.",
+        "Zeilenenden",
+        "LF – macOS/Unix",
+        "CRLF – Windows",
+        "CR – klassisches Mac OS",
+        "%s (gemischt)"
     },
     /* BTN_LANG_FR */
     {
@@ -115,7 +125,12 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Le fichier n’a pas pu être lu.",
         "Le fichier dépasse %d Mo, la taille maximale que BTNEdit peut ouvrir.",
         "Impossible d’enregistrer « %s ».",
-        "Vérifiez que le dossier existe et que vous avez le droit d’écriture. Vos modifications restent ouvertes."
+        "Vérifiez que le dossier existe et que vous avez le droit d’écriture. Vos modifications restent ouvertes.",
+        "Fins de ligne",
+        "LF – macOS/Unix",
+        "CRLF – Windows",
+        "CR – Mac OS classique",
+        "%s (mixte)"
     },
     /* BTN_LANG_ES */
     {
@@ -151,7 +166,12 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "No se pudo leer el archivo.",
         "El archivo supera los %d MB, el tamaño máximo que BTNEdit puede abrir.",
         "No se pudo guardar “%s”.",
-        "Comprueba que la carpeta existe y que tienes permiso de escritura. Tus cambios siguen abiertos."
+        "Comprueba que la carpeta existe y que tienes permiso de escritura. Tus cambios siguen abiertos.",
+        "Finales de línea",
+        "LF – macOS/Unix",
+        "CRLF – Windows",
+        "CR – Mac OS clásico",
+        "%s (mixto)"
     },
     /* BTN_LANG_ZH (Simplified) */
     {
@@ -190,7 +210,12 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "无法读取该文件。",
         "文件大于 %d MB，超出了 BTNEdit 可打开的最大大小。",
         "无法存储“%s”。",
-        "请检查文件夹是否存在以及您是否有写入权限。您的更改仍保持打开状态。"
+        "请检查文件夹是否存在以及您是否有写入权限。您的更改仍保持打开状态。",
+        "换行符",
+        "LF – macOS/Unix",
+        "CRLF – Windows",
+        "CR – 经典 Mac OS",
+        "%s（混合）"
     }
 };
 

@@ -28,7 +28,12 @@ enum {
     BTN_MENU_GOTO_LINE,
     BTN_MENU_ZOOM_IN,
     BTN_MENU_ZOOM_OUT,
-    BTN_MENU_ZOOM_RESET
+    BTN_MENU_ZOOM_RESET,
+    /* Ablage > Zeilenenden - Reihenfolge wie BtnEol in eol.h
+     * (BTN_MENU_EOL_LF + BTN_EOL_CRLF == BTN_MENU_EOL_CRLF). */
+    BTN_MENU_EOL_LF,
+    BTN_MENU_EOL_CRLF,
+    BTN_MENU_EOL_CR
 };
 
 /* Tags fuer die dynamischen "Zuletzt geoeffnet"-Menuepunkte liegen ab hier,
@@ -97,6 +102,10 @@ void btn_app_build_menu(void);
 void btn_app_set_recent_files(const char **paths, int count);
 
 void btn_app_request_redraw(void);
+
+/* Setzt das Haekchen im Untermenue Ablage > Zeilenenden auf Eintrag index
+ * (0 = LF, 1 = CRLF, 2 = CR, wie BtnEol). */
+void btn_app_set_line_ending_menu(int index);
 void btn_app_run(void);
 
 /* Systemweite Zwischenablage. btn_pasteboard_set_string nimmt bytes+len

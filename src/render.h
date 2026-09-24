@@ -83,6 +83,8 @@ double btn_render_get_font_size(void);
  * (Zeilen, Woerter, Zeichen). Ein Format mit anderen Konversionen wird
  * ignoriert (btn_footer_format_ok()). */
 void btn_render_set_footer_formats(const char *pos_fmt, const char *stats_fmt);
+/* Rechts an die Statuszeile angehaengt, z.B. "CRLF" (wird kopiert). */
+void btn_render_set_footer_eol(const char *label);
 int btn_footer_format_ok(const char *fmt, int n);
 
 void btn_render_zoom_in(void);

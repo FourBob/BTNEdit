@@ -5,6 +5,7 @@
 #include "shim.h"
 #include "render.h"
 #include "editor.h"
+#include "eol.h"
 #include "strings.h"
 
 #include <ctype.h>
@@ -34,6 +35,13 @@ typedef struct {
     Editor editor;
     char *path;            /* NULL = unbenanntes, neues Dokument */
     size_t saved_edit_seq;
+    /* Zeilenenden, mit denen gesichert wird (im Puffer steht immer '\n',
+     * siehe eol.h), und der Stand beim letzten Laden/Sichern - ein
+     * Umstellen per Menue ist eine ungesicherte Aenderung. eol_mixed: die
+     * geladene Datei hatte mehrere Arten (Statuszeile), bis zum Sichern. */
+    BtnEol eol;
+    BtnEol saved_eol;
+    int eol_mixed;
     long scroll_row;
     double scroll_accum;
     /* Gecachtes, fertig formatiertes Tab-Label (siehe doc_display_name()),
@@ -158,7 +166,14 @@ static int doc_is_dirty(Document *d) {
     /* Bewusst ueber edit_seq statt ueber undo.pos: Undo-Coalescing kann
      * pos unveraendert lassen, obwohl sich der Inhalt geaendert hat (siehe
      * editor.h-Kommentar bei edit_seq). */
-    return d->editor.edit_seq != d->saved_edit_seq;
+    return d->editor.edit_seq != d->saved_edit_seq || d->eol != d->saved_eol;
+}
+
+/* Merkt den aktuellen Stand als gesichert (nach Laden, Sichern oder "Nicht
+ * sichern"). */
+static void mark_doc_saved(Document *d) {
+    d->saved_edit_seq = d->editor.edit_seq;
+    d->saved_eol = d->eol;
 }
 
 static int is_dirty(void) {
@@ -185,6 +200,7 @@ static void set_doc_path(Document *d, const char *path) {
 
 static void sync_window_state(void) {
     btn_app_set_document_edited(is_dirty());
+    btn_app_set_line_ending_menu((int)active_doc()->eol);
 }
 
 /* Persistiert als einfache Zeilenliste unter ~/.btnedit_recent statt in
@@ -483,7 +499,9 @@ static int add_tab(void) {
     Document *d = &g_docs[g_doc_count];
     editor_init(&d->editor);
     d->path = NULL;
-    d->saved_edit_seq = d->editor.edit_seq;
+    d->eol = BTN_EOL_LF;
+    d->eol_mixed = 0;
+    mark_doc_saved(d);
     d->scroll_row = 0;
     d->scroll_accum = 0.0;
     d->label_cache_valid = 0;
@@ -1685,14 +1703,25 @@ static void open_file_path(Document *d, const char *path) {
     BtnReadResult result;
     char *contents = read_file_contents(path, &len, &result);
     if (contents) {
-        if (looks_binary(contents, len) && !btn_show_binary_file_warning(basename_of(path))) {
+        int binary = looks_binary(contents, len);
+        if (binary && !btn_show_binary_file_warning(basename_of(path))) {
             free(contents);
             return;
+        }
+        /* Zeilenenden erkennen und im Puffer auf '\n' bringen; beim
+         * Sichern wird zurueckgewandelt. Eine Binaerdatei ("Trotzdem
+         * oeffnen") bleibt Byte fuer Byte, wie sie ist - ein '\r' darin ist
+         * Nutzdaten, kein Zeilenende. */
+        d->eol = BTN_EOL_LF;
+        d->eol_mixed = 0;
+        if (!binary) {
+            d->eol = btn_eol_detect(contents, len, &d->eol_mixed);
+            len = btn_eol_normalize(contents, len);
         }
         editor_set_text(&d->editor, contents, len);
         free(contents);
         set_doc_path(d, path);
-        d->saved_edit_seq = d->editor.edit_seq;
+        mark_doc_saved(d);
         /* d->path statt path: set_doc_path() dupliziert path selbst dann
          * sauber, wenn path zufaellig mit dem *alten* d->path identisch war
          * (und dieser Speicher dabei freigegeben wird) - path waere in dem
@@ -1770,12 +1799,16 @@ static int perform_save_doc(Document *d, int force_save_as) {
 
     size_t len;
     char *contents = editor_copy_all(&d->editor, &len);
-    int ok = write_file_contents(path, contents, len);
+    size_t encoded_len;
+    char *encoded = btn_eol_encode(contents, len, d->eol, &encoded_len); /* NULL bei LF */
+    int ok = write_file_contents(path, encoded ? encoded : contents, encoded ? encoded_len : len);
+    free(encoded);
     free(contents);
 
     if (ok) {
         set_doc_path(d, path);
-        d->saved_edit_seq = d->editor.edit_seq;
+        d->eol_mixed = 0; /* jetzt einheitlich in d->eol geschrieben */
+        mark_doc_saved(d);
         /* d->path statt path: siehe Begruendung in open_file_path(). */
         add_recent_file(d->path);
     } else {
@@ -1810,7 +1843,7 @@ static int confirm_discard_doc(Document *d) {
      * naechsten should_close()-Aufruf (z.B. windowShouldClose: gefolgt von
      * applicationShouldTerminate: in derselben Schliessen-Kette) ueberraschend
      * ein zweites Mal erscheinen. */
-    d->saved_edit_seq = d->editor.edit_seq;
+    mark_doc_saved(d);
     return 1;
 }
 
@@ -1920,7 +1953,7 @@ static int should_close(void) {
      * ohne jede Nachfrage verloren. */
     for (int i = 0; i < g_doc_count; i++) {
         if (choices[i] == 2) {
-            g_docs[i].saved_edit_seq = g_docs[i].editor.edit_seq;
+            mark_doc_saved(&g_docs[i]);
         }
     }
     return 1;
@@ -1974,6 +2007,13 @@ static void on_draw(CGContextRef ctx, CGRect bounds) {
      * (siehe dortiger Kommentar) faengt das ab: weicht es vom aktuellen
      * edit_seq ab, werden 0 Treffer statt der veralteten Bereiche gezeichnet. */
     size_t render_match_count = (g_match_edit_seq == active->editor.edit_seq) ? g_match_count : 0;
+    char eol_label[64];
+    if (active->eol_mixed) {
+        snprintf(eol_label, sizeof(eol_label), btn_tr(BTN_STR_EOL_MIXED_FMT), btn_eol_name(active->eol));
+    } else {
+        snprintf(eol_label, sizeof(eol_label), "%s", btn_eol_name(active->eol));
+    }
+    btn_render_set_footer_eol(eol_label);
     btn_render_frame(ctx, content_bounds(), &active->editor, active->scroll_row,
                       btn_highlight_lang_for_path(active->path),
                       g_match_starts, g_match_ends, render_match_count);
@@ -2472,6 +2512,15 @@ static void on_menu(int tag) {
         case BTN_MENU_NEW:
             new_tab_or_reuse_blank();
             break;
+        case BTN_MENU_EOL_LF:
+        case BTN_MENU_EOL_CRLF:
+        case BTN_MENU_EOL_CR: {
+            /* Gilt beim naechsten Sichern; bis dahin ungesichert (Punkt). */
+            Document *d = active_doc();
+            d->eol = (BtnEol)(tag - BTN_MENU_EOL_LF);
+            d->eol_mixed = 0;
+            break;
+        }
         case BTN_MENU_OPEN: {
             char *path = btn_show_open_panel();
             if (path) {

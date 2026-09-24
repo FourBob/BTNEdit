@@ -15,7 +15,11 @@ Graphics/Core Text gezeichnet.
 - Öffnen / Sichern / Sichern unter / Schließen / Neu
 - Tabs (mehrere Dokumente gleichzeitig offen, eigene Tableiste)
 - Zuletzt geöffnet (persistiert über Neustarts hinweg)
-- Wortumbruch, Zeilennummern-Gutter, Statuszeile (Zeilen/Wörter/Zeichen)
+- Wortumbruch, Zeilennummern-Gutter, Statuszeile (Zeilen/Wörter/Zeichen,
+  Zeilenenden)
+- Zeilenenden: LF (macOS/Unix), CRLF (Windows) und CR (klassisches Mac OS)
+  werden beim Öffnen erkannt und beim Sichern beibehalten; umstellen über
+  Ablage > Zeilenenden. Eingefügter Text wird angepasst
 - Syntax-Highlighting: C/C++/Objective-C/Java, Python, Shell, JavaScript/
   TypeScript, Swift, Markdown, STL (ASCII), INI/Config, SVG, DXF (ASCII)
 - Suchen/Ersetzen mit regulären Ausdrücken (POSIX ERE), Ersetzen/Alle ersetzen;
@@ -56,6 +60,7 @@ Was noch fehlt bzw. bekannte Einschränkungen: siehe [TODO.md](TODO.md).
 | `src/highlight.c`/`.h` | Reiner Tokenizer für Syntax-Highlighting, unabhängig von Editor/Core Text. |
 | `src/strings.c`/`.h` | Übersetzungstabelle für die UI-Sprache (EN/DE/FR/ES/ZH) - reines C, damit main.c ohne Foundation auskommt. |
 | `src/gapbuffer.c`/`.h` | Der Gap Buffer selbst (Puffer-Grundlage von editor.c). |
+| `src/eol.c`/`.h` | Zeilenenden erkennen, im Puffer auf `\n` vereinheitlichen und beim Sichern zurückwandeln. |
 | `src/shim.m`/`.h` | Der einzige Objective-C-Code: NSWindow/NSMenu/NSApplication/Event-Weiterleitung/NSPasteboard/NSOpenPanel/NSSavePanel/NSAlert - reine Chrome, keine Content-Widgets. |
 | `src/main.c` | Reines C: verdrahtet Shim-Callbacks mit editor.c/render.c, Datei-I/O, Tab-/Dokumentverwaltung, Scroll-Zustand. |
 
@@ -97,7 +102,7 @@ make bench                 # Laufzeit pro Tastendruck bei großen Dokumenten
 ```
 
 Die Tests brauchen kein macOS und kein Xcode-Projekt: `editor.c`,
-`gapbuffer.c`, `highlight.c` und `strings.c` werden direkt gelinkt. Die reinen
+`eol.c`, `gapbuffer.c`, `highlight.c` und `strings.c` werden direkt gelinkt. Die reinen
 C-Teile aus `main.c` und `render.c` (Regex-Suche, Sichern, Laden, Layout, ...)
 schneidet `tests/gen_headers.py` bei jedem Lauf frisch aus dem Quelltext
 heraus - ein Test prüft also immer den Code, der gerade im Repo steht. Welche
@@ -113,6 +118,7 @@ umbenennt, muss sie dort nachziehen.
 | `test_undo` | Undo-Gruppen und Fuzzing mit simulierten Allokationsfehlern |
 | `test_save_atomic`, `test_save_links_perms`, `test_file_io` | atomares Sichern, Symlinks, Schreibschutz, Laden, Recent-Liste |
 | `test_close_flow` | Schließen/Beenden verliert nie ungesicherte Änderungen |
+| `test_eol` | Zeilenenden: Erkennung, bytegenauer Round-Trip LF/CRLF/CR, gemischte Dateien, Einfügen |
 | `test_gapbuffer`, `test_oom` | Gap-Buffer und Speichermangel-Helfer |
 | `test_strings`, `test_tab_label`, `test_font_size`, `test_row_capacity` | Übersetzungstabelle, Tab-Beschriftung, Schriftgröße, sichtbare Zeilen |
 

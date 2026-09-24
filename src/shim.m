@@ -23,6 +23,9 @@ static btn_open_file_callback g_open_file_cb = NULL;
 
 static NSWindow *g_window = nil;
 static NSMenu *g_recentMenu = nil;
+/* Die drei Eintraege von Ablage > Zeilenenden (Index wie BtnEol), fuer das
+ * Haekchen per btn_app_set_line_ending_menu(). */
+static NSMenuItem *g_eolItems[3];
 
 @interface BTNContentView : NSView
 @end
@@ -378,6 +381,16 @@ void btn_app_build_menu(void) {
         [fileMenu addItem:[NSMenuItem separatorItem]];
         add_item(fileMenu, trs(BTN_STR_SAVE), @"s", BTN_MENU_SAVE);
         add_item(fileMenu, trs(BTN_STR_SAVE_AS), @"S", BTN_MENU_SAVE_AS);
+        /* Zeilenenden, mit denen das aktive Dokument gesichert wird. */
+        NSMenu *eolMenu = [[NSMenu alloc] initWithTitle:trs(BTN_STR_LINE_ENDINGS)];
+        const BtnStringId eolTitles[3] = { BTN_STR_EOL_LF, BTN_STR_EOL_CRLF, BTN_STR_EOL_CR };
+        for (int i = 0; i < 3; i++) {
+            g_eolItems[i] = [eolMenu addItemWithTitle:trs(eolTitles[i]) action:@selector(menuAction:) keyEquivalent:@""];
+            [g_eolItems[i] setTarget:g_menuTarget];
+            [g_eolItems[i] setTag:BTN_MENU_EOL_LF + i];
+        }
+        NSMenuItem *eolItem = [fileMenu addItemWithTitle:trs(BTN_STR_LINE_ENDINGS) action:nil keyEquivalent:@""];
+        [eolItem setSubmenu:eolMenu];
         [fileMenu addItem:[NSMenuItem separatorItem]];
         add_item(fileMenu, trs(BTN_STR_CLOSE), @"w", BTN_MENU_CLOSE);
         [fileMenu addItem:[NSMenuItem separatorItem]];
@@ -440,6 +453,12 @@ void btn_app_set_recent_files(const char **paths, int count) {
             NSMenuItem *empty = [g_recentMenu addItemWithTitle:trs(BTN_STR_RECENT_EMPTY) action:nil keyEquivalent:@""];
             [empty setEnabled:NO];
         }
+    }
+}
+
+void btn_app_set_line_ending_menu(int index) {
+    for (int i = 0; i < 3; i++) {
+        [g_eolItems[i] setState:(i == index) ? NSControlStateValueOn : NSControlStateValueOff];
     }
 }
 

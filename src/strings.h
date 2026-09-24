@@ -100,6 +100,14 @@ typedef enum {
     BTN_STR_FILE_TOO_LARGE_INFO_FMT,
     BTN_STR_SAVE_FAILED_TITLE_FMT,
     BTN_STR_SAVE_FAILED_INFO,
+    /* Untermenue "Zeilenenden" in Ablage und seine drei Eintraege. */
+    BTN_STR_LINE_ENDINGS,
+    BTN_STR_EOL_LF,
+    BTN_STR_EOL_CRLF,
+    BTN_STR_EOL_CR,
+    /* Statuszeile bei einer Datei mit gemischten Zeilenenden: ein "%s" fuer
+     * das vorherrschende Format ("CRLF") - siehe BTN_STR_SAVE_PROMPT_TITLE_FMT. */
+    BTN_STR_EOL_MIXED_FMT,
     BTN_STR_COUNT
 } BtnStringId;
 

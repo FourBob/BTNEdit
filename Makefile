@@ -27,7 +27,7 @@ CFLAGS   := -Wall -Wextra -std=c11 -O2 -Isrc $(SDKFLAG) $(EXTRA_CFLAGS)
 OBJCFLAGS:= -Wall -Wextra -fno-objc-arc -O2 -Isrc $(SDKFLAG) $(EXTRA_CFLAGS)
 FRAMEWORKS := -framework Cocoa -framework CoreText -framework CoreGraphics $(SDKFLAG)
 
-SRC_C := src/main.c src/render.c src/editor.c src/gapbuffer.c src/highlight.c src/strings.c
+SRC_C := src/main.c src/render.c src/editor.c src/gapbuffer.c src/highlight.c src/strings.c src/eol.c
 SRC_M := src/shim.m
 
 OBJ := $(SRC_C:.c=.o) $(SRC_M:.m=.o)
@@ -77,7 +77,7 @@ test:
 bench:
 	python3 tests/gen_headers.py src $(BUILD_DIR)/tests/gen
 	$(TEST_CC) -std=gnu11 -O2 -Isrc -I$(BUILD_DIR)/tests/gen -o $(BUILD_DIR)/tests/bench_layout \
-		tests/bench_layout.c src/editor.c src/gapbuffer.c src/highlight.c -lm
+		tests/bench_layout.c src/editor.c src/eol.c src/gapbuffer.c src/highlight.c -lm
 	$(BUILD_DIR)/tests/bench_layout
 
 clean:

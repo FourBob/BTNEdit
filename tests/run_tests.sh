@@ -6,8 +6,8 @@
 #   SANITIZE=0       ohne AddressSanitizer/UBSan bauen (schneller, weniger streng)
 #   ONLY=name        nur Tests, deren Name "name" enthaelt
 #
-# Die Tests laufen ohne macOS-Frameworks: editor.c, gapbuffer.c, highlight.c und
-# strings.c werden direkt gelinkt, die reinen C-Teile aus main.c/render.c
+# Die Tests laufen ohne macOS-Frameworks: editor.c, eol.c, gapbuffer.c, highlight.c
+# und strings.c werden direkt gelinkt, die reinen C-Teile aus main.c/render.c
 # erzeugt tests/gen_headers.py bei jedem Lauf frisch aus dem Quelltext.
 set -u
 cd "$(dirname "$0")/.."
@@ -23,7 +23,7 @@ CFLAGS="-std=gnu11 -g -O1 -Wall -Wextra -Wno-unused-function -Wno-unused-paramet
 if [ "${SANITIZE:-1}" != 0 ]; then
     CFLAGS="$CFLAGS -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer"
 fi
-EDITOR_SRC="src/editor.c src/gapbuffer.c src/highlight.c"
+EDITOR_SRC="src/editor.c src/eol.c src/gapbuffer.c src/highlight.c"
 
 # Name | zusaetzliche Quellen/Flags | Umgebung beim Start
 TESTS=(
@@ -36,7 +36,8 @@ TESTS=(
     "test_layout_cache|$EDITOR_SRC|"
     "test_layout_cache_lang|$EDITOR_SRC|"
     "test_gapbuffer|src/gapbuffer.c|"
-    "test_undo|$OUT/editor_inject.o src/gapbuffer.c|"
+    "test_undo|$OUT/editor_inject.o src/eol.c src/gapbuffer.c|"
+    "test_eol|$EDITOR_SRC|"
     "test_oom|src/gapbuffer.c|ASAN_OPTIONS=allocator_may_return_null=1"
     "test_strings|src/strings.c|"
     "test_close_flow||"

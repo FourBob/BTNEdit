@@ -13,30 +13,25 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
    Tottasten der deutschen Tastatur (`^`, `´`, `` ` `` + Buchstabe)
    vermutlich ebenso; am Mac prüfen. Umbau des Tastatur-Pfads in shim.m,
    inklusive Anzeige des vorläufigen (marked) Texts.
-2. **Zeilenenden.** Keine Erkennung/Umwandlung: bei Windows-Dateien (CRLF)
-   bleibt `\r` als unsichtbares Zusatzzeichen am Zeilenende im Puffer
-   (Ende/Spalten/Suche sehen es), alte Mac-Dateien (nur CR) erscheinen als
-   eine einzige Zeile. Gewünscht: beim Laden erkennen, intern `\n`, beim
-   Sichern das ursprüngliche Format schreiben, Anzeige in der Statuszeile.
-3. **Einrücken.** Return übernimmt die Einrückung der vorigen Zeile nicht
+2. **Einrücken.** Return übernimmt die Einrückung der vorigen Zeile nicht
    (kein Auto-Indent). Tab mit Selektion ersetzt die Selektion durch einen
    Tab, statt die Zeilen einzurücken; Shift+Tab (Ausrücken) fehlt.
-4. **Maus und Scrollen.** Keine Scrollbar, kein Autoscroll beim Ziehen einer
+3. **Maus und Scrollen.** Keine Scrollbar, kein Autoscroll beim Ziehen einer
    Selektion über den Fensterrand, Mauszeiger bleibt ein Pfeil statt
    I-Beam, Datei aufs Fenster ziehen öffnet sie nicht (Drag & Drop).
-5. **Schutz der Arbeit.** Keine Erkennung, wenn ein anderes Programm eine
+4. **Schutz der Arbeit.** Keine Erkennung, wenn ein anderes Programm eine
    offene Datei auf der Platte ändert (Neu laden anbieten). Kein Autosave /
    keine Wiederherstellung nach Absturz - wichtiger, seit Speichermangel im
    Gap-Buffer bewusst mit `abort()` endet.
-6. **Standard-Tastenkürzel.** Weitersuchen/Rückwärtssuchen (⌘G / ⇧⌘G),
+5. **Standard-Tastenkürzel.** Weitersuchen/Rückwärtssuchen (⌘G / ⇧⌘G),
    "Auswahl zum Suchen verwenden" (⌘E), Tab-Wechsel per Tastatur (Ctrl+Tab
    bzw. ⇧⌘[ / ⇧⌘]), Fenster-Menü mit Im Dock ablegen (⌘M) und Vollbild.
-7. **Code-Editor-Funktionen.** Kommentar umschalten (⌘/), Zeile duplizieren,
+6. **Code-Editor-Funktionen.** Kommentar umschalten (⌘/), Zeile duplizieren,
    Zeile(n) hoch/runter verschieben, unsichtbare Zeichen anzeigen,
    Wortumbruch an/aus, Kodierung beim Öffnen/Sichern wählen (heute: Bytes
    unverändert, Anzeige als UTF-8 mit Latin-1-Fallback), Suche über alle
    Tabs.
-8. **KI-Vervollständigung mit lokalem LLM (optional, standardmäßig aus).**
+7. **KI-Vervollständigung mit lokalem LLM (optional, standardmäßig aus).**
    Kein eingebautes Modell: BTNEdit fragt per HTTP einen lokal laufenden
    Server an (Ollama oder llama-server), Adresse und Modellname in der
    Prefs-Datei; ohne Server fehlt die Funktion einfach. Code-Modell mit
@@ -52,6 +47,11 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
 
 ## Bekannte Einschränkungen (bewusst zurückgestellt, kein akuter Bug)
 
+- Zeilenenden: Eine Datei mit gemischten Zeilenenden wird beim Sichern
+  einheitlich im vorherrschenden Format geschrieben (Statuszeile zeigt bis
+  dahin "gemischt"). Eine per "Trotzdem öffnen" geladene Binärdatei wird
+  nicht umgewandelt (ein `\r` darin ist Nutzdaten); stellt man bei ihr das
+  Format per Menü um, wandelt das Sichern jedes `\n`-Byte um.
 - Jedes Zeichen (gültige UTF-8-Sequenz, sonst ein einzelnes Byte als
   Latin-1, siehe `btn_utf8_char_len`) ist genau EINE Spalte - Cursor,
   Umbruch und Zeichnen sind sich darin einig, auch bei Latin-1-Dateien.

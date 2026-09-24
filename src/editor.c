@@ -6,6 +6,7 @@
  * Pixelposition gefuehrt werden kann.
  */
 #include "editor.h"
+#include "eol.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -773,7 +774,17 @@ void editor_insert_text(Editor *ed, const char *text, size_t len) {
         editor_delete_selection(ed);
     }
 
-    char *sanitized = ed->single_line ? sanitize_single_line(text, len) : NULL;
+    char *sanitized = NULL;
+    if (ed->single_line) {
+        sanitized = sanitize_single_line(text, len);
+    } else if (memchr(text, '\r', len)) {
+        /* Eingefuegter Text (Zwischenablage aus einer Windows-App, IME) kommt
+         * mit "\r\n" oder '\r' - im Dokument steht immer nur '\n', das
+         * Dateiformat setzt erst das Sichern (eol.h). */
+        sanitized = btn_xmalloc(len);
+        memcpy(sanitized, text, len);
+        len = btn_eol_normalize(sanitized, len);
+    }
     if (sanitized) {
         text = sanitized;
     }

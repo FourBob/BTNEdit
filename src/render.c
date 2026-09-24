@@ -665,6 +665,14 @@ int btn_footer_format_ok(const char *fmt, int n) {
     return found == n;
 }
 
+/* Zeilenenden des aktiven Dokuments ("CRLF", "CRLF (gemischt)") - main.c
+ * setzt das vor jedem Zeichnen, render.c kennt keine Dokumente. */
+static char g_footer_eol[64] = "LF";
+
+void btn_render_set_footer_eol(const char *label) {
+    snprintf(g_footer_eol, sizeof(g_footer_eol), "%s", label ? label : "");
+}
+
 void btn_render_set_footer_formats(const char *pos_fmt, const char *stats_fmt) {
     /* Ein fehlerhaft uebersetztes Format fiele sonst erst als Absturz in
      * snprintf() auf - dann bleibt es beim bisherigen. */
@@ -699,8 +707,11 @@ static void draw_footer(CGContextRef ctx, CGRect bounds, Editor *ed, const BtnRo
     char left[64];
     snprintf(left, sizeof(left), g_footer_pos_fmt, cur_line + 1, col + 1);
 
-    char right[160];
-    snprintf(right, sizeof(right), g_footer_stats_fmt, line_count, g_layout.word_count, g_layout.char_count);
+    char right[256];
+    int n = snprintf(right, sizeof(right), g_footer_stats_fmt, line_count, g_layout.word_count, g_layout.char_count);
+    if (n > 0 && (size_t)n < sizeof(right) && g_footer_eol[0] != '\0') {
+        snprintf(right + n, sizeof(right) - (size_t)n, " | %s", g_footer_eol);
+    }
 
     double text_y = (BTN_FOOTER_HEIGHT - g_font_size) / 2.0 + 3.0;
 
