@@ -175,78 +175,167 @@ static void test_style(void) {
     editor_free(&ed);
 }
 
-/* Zufaellige Dokumente und Selektionen: Einruecken, dann Ausruecken ueber
- * dieselbe (mitgewanderte) Selektion ergibt das Original; Undo stellt nach
- * jedem Schritt exakt wieder her. */
+/* Unabhaengige Referenz fuer Block-Ein-/Ausruecken auf einem C-String:
+ * Zeilenanfaenge als Menge, Text und Positionen in einem Durchlauf. */
+static int ref_blank(const char *d, size_t len, size_t i) {
+    while (i < len && (d[i] == ' ' || d[i] == '\t')) i++;
+    return i >= len || d[i] == '\n' || (d[i] == '\r' && (i + 1 >= len || d[i + 1] == '\n'));
+}
+static size_t ref_block(const char *d, size_t len, size_t a, size_t c, int outdent, const char *unit, size_t ulen,
+                        char *out, size_t *na, size_t *nc) {
+    size_t s = a < c ? a : c, e = a < c ? c : a;
+    size_t last = (e > s && d[e - 1] == '\n') ? e - 1 : e;
+    size_t first = s;
+    while (first > 0 && d[first - 1] != '\n') first--;
+    static char is_start[1024];
+    memset(is_start, 0, len + 1);
+    is_start[first] = 1;
+    for (size_t i = first; i < last; i++) if (d[i] == '\n') is_start[i + 1] = 1;
+    long da = 0, dc = 0;
+    size_t o = 0, i = 0;
+    while (i <= len) {
+        if (is_start[i]) {
+            if (!outdent) {
+                if (!ref_blank(d, len, i)) {
+                    memcpy(out + o, unit, ulen); o += ulen;
+                    if (a > i) da += (long)ulen;
+                    if (c > i) dc += (long)ulen;
+                }
+            } else {
+                size_t n = 0;
+                if (i < len && d[i] == '\t') n = 1;
+                else while (n < 4 && i + n < len && d[i + n] == ' ') n++;
+                if (a > i) da -= (long)((a < i + n ? a : i + n) - i);
+                if (c > i) dc -= (long)((c < i + n ? c : i + n) - i);
+                i += n;
+            }
+        }
+        if (i == len) break;
+        out[o++] = d[i++];
+    }
+    *na = (size_t)((long)a + da);
+    *nc = (size_t)((long)c + dc);
+    return o;
+}
+
+/* Zufaellige Dokumente (Tab- und Leerzeichen-Stil, vorhandene Einrueckung,
+ * CRLF-Leerzeilen, Umlaute) und Selektionen: Ergebnis und Selektion exakt
+ * wie die Referenz, Undo/Redo exakt, Cursor nach Undo am Bereichsanfang. */
 static void test_fuzz(void) {
-    static const char *pieces[] = { "a", "bc", " ", "\n", "\n", "\t", "  ", "\xC3\xA4", "x y", "\xE2\x82\xAC" };
+    static const char *pieces[] = { "a", "bc", " ", "\n", "\n", "\t", "    ", "  ", "\xC3\xA4", "x y", "\xE2\x82\xAC", "\r\n", "\r" };
     Editor ed;
     editor_init(&ed);
-    char doc[512];
-    for (int iter = 0; iter < 20000; iter++) {
-        size_t len = 0, k = rnd(25);
+    static char doc[1024], want[2048];
+    for (int iter = 0; iter < 40000; iter++) {
+        size_t len = 0, k = rnd(30);
         for (size_t i = 0; i < k; i++) {
-            const char *p = pieces[rnd(10)];
+            const char *p = pieces[rnd(13)];
             memcpy(doc + len, p, strlen(p));
             len += strlen(p);
         }
-        /* Zeilen duerfen nicht schon mit Einrueckung beginnen, sonst ist
-         * Ausruecken nicht das exakte Gegenteil (entfernt die vorhandene) */
-        for (size_t i = 0; i < len; i++) {
-            if ((i == 0 || doc[i - 1] == '\n') && (doc[i] == ' ' || doc[i] == '\t')) doc[i] = 'q';
-        }
         editor_set_text(&ed, doc, len);
-        size_t a = rnd((unsigned)len + 1), c = rnd((unsigned)len + 1);
-        a = editor_utf8_seq_start(&ed, a);
-        c = editor_utf8_seq_start(&ed, c);
+        size_t a = editor_utf8_seq_start(&ed, rnd((unsigned)len + 1));
+        size_t c = editor_utf8_seq_start(&ed, rnd((unsigned)len + 1));
+        int outdent = (int)rnd(2);
+        int block = outdent;
+        for (size_t i = (a < c ? a : c); i < (a < c ? c : a); i++) block |= doc[i] == '\n';
+        if (!block) continue; /* einfacher Tab ohne Blockauswahl: eigene Faelle oben */
+        const char *unit = editor_indent_uses_spaces(&ed) ? "    " : "\t";
+        size_t wa, wc;
+        size_t wlen = ref_block(doc, len, a, c, outdent, unit, strlen(unit), want, &wa, &wc);
         sel(&ed, a, c);
-        editor_tab_key(&ed, 0);
+        size_t undo_before = ed.undo.count;
+        editor_tab_key(&ed, outdent);
         size_t l1;
-        char *after = text_of(&ed, &l1);
-        CHECK(ed.anchor <= l1 && ed.cursor <= l1, "selection inside buffer (iter %d)", iter);
-        CHECK(editor_utf8_seq_start(&ed, ed.cursor) == ed.cursor || ed.cursor == l1, "cursor on char boundary (iter %d)", iter);
-        editor_undo(&ed);
-        {
+        char *got = text_of(&ed, &l1);
+        CHECK(l1 == wlen && memcmp(got, want, wlen) == 0, "text differs from reference (iter %d, outdent %d)", iter, outdent);
+        CHECK(ed.anchor == wa && ed.cursor == wc, "selection %zu/%zu, reference %zu/%zu (iter %d, outdent %d)",
+              ed.anchor, ed.cursor, wa, wc, iter, outdent);
+        int changed = !(wlen == len && memcmp(want, doc, len) == 0);
+        CHECK(ed.undo.count - undo_before <= 2 && (changed || ed.undo.count == undo_before),
+              "at most 2 undo records, none for a no-op (iter %d)", iter);
+        if (changed) {
+            editor_undo(&ed);
             size_t lu;
             char *t = text_of(&ed, &lu);
-            CHECK(lu == len && memcmp(t, doc, len) == 0, "undo restores original (iter %d)", iter);
+            CHECK(lu == len && memcmp(t, doc, len) == 0, "one undo restores original (iter %d)", iter);
+            size_t first = (a < c ? a : c);
+            while (first > 0 && doc[first - 1] != '\n') first--;
+            CHECK(ed.cursor == first, "cursor after undo at first touched line (%zu want %zu, iter %d)", ed.cursor, first, iter);
+            free(t);
+            editor_redo(&ed);
+            t = text_of(&ed, &lu);
+            CHECK(lu == l1 && memcmp(t, got, l1) == 0, "redo exact (iter %d)", iter);
             free(t);
         }
-        editor_redo(&ed);
-        {
-            size_t lr;
-            char *t = text_of(&ed, &lr);
-            CHECK(lr == l1 && memcmp(t, after, l1) == 0, "redo restores indented (iter %d)", iter);
-            free(t);
-        }
-        /* nur fuer echte Block-Einrueckung ist Ausruecken das Gegenteil */
-        int block = 0;
-        for (size_t i = (a < c ? a : c); i < (a < c ? c : a); i++) block |= doc[i] == '\n';
-        if (block) {
-            editor_set_cursor(&ed, a < c ? a : c, 0); /* Selektion ist nach Redo weg */
-            sel(&ed, 0, 0);
-            /* dieselben Zeilen wieder waehlen: Selektion aus dem Einruecken */
-            editor_set_text(&ed, doc, len);
-            sel(&ed, a, c);
-            editor_tab_key(&ed, 0);
-            editor_tab_key(&ed, 1);
-            size_t l2;
-            char *back = text_of(&ed, &l2);
-            CHECK(l2 == len && memcmp(back, doc, len) == 0, "outdent(indent(x)) == x (iter %d)", iter);
-            CHECK(ed.anchor == a && ed.cursor == c, "selection back where it was (iter %d: %zu/%zu want %zu/%zu)",
-                  iter, ed.anchor, ed.cursor, a, c);
-            free(back);
-        }
-        free(after);
+        free(got);
     }
     editor_free(&ed);
+}
+
+static void test_more_cases(void) {
+    Editor ed;
+    editor_init(&ed);
+    /* leere CRLF-Zeilen und reine Leerraum-Zeilen bekommen keine Einrueckung */
+    set(&ed, "a\r\n\r\n  \r\nb\r\n");
+    sel(&ed, 0, editor_length(&ed));
+    editor_tab_key(&ed, 0);
+    /* die Leerraum-Zeile "  " macht es zur Leerzeichen-Datei: Einheit 4 Leerzeichen */
+    CHECK(eq(&ed, "    a\r\n\r\n  \r\n    b\r\n"), "CRLF blank and whitespace-only lines stay untouched");
+
+    /* Outdent-Redo; Outdent ohne Wirkung legt keinen Schritt an und laesst Redo stehen */
+    set(&ed, "\ta\n\tb");
+    sel(&ed, 0, 5);
+    editor_tab_key(&ed, 1);
+    editor_undo(&ed);
+    editor_redo(&ed);
+    CHECK(eq(&ed, "a\nb"), "redo after outdent");
+    editor_undo(&ed);
+    CHECK(eq(&ed, "\ta\n\tb"), "undo again");
+    set(&ed, "x\ny");
+    type(&ed, "z");
+    editor_undo(&ed);
+    size_t n = ed.undo.count, p = ed.undo.pos;
+    sel(&ed, 0, 3);
+    editor_tab_key(&ed, 1);
+    CHECK(ed.undo.count == n && ed.undo.pos == p, "no-op outdent: no undo step, redo kept");
+    editor_redo(&ed);
+    CHECK(eq(&ed, "zx\ny"), "redo still works after no-op outdent");
+
+    /* Tab mit Selektion in einer Zeile, Leerzeichen-Datei: ein Schritt */
+    set(&ed, "    a\n    b\nxyz");
+    sel(&ed, 12, 14);
+    editor_tab_key(&ed, 0);
+    CHECK(eq(&ed, "    a\n    b\n    z"), "spaces file: selection replaced by spaces");
+    editor_undo(&ed);
+    CHECK(eq(&ed, "    a\n    b\nxyz"), "one undo");
+    editor_free(&ed);
+}
+
+/* Alles auswaehlen + Tab bei 200 000 Zeilen: zwei Undo-Records, schnell. */
+static void test_large(void) {
+    size_t lines = 200000, len = 0;
+    char *doc = malloc(lines * 12);
+    for (size_t i = 0; i < lines; i++) { memcpy(doc + len, "some text\n", 10); len += 10; }
+    Editor ed;
+    editor_init(&ed);
+    editor_set_text(&ed, doc, len);
+    editor_select_all(&ed);
+    editor_tab_key(&ed, 0);
+    CHECK(editor_length(&ed) == len + lines && ed.undo.count == 2, "200k lines indented with 2 undo records (%zu)", ed.undo.count);
+    editor_tab_key(&ed, 1);
+    CHECK(editor_length(&ed) == len, "and outdented again");
+    editor_free(&ed);
+    free(doc);
 }
 
 int main(void) {
     test_newline();
     test_tab();
     test_style();
+    test_more_cases();
     test_fuzz();
+    test_large();
     printf("%s: %ld checks, %ld failures\n", fails ? "FAILED" : "ALL PASSED", checks, fails);
     return fails != 0;
 }

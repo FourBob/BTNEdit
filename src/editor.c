@@ -1112,11 +1112,20 @@ void editor_undo(Editor *ed) {
     if (st->pos == 0) {
         return;
     }
-    /* Eine ganze Gruppe (siehe editor_begin_undo_group()) auf einmal. */
+    /* Eine ganze Gruppe (siehe editor_begin_undo_group()) auf einmal. Danach
+     * steht der Cursor am Anfang der fruehesten Aenderung - sonst landete er
+     * nach dem Rueckgaengigmachen von "Alles auswaehlen + Tab" oder "Alle
+     * ersetzen" am Ende des zuletzt wiederhergestellten Stuecks. */
     unsigned long group = st->records[st->pos - 1].group;
+    size_t earliest = (size_t)-1;
     do {
+        size_t p = st->records[st->pos - 1].pos;
+        earliest = p < earliest ? p : earliest;
         undo_apply_one(ed, 1);
     } while (group != 0 && st->pos > 0 && st->records[st->pos - 1].group == group);
+    if (group != 0) {
+        ed->cursor = earliest;
+    }
     ed->anchor = ed->cursor;
     ed->desired_col = UNSET_COL;
     editor_mark_cursor_moved(ed);
@@ -1219,85 +1228,101 @@ void editor_insert_newline(Editor *ed) {
     free(text);
 }
 
+/* Ist die Zeile ab Offset i (im kopierten Bereich) leer oder nur Leerraum?
+ * '\r' vor '\n' bzw. am Ende zaehlt als Zeilenende (roh geladene
+ * gemischte Dateien, siehe eol.h) - sonst bekaeme eine leere CRLF-Zeile
+ * beim Einruecken Leerraum am Zeilenende. */
+static int blank_line_at(const char *t, size_t len, size_t i) {
+    while (i < len && (t[i] == ' ' || t[i] == '\t')) {
+        i++;
+    }
+    return i >= len || t[i] == '\n' || (t[i] == '\r' && (i + 1 >= len || t[i + 1] == '\n'));
+}
+
 /* Rueckt alle Zeilen ein bzw. aus, die die Selektion beruehrt (ohne
  * Selektion: die Zeile des Cursors). Eine Zeile, auf deren Spalte 0 die
- * Selektion nur endet, zaehlt nicht mit; leere Zeilen werden nicht
- * eingerueckt. Ein Undo-Schritt, Anker und Cursor bleiben auf ihrem Text. */
+ * Selektion nur endet, zaehlt nicht mit; leere und reine Leerraum-Zeilen
+ * werden nicht eingerueckt. Der betroffene Bereich wird einmal neu
+ * aufgebaut und als EIN Ersetzen angewendet - zwei Undo-Records statt einem
+ * pro Zeile (Alles auswaehlen + Tab bei 1 Mio. Zeilen kostete sonst ein
+ * Vielfaches der Dateigroesse). Anker und Cursor bleiben auf ihrem Text. */
 static void indent_lines(Editor *ed, int outdent) {
     size_t s = editor_selection_start(ed), e = editor_selection_end(ed);
+    size_t len = editor_length(ed);
     size_t last = e;
     if (e > s && gb_char_at(&ed->buffer, e - 1) == '\n') {
         last = e - 1;
     }
-    /* Zeilenanfaenge sammeln (aufsteigend) */
-    size_t cap = 16, count = 0;
-    size_t *starts = btn_xmalloc(cap * sizeof(size_t));
-    starts[count++] = line_start_at(ed, s);
-    for (size_t i = starts[0]; i < last; i++) {
-        if (gb_char_at(&ed->buffer, i) == '\n') {
-            if (count == cap) {
-                cap *= 2;
-                starts = btn_xrealloc(starts, btn_xmul(cap, sizeof(size_t)));
-            }
-            starts[count++] = i + 1;
-        }
+    size_t first = line_start_at(ed, s);
+    size_t range_end = last;
+    while (range_end < len && gb_char_at(&ed->buffer, range_end) != '\n') {
+        range_end++;
     }
+    size_t old_len = range_end - first;
+    char *old = gb_copy_range(&ed->buffer, first, old_len);
 
     char unit[BTN_TAB_WIDTH];
     size_t unit_len = outdent ? 0 : indent_unit(ed, unit);
-    size_t *removed = btn_xmalloc(count * sizeof(size_t)); /* je Zeile: entfernte Bytes */
-    size_t anchor = ed->anchor, cursor = ed->cursor;
-    long anchor_shift = 0, cursor_shift = 0;
+    /* Neuer Text: hoechstens eine Einheit pro Zeile mehr */
+    size_t lines = 1;
+    for (size_t i = 0; i < old_len; i++) {
+        lines += old[i] == '\n';
+    }
+    char *out = btn_xmalloc(old_len + btn_xmul(lines, unit_len) + 1);
+    size_t o = 0;
 
-    editor_begin_undo_group(ed);
-    /* von hinten nach vorn - fruehere Offsets bleiben so gueltig */
-    for (size_t k = count; k-- > 0;) {
-        size_t line = starts[k];
-        size_t len = editor_length(ed);
-        removed[k] = 0;
+    size_t pos[2] = { ed->anchor, ed->cursor };
+    long shift[2] = { 0, 0 };
+    for (size_t i = 0; i < old_len;) {
+        /* i steht auf einem Zeilenanfang (Originalkoordinate first + i) */
+        size_t line = first + i;
         if (!outdent) {
-            if (line >= len || gb_char_at(&ed->buffer, line) == '\n') {
-                continue; /* leere Zeile */
+            if (!blank_line_at(old, old_len, i)) {
+                memcpy(out + o, unit, unit_len);
+                o += unit_len;
+                for (int j = 0; j < 2; j++) {
+                    shift[j] += (pos[j] > line) ? (long)unit_len : 0;
+                }
             }
-            editor_set_cursor(ed, line, 0);
-            editor_insert_text(ed, unit, unit_len);
         } else {
             size_t n = 0;
-            if (line < len && gb_char_at(&ed->buffer, line) == '\t') {
+            if (old[i] == '\t') {
                 n = 1;
             } else {
-                while (n < BTN_TAB_WIDTH && line + n < len && gb_char_at(&ed->buffer, line + n) == ' ') {
+                while (n < BTN_TAB_WIDTH && i + n < old_len && old[i + n] == ' ') {
                     n++;
                 }
             }
-            if (n == 0) {
-                continue;
-            }
-            editor_set_cursor(ed, line, 0);
-            editor_set_cursor(ed, line + n, 1);
-            editor_delete_selection(ed);
-            removed[k] = n;
-        }
-        /* Verschiebung fuer Anker/Cursor in Originalkoordinaten */
-        size_t pos[2] = { anchor, cursor };
-        long *shift[2] = { &anchor_shift, &cursor_shift };
-        for (int j = 0; j < 2; j++) {
-            if (!outdent) {
+            for (int j = 0; j < 2; j++) {
                 if (pos[j] > line) {
-                    *shift[j] += (long)unit_len;
+                    shift[j] -= (long)((pos[j] < line + n ? pos[j] : line + n) - line);
                 }
-            } else if (pos[j] > line) {
-                size_t end = line + removed[k];
-                *shift[j] -= (long)((pos[j] < end ? pos[j] : end) - line);
             }
+            i += n;
+        }
+        /* Rest der Zeile samt '\n' uebernehmen */
+        while (i < old_len && old[i] != '\n') {
+            out[o++] = old[i++];
+        }
+        if (i < old_len) {
+            out[o++] = old[i++];
         }
     }
-    editor_end_undo_group(ed);
-
-    editor_set_cursor(ed, (size_t)((long)anchor + anchor_shift), 0);
-    editor_set_cursor(ed, (size_t)((long)cursor + cursor_shift), 1);
-    free(removed);
-    free(starts);
+    if (o != old_len || memcmp(out, old, o) != 0) {
+        editor_begin_undo_group(ed);
+        editor_set_cursor(ed, first, 0);
+        editor_set_cursor(ed, range_end, 1);
+        if (o == 0) {
+            editor_delete_selection(ed);
+        } else {
+            editor_insert_text(ed, out, o);
+        }
+        editor_end_undo_group(ed);
+        editor_set_cursor(ed, (size_t)((long)pos[0] + shift[0]), 0);
+        editor_set_cursor(ed, (size_t)((long)pos[1] + shift[1]), 1);
+    }
+    free(out);
+    free(old);
 }
 
 void editor_tab_key(Editor *ed, int outdent) {

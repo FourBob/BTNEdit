@@ -145,7 +145,7 @@ static void fuzz(unsigned permille, int iters, unsigned long seed) {
     fail_permille = permille;
     int depth = 0;
     for (int it = 0; it < iters; it++) {
-        unsigned op = rnd(12);
+        unsigned op = rnd(15);
         size_t len = editor_length(&ed);
         const char *what = "?";
         switch (op) {
@@ -159,6 +159,9 @@ static void fuzz(unsigned permille, int iters, unsigned long seed) {
         case 9: if (depth < 3) { editor_begin_undo_group(&ed); depth++; } what = "begin"; break;
         case 10: if (depth > 0) { editor_end_undo_group(&ed); depth--; } what = "end"; break;
         case 11: editor_handle_bracket_key(&ed, "([{\"'"[rnd(5)]); what = "bracket"; break;
+        case 12: editor_tab_key(&ed, 0); what = "tab"; break;
+        case 13: editor_tab_key(&ed, 1); what = "shift-tab"; break;
+        case 14: editor_insert_newline(&ed); what = "newline"; break;
         }
         check_history(&ed, what);
     }
