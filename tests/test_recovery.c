@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -90,6 +91,22 @@ static void test_stamps(void) {
     btn_file_stamp(path, &s3);
     CHECK(!btn_file_stamp_equal(&s2, &s3), "replaced via rename with equal size/mtime: changed (inode)");
 
+    /* nur die ctime aendert sich (chmod; so auch cp -p / touch -r, die die
+     * mtime zuruecksetzen) */
+    btn_file_stamp(path, &s1);
+    chmod(path, 0600);
+    chmod(path, 0644);
+    btn_file_stamp(path, &s2);
+    CHECK(s1.ctime_ns != s2.ctime_ns || s1.ctime_ns == 0, "chmod changes the ctime");
+    if (s1.ctime_ns != s2.ctime_ns) {
+        CHECK(!btn_file_stamp_equal(&s1, &s2), "ctime change alone: changed");
+    }
+    struct stat raw;
+    stat(path, &raw);
+    BtnFileStamp s4;
+    btn_file_stamp_from_stat(&raw, &s4);
+    CHECK(btn_file_stamp_equal(&s2, &s4), "stamp from stat() = stamp from path");
+
     unlink(path);
     BtnFileStamp m1, m2;
     CHECK(!btn_file_stamp(path, &m1) && !m1.valid, "missing file: invalid stamp");
@@ -112,9 +129,9 @@ static void test_dir(void) {
     struct stat st;
     CHECK(stat(dir, &st) == 0 && S_ISDIR(st.st_mode) && (st.st_mode & 077) == 0, "private (0700)");
     CHECK(btn_recovery_ensure_dir(dir), "existing directory is fine");
-    char *name = btn_recovery_file_name(dir, 4711, 3);
-    snprintf(want, sizeof want, "%s/4711-3.btnrecovery", dir);
-    CHECK(name && strcmp(name, want) == 0, "file name <pid>-<id>.btnrecovery");
+    char *name = btn_recovery_file_name(dir, "4711-99", 3);
+    snprintf(want, sizeof want, "%s/4711-99-3.btnrecovery", dir);
+    CHECK(name && strcmp(name, want) == 0, "file name <run>-<id>.btnrecovery");
     free(name);
     free(dir);
     setenv("HOME", "", 1);
@@ -133,29 +150,31 @@ static void test_roundtrip(void) {
     size_t tlen = sizeof text - 1;
     const char *path = "/Users/x/odd name\nwith newline.txt";
     long bad = 0;
+    BtnFileStamp disk = { 1, 7, 123456789012ULL, 42, 1700000000123456789LL, 1700000001987654321LL };
     for (size_t split = 0; split <= tlen; split++) {
-        if (!btn_recovery_write(file, path, 1, 0, 0, text, split, text + split, tlen - split)) {
+        if (!btn_recovery_write(file, path, 1, 0, 0, &disk, text, split, text + split, tlen - split)) {
             bad++;
             continue;
         }
         BtnRecovered r;
         if (!btn_recovery_read(file, &r) || r.len != tlen || memcmp(r.text, text, tlen) != 0 || !r.path ||
-            strcmp(r.path, path) != 0 || r.eol != 1 || r.raw != 0 || r.binary != 0 || r.text[tlen] != 0) {
+            strcmp(r.path, path) != 0 || r.eol != 1 || r.raw != 0 || r.binary != 0 || r.text[tlen] != 0 ||
+            !btn_file_stamp_equal(&r.disk, &disk)) {
             bad++;
         }
         btn_recovery_free(&r);
     }
-    CHECK(bad == 0, "round trip for every gap position, path with newline, NUL in text (%ld bad)", bad);
+    CHECK(bad == 0, "round trip for every gap position, path with newline, NUL in text, file stamp (%ld bad)", bad);
     CHECK(count_entries(dir) == 1, "no temp files left behind");
 
     BtnRecovered r;
-    CHECK(btn_recovery_write(file, NULL, 2, 1, 1, NULL, 0, NULL, 0) && btn_recovery_read(file, &r) && r.path == NULL &&
-              r.len == 0 && r.text && r.eol == 2 && r.raw == 1 && r.binary == 1,
-          "untitled, empty, CR/raw/binary");
+    CHECK(btn_recovery_write(file, NULL, 2, 1, 1, NULL, NULL, 0, NULL, 0) && btn_recovery_read(file, &r) && r.path == NULL &&
+              r.len == 0 && r.text && r.eol == 2 && r.raw == 1 && r.binary == 1 && !r.disk.valid,
+          "untitled, empty, CR/raw/binary, no stamp");
     btn_recovery_free(&r);
 
     /* Beschaedigte Dateien */
-    btn_recovery_write(file, "/p", 0, 0, 0, "abc", 3, "def", 3);
+    btn_recovery_write(file, "/p", 0, 0, 0, &disk, "abc", 3, "def", 3);
     size_t full_len;
     char *full = slurp(file, &full_len);
     long accepted = 0;
@@ -178,17 +197,18 @@ static void test_roundtrip(void) {
     free(longer);
     free(full);
     const char *bad_files[] = {
+        "BTNEdit-Recovery 1\n0 0 0 0 0\n",
+        "BTNEdit-Recovery 2\n3 0 0 0 0 0 0 0 0 0 0\n",
+        "BTNEdit-Recovery 2\n0 2 0 0 0 0 0 0 0 0 0\n",
+        "BTNEdit-Recovery 2\n0 0 0 0 0 2 0 0 0 0 0\n",
         "BTNEdit-Recovery 2\n0 0 0 0 0\n",
-        "BTNEdit-Recovery 1\n3 0 0 0 0\n",
-        "BTNEdit-Recovery 1\n0 2 0 0 0\n",
-        "BTNEdit-Recovery 1\n0 0 0 0\n",
-        "BTNEdit-Recovery 1\n0 0 0 2 0\na\0",
+        "BTNEdit-Recovery 2\n0 0 0 2 0 0 0 0 0 0 0\na\0",
         "something else",
     };
     for (size_t i = 0; i < sizeof bad_files / sizeof bad_files[0]; i++) {
         size_t n = strlen(bad_files[i]);
-        if (i == 4) {
-            n = strlen("BTNEdit-Recovery 1\n0 0 0 2 0\n") + 2;
+        if (i == 5) {
+            n = strlen("BTNEdit-Recovery 2\n0 0 0 2 0 0 0 0 0 0 0\n") + 2;
         }
         write_file(file, bad_files[i], n);
         int ok = btn_recovery_read(file, &r);
@@ -199,46 +219,112 @@ static void test_roundtrip(void) {
     }
     unlink(file);
     CHECK(!btn_recovery_read(file, &r), "missing file");
-    CHECK(!btn_recovery_write("/nonexistent-dir/x.btnrecovery", NULL, 0, 0, 0, "a", 1, NULL, 0), "unwritable dir: 0");
+    CHECK(!btn_recovery_write("/nonexistent-dir/x.btnrecovery", NULL, 0, 0, 0, NULL, "a", 1, NULL, 0), "unwritable dir: 0");
+}
+
+/* Haelt die Sperre eines "anderen laufenden Programms" ueber einen eigenen
+ * Deskriptor (flock gilt pro offener Datei, auch im selben Prozess). */
+static int hold_lock(const char *dir, const char *run) {
+    char p[500];
+    snprintf(p, sizeof p, "%s/%s.lock", dir, run);
+    int fd = open(p, O_RDWR | O_CREAT, 0600);
+    flock(fd, LOCK_EX | LOCK_NB);
+    return fd;
+}
+
+static void touch_file(const char *dir, const char *name) {
+    char f[600];
+    snprintf(f, sizeof f, "%s/%s", dir, name);
+    write_file(f, "x", 1);
+}
+
+static int exists(const char *dir, const char *name) {
+    char f[600];
+    snprintf(f, sizeof f, "%s/%s", dir, name);
+    return access(f, F_OK) == 0;
 }
 
 static void test_orphans(void) {
-    char dir[300], f[500];
+    char dir[300];
     snprintf(dir, sizeof dir, "%s/orph", g_tmp);
-    btn_recovery_ensure_dir(dir);
-    long dead = dead_pid(), self = (long)getpid(), alive = (long)getppid();
+    char *own = btn_recovery_begin_run(dir);
+    CHECK(own != NULL, "run started");
+    if (!own) {
+        return;
+    }
+    char lock[400];
+    snprintf(lock, sizeof lock, "%s.lock", own);
+    CHECK(exists(dir, lock), "lock file of the own run");
+    char *second = btn_recovery_begin_run(dir);
+    CHECK(second && strcmp(second, own) != 0, "a second run gets its own id (%s / %s)", own, second ? second : "-");
+    free(second);
+
+    char name[300];
+    /* abgestuerzter Lauf ohne Sperrdatei, abgestuerzter Lauf mit freier
+     * Sperre, laufender fremder Lauf, eigener Lauf */
+    const char *dead = "100-1", *alive = "100-3"; /* dazu "100-2": tot, Sperrdatei frei */
     unsigned ids[] = { 10, 2, 1 };
     for (int i = 0; i < 3; i++) {
-        snprintf(f, sizeof f, "%s/%ld-%u.btnrecovery", dir, dead, ids[i]);
-        write_file(f, "x", 1);
+        snprintf(name, sizeof name, "%s-%u.btnrecovery", dead, ids[i]);
+        touch_file(dir, name);
     }
-    snprintf(f, sizeof f, "%s/%ld-1.btnrecovery", dir, self);
-    write_file(f, "x", 1);
-    snprintf(f, sizeof f, "%s/%ld-1.btnrecovery", dir, alive);
-    write_file(f, "x", 1);
-    snprintf(f, sizeof f, "%s/%ld-3.btnrecovery.AbC123", dir, dead);
-    write_file(f, "x", 1);
-    snprintf(f, sizeof f, "%s/%ld-4.btnrecovery.AbC123", dir, alive);
-    write_file(f, "x", 1);
-    const char *foreign[] = { "notes.txt", "12-3.btnrecovery.damaged", "-1-2.btnrecovery", "x-1.btnrecovery", "5-.btnrecovery" };
+    touch_file(dir, "100-2.lock");
+    touch_file(dir, "100-2-5.btnrecovery");
+    int fd = hold_lock(dir, alive);
+    touch_file(dir, "100-3-1.btnrecovery");
+    touch_file(dir, "100-3-4.btnrecovery.AbC123");
+    snprintf(name, sizeof name, "%s-1.btnrecovery", own);
+    touch_file(dir, name);
+    touch_file(dir, "100-1-3.btnrecovery.AbC123");
+    /* Gleiche pid wie der eigene Prozess, aber ein frueherer Lauf (Neustart) */
+    char same_pid[200];
+    snprintf(same_pid, sizeof same_pid, "%ld-1-7.btnrecovery", (long)getpid());
+    touch_file(dir, same_pid);
+    const char *foreign[] = { "notes.txt", "12-3.btnrecovery.damaged", "a-1.btnrecovery", "-1.btnrecovery",
+                              "5-.btnrecovery", "1-2.btnrecovery.toolong" };
     for (size_t i = 0; i < sizeof foreign / sizeof foreign[0]; i++) {
-        snprintf(f, sizeof f, "%s/%s", dir, foreign[i]);
-        write_file(f, "x", 1);
+        touch_file(dir, foreign[i]);
     }
     char **files;
-    size_t n = btn_recovery_find_orphans(dir, self, &files);
-    CHECK(n == 3, "three orphans of the dead process (%zu)", n);
-    char want[500];
-    for (size_t i = 0; i < n && i < 3; i++) {
-        snprintf(want, sizeof want, "%s/%ld-%u.btnrecovery", dir, dead, i == 0 ? 1u : i == 1 ? 2u : 10u);
-        CHECK(strcmp(files[i], want) == 0, "orphan %zu in tab order: %s", i, files[i]);
+    size_t n = btn_recovery_find_orphans(dir, own, &files);
+    const char *want[] = { "100-1-1", "100-1-2", "100-1-10", "100-2-5", NULL };
+    char same_run[64];
+    snprintf(same_run, sizeof same_run, "%ld-1-7", (long)getpid());
+    const char *expected[6];
+    size_t ne = 0;
+    /* strcmp-Reihenfolge der Laeufe: "100-1" < "100-2" < "<pid>-1" nur, wenn
+     * die pid mit einer Ziffer > '1' beginnt - deshalb gezielt einsortieren. */
+    int pid_first = strcmp(same_run, "100-1") < 0;
+    if (pid_first) {
+        expected[ne++] = same_run;
+    }
+    for (int i = 0; want[i]; i++) {
+        expected[ne++] = want[i];
+    }
+    if (!pid_first) {
+        expected[ne++] = same_run;
+    }
+    CHECK(n == ne, "orphans: dead runs incl. an earlier run with our pid (%zu, want %zu)", n, ne);
+    for (size_t i = 0; i < n && i < ne; i++) {
+        char w[600];
+        snprintf(w, sizeof w, "%s/%s.btnrecovery", dir, expected[i]);
+        CHECK(strcmp(files[i], w) == 0, "orphan %zu in tab order: %s", i, files[i]);
     }
     btn_recovery_free_list(files, n);
-    snprintf(f, sizeof f, "%s/%ld-3.btnrecovery.AbC123", dir, dead);
-    CHECK(access(f, F_OK) != 0, "half-written temp file of a dead process removed");
-    snprintf(f, sizeof f, "%s/%ld-4.btnrecovery.AbC123", dir, alive);
-    CHECK(access(f, F_OK) == 0, "temp file of a running process kept");
-    CHECK(btn_recovery_find_orphans("/nonexistent-dir", self, &files) == 0 && files == NULL, "missing dir: none");
+    CHECK(!exists(dir, "100-1-3.btnrecovery.AbC123"), "half-written temp file of a dead run removed");
+    CHECK(exists(dir, "100-3-4.btnrecovery.AbC123"), "temp file of a running run kept");
+
+    /* Aufraeumen der Sperren: nur tote Laeufe ohne Dateien */
+    touch_file(dir, "100-9.lock");
+    touch_file(dir, "100-1.lock"); /* toter Lauf, dessen Dateien noch da sind */
+    unlink(strcat(strcpy(name, dir), "/100-2-5.btnrecovery"));
+    btn_recovery_cleanup_locks(dir, own);
+    CHECK(!exists(dir, "100-9.lock") && !exists(dir, "100-2.lock"), "dead locks without files removed");
+    CHECK(exists(dir, "100-3.lock") && exists(dir, lock), "locks of running runs kept");
+    CHECK(exists(dir, "100-1.lock"), "lock of a dead run with remaining files kept");
+    close(fd);
+    CHECK(btn_recovery_find_orphans("/nonexistent-dir", own, &files) == 0 && files == NULL, "missing dir: none");
+    free(own);
 }
 
 int main(void) {

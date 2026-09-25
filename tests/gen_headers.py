@@ -66,7 +66,7 @@ HEADERS = {
     "drag_type_extracted.h": ("main.c", ["typedef:BtnDrag"]),
     "protect_extracted.h": ("main.c", [
         "#BTN_RECOVERY_INTERVAL", "#BTN_RECOVERY_BYTES_PER_SECOND", "#BTN_MAX_FILE_MB", "#BTN_MAX_FILE_SIZE",
-        "typedef:BtnReadResult", "active_doc", "discard_recovery", "basename_of", "doc_display_name", "set_doc_path",
+        "typedef:BtnReadResult", "monotonic_seconds", "active_doc", "discard_recovery", "basename_of", "doc_display_name", "set_doc_path",
         "doc_is_blank", "add_tab", "find_tab_for_path", "read_file_contents", "show_file_error",
         "write_stream_checked", "write_file_atomic", "write_file_contents", "looks_binary", "load_doc_contents",
         "open_file_path", "perform_save_doc", "reload_doc", "check_doc_on_disk", "autosave_recovery", "on_timer",

@@ -52,7 +52,7 @@ TESTS=(
     "test_close_flow||"
     "test_save_atomic||"
     "test_save_links_perms||"
-    "test_file_io||"
+    "test_file_io|src/filestamp.c|"
     "test_font_size||"
     "test_row_capacity||"
     "test_regex_budget||"

@@ -236,10 +236,13 @@ int btn_app_is_dark_mode(void);
  * fuer eine simple, statische Liste. */
 void btn_show_help_alert(void);
 
-/* Frage mit zwei Knoepfen (first ist der Standard, second reagiert auch auf
- * Escape). Rueckgabe 1 = first, 0 = second. title/info wie bei
+/* Frage mit zwei Knoepfen (first ist der Standard, Return). escape_second:
+ * Escape waehlt second (z.B. "Abbrechen"); 0 = Escape waehlt nichts - fuer
+ * Fragen, bei denen beide Antworten Folgen haben (Verwerfen, Neu laden).
+ * Rueckgabe 1 = first, 0 = second. title/info wie bei
  * btn_show_error_alert(). */
-int btn_show_choice_alert(const char *title, const char *info, const char *first, const char *second);
+int btn_show_choice_alert(const char *title, const char *info, const char *first, const char *second,
+                          int escape_second);
 
 /* Einfache Fehlermeldung mit OK-Knopf (z.B. Datei nicht lesbar/zu gross).
  * title/info duerfen ungueltiges UTF-8 enthalten (Latin-1-Fallback). */

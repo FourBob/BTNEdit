@@ -34,8 +34,8 @@ static void set_doc_path(Document *d, const char *path) {
 }
 static void add_recent_file(const char *path) { (void)path; }
 static const char *doc_display_name(Document *d) { (void)d; return "doc"; }
-static int btn_show_choice_alert(const char *t, const char *i, const char *a, const char *b) {
-    (void)t; (void)i; (void)a; (void)b;
+static int btn_show_choice_alert(const char *t, const char *i, const char *a, const char *b, int esc) {
+    (void)t; (void)i; (void)a; (void)b; (void)esc;
     return 1; /* Konflikt beim Sichern: trotzdem sichern (eigener Test: test_protect) */
 }
 

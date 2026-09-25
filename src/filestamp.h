@@ -3,9 +3,12 @@
 
 /* Fingerabdruck einer Datei auf der Platte, um Aenderungen durch andere
  * Programme zu erkennen: Geraet + Inode (Ersetzen per rename(), wie es
- * Editoren und git tun), Groesse und Aenderungszeit in Nanosekunden (auch
- * mehrere Aenderungen gleicher Groesse innerhalb einer Sekunde). */
+ * Editoren und git tun), Groesse, Aenderungszeit in Nanosekunden (auch
+ * mehrere Aenderungen gleicher Groesse innerhalb einer Sekunde) und die
+ * Statusaenderungszeit ctime - die laesst sich nicht zuruecksetzen (cp -p,
+ * touch -r) und faengt Dateisysteme mit grober mtime (HFS+, FAT, SMB). */
 
+#include <sys/stat.h>
 #include <sys/types.h>
 
 typedef struct {
@@ -14,7 +17,11 @@ typedef struct {
     ino_t ino;
     off_t size;
     long long mtime_ns;
+    long long ctime_ns;
 } BtnFileStamp;
+
+/* Stempel aus einem schon geholten stat()/fstat()-Ergebnis. */
+void btn_file_stamp_from_stat(const struct stat *st, BtnFileStamp *out);
 
 /* Stempel fuer path (folgt Symlinks). Rueckgabe 1 = gefunden; sonst ist
  * out->valid 0. */

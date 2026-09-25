@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include "filestamp.h"
 
 static int fail_malloc = 0;
 static void *test_malloc(size_t n) { return fail_malloc ? NULL : malloc(n); }
@@ -34,32 +35,37 @@ int main(void) {
 
     snprintf(p, sizeof p, "%s/a.txt", dir);
     FILE *f = fopen(p, "wb"); fwrite("h\0\xE4llo\n", 1, 7, f); fclose(f);
-    b = read_file_contents(p, &len, &r);
+    BtnFileStamp st0, st1;
+    b = read_file_contents(p, &len, &r, &st0);
+    btn_file_stamp(p, &st1);
+    CHECK(b && st0.valid && btn_file_stamp_equal(&st0, &st1), "read returns the stamp of the file it read");
+    free(b);
+    b = read_file_contents(p, &len, &r, NULL);
     CHECK(b && r == BTN_READ_OK && len == 7 && memcmp(b, "h\0\xE4llo\n", 7) == 0 && b[7] == 0, "normal file incl. NUL/Latin-1 bytes");
     free(b);
 
     fail_malloc = 1;
-    b = read_file_contents(p, &len, &r);
+    b = read_file_contents(p, &len, &r, NULL);
     CHECK(!b && r == BTN_READ_FAILED, "malloc failure -> FAILED, no crash");
     fail_malloc = 0;
 
     snprintf(p, sizeof p, "%s/empty", dir);
     f = fopen(p, "wb"); fclose(f);
-    b = read_file_contents(p, &len, &r);
+    b = read_file_contents(p, &len, &r, NULL);
     CHECK(b && r == BTN_READ_OK && len == 0, "empty file");
     free(b);
 
-    b = read_file_contents(dir, &len, &r);
+    b = read_file_contents(dir, &len, &r, NULL);
     CHECK(!b && r == BTN_READ_FAILED, "directory -> FAILED (was: opened as empty file)");
 
     snprintf(p, sizeof p, "%s/missing", dir);
-    b = read_file_contents(p, &len, &r);
+    b = read_file_contents(p, &len, &r, NULL);
     CHECK(!b && r == BTN_READ_FAILED, "missing file -> FAILED");
 
     snprintf(p, sizeof p, "%s/fifo", dir);
     if (mkfifo(p, 0644) == 0) {
         alarm(5);   /* alte Logik: fopen() blockiert hier fuer immer */
-        b = read_file_contents(p, &len, &r);
+        b = read_file_contents(p, &len, &r, NULL);
         alarm(0);
         CHECK(!b && r == BTN_READ_FAILED, "named pipe -> FAILED without blocking");
         unlink(p);
@@ -70,14 +76,14 @@ int main(void) {
     int sparse_ok = fd >= 0 && ftruncate(fd, (off_t)2 << 40) == 0;   /* 2 TB, sparse */
     close(fd);
     if (sparse_ok) {
-        b = read_file_contents(p, &len, &r);
+        b = read_file_contents(p, &len, &r, NULL);
         CHECK(!b && r == BTN_READ_TOO_LARGE, "2 TB sparse file -> TOO_LARGE");
         fd = open(p, O_WRONLY); ftruncate(fd, BTN_MAX_FILE_SIZE + 1); close(fd);
-        b = read_file_contents(p, &len, &r);
+        b = read_file_contents(p, &len, &r, NULL);
         CHECK(!b && r == BTN_READ_TOO_LARGE, "cap + 1 byte -> TOO_LARGE");
         fd = open(p, O_WRONLY); ftruncate(fd, BTN_MAX_FILE_SIZE); close(fd);
         fail_malloc = 1;   /* exakt am Deckel: darf versuchen zu allozieren (hier injiziert fehlschlagend) */
-        b = read_file_contents(p, &len, &r);
+        b = read_file_contents(p, &len, &r, NULL);
         fail_malloc = 0;
         CHECK(!b && r == BTN_READ_FAILED, "exactly cap -> allowed (reaches malloc)");
     } else {

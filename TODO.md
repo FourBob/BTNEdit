@@ -26,15 +26,22 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
 
 ## Bekannte Einschränkungen (bewusst zurückgestellt, kein akuter Bug)
 
-- Schutz der Arbeit: Änderungen von außen werden beim Aktivieren der App,
-  alle 5 Sekunden (nur Tabs ohne eigene Änderungen, still) und vor dem
-  Sichern erkannt - nicht sofort per Dateisystem-Benachrichtigung (FSEvents).
-  Die Wiederherstellungsdatei ist bis zu 5 Sekunden alt (bei großen
-  Dokumenten länger: pro 20 MB eine Sekunde mehr), was danach getippt wurde,
-  fehlt nach einem Absturz. Wiederhergestellt wird nur der Text samt Pfad
-  und Zeilenenden - nicht Undo-Verlauf, Cursor oder Scrollposition. Es gibt
-  kein macOS-"Autosave in place" und keine Versionen (Ablage > Zurück zu).
-  Ein still neu geladener Tab verliert seinen Undo-Verlauf.
+- Schutz der Arbeit: Änderungen von außen werden beim Aktivieren der App
+  (nicht, solange ein Dialog offen ist), alle paar Sekunden (nur Tabs ohne
+  eigene Änderungen, still; große Dateien seltener) und vor dem Sichern
+  erkannt - nicht sofort per Dateisystem-Benachrichtigung (FSEvents). Die
+  Wiederherstellungsdatei wird im 5-Sekunden-Takt geschrieben und ist bis
+  zu etwa 10 Sekunden alt (große Dokumente seltener: pro 20 MB eine Sekunde
+  mehr Abstand); was danach getippt wurde, fehlt nach einem Absturz.
+  Wiederhergestellt wird nur der Text samt Pfad und Zeilenenden - nicht
+  Undo-Verlauf, Cursor oder Scrollposition. Es gibt kein macOS-"Autosave in
+  place" und keine Versionen (Ablage > Zurück zu). Ein still neu geladener
+  Tab verliert seinen Undo-Verlauf. Lesen, Prüfen und Sichern laufen im
+  Haupt-Thread: eine sehr große Datei oder ein hängendes Netzlaufwerk kann
+  die Oberfläche kurz blockieren. Fragt BTNEdit nach einem Hintergrund-Tab,
+  wird er dafür angezeigt und die Suchleiste geschlossen. "Sichern unter"
+  auf eine Datei, die in einem anderen Tab offen ist, wird nicht verhindert
+  (Sichern im anderen Tab fragt dann nach).
 
 - Maus: Der Scrollbalken ist immer sichtbar, sobald das Dokument länger als
   das Fenster ist (kein Ein-/Ausblenden wie bei macOS-Overlay-Scrollbars),

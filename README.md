@@ -54,12 +54,14 @@ Graphics/Core Text gezeichnet.
   Spanisch, Chinesisch (vereinfacht)
 - Ungesichert-Dialog beim Schließen/Beenden (pro Tab, keiner geht verloren)
 - Schutz der Arbeit: Ändert ein anderes Programm eine offene Datei, lädt
-  BTNEdit sie still neu (ohne eigene Änderungen) oder fragt "Neu laden" /
-  "Meine Version behalten"; Sichern warnt, bevor es fremde Änderungen
-  überschreibt; eine gelöschte Datei macht den Tab ungesichert.
-  Ungesicherte Dokumente werden laufend in
+  BTNEdit sie still neu (ohne eigene Änderungen) oder fragt "Meine Version
+  behalten" / "Neu laden"; Sichern warnt, bevor es eine Datei überschreibt,
+  die sich seit dem Laden, dem letzten Sichern oder - bei wiederhergestellten
+  Dokumenten - seit dem Absturz geändert hat; eine gelöschte Datei macht
+  den Tab ungesichert. Ungesicherte Dokumente werden laufend in
   `~/Library/Application Support/BTNEdit/Recovery` gesichert und nach einem
-  Absturz beim nächsten Start zur Wiederherstellung angeboten
+  Absturz beim nächsten Start zur Wiederherstellung angeboten (Grenzen
+  siehe TODO.md)
 - Hilfe-Menü mit Tastenkürzel-Übersicht
 - Drucken (über den System-Druckdialog, mit Syntax-Highlighting, seitenweise
   umgebrochen)

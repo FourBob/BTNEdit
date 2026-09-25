@@ -449,7 +449,9 @@ static void btn_activate_and_focus_window(void) {
 
 - (void)applicationDidBecomeActive:(NSNotification *)notification {
     (void)notification;
-    if (g_activate_cb) {
+    /* Nicht in einen offenen Dialog (Sichern?, Drucken) hinein pruefen und
+     * womoeglich neu laden - das naechste Aktivieren holt es nach. */
+    if (g_activate_cb && ![NSApp modalWindow]) {
         g_activate_cb();
     }
 }
@@ -983,14 +985,17 @@ int btn_show_unsaved_changes_alert(const char *display_name) {
     }
 }
 
-int btn_show_choice_alert(const char *title, const char *info, const char *first, const char *second) {
+int btn_show_choice_alert(const char *title, const char *info, const char *first, const char *second,
+                          int escape_second) {
     @autoreleasepool {
         NSAlert *alert = [[[NSAlert alloc] init] autorelease];
         [alert setMessageText:ns_from_c(title)];
         [alert setInformativeText:ns_from_c(info)];
         [alert addButtonWithTitle:ns_from_c(first)];
         NSButton *other = [alert addButtonWithTitle:ns_from_c(second)];
-        [other setKeyEquivalent:@"\033"];
+        /* NSAlert legt Escape selbst auf einen Knopf namens "Cancel"/
+         * "Abbrechen" - hier ausdruecklich festlegen, in beide Richtungen. */
+        [other setKeyEquivalent:escape_second ? @"\033" : @""];
         return [alert runModal] == NSAlertFirstButtonReturn ? 1 : 0;
     }
 }
