@@ -6,6 +6,8 @@
 #include "render.h"
 #include "editor.h"
 #include "eol.h"
+#include "filestamp.h"
+#include "recovery.h"
 #include "textinput.h"
 #include "strings.h"
 
@@ -15,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #define KEYCODE_LEFT           123
@@ -61,6 +64,21 @@ typedef struct {
     int saved_eol_raw;
     long scroll_row;
     double scroll_accum;
+    /* Schutz der Arbeit: disk = Stand der Datei beim letzten Laden/Sichern
+     * (oder bei "Meine Version behalten"); weicht die Platte davon ab, hat
+     * ein anderes Programm sie geaendert. missing_on_disk: die Datei ist
+     * verschwunden (geloescht, verschoben) oder nicht mehr lesbar - der Text
+     * existiert nur noch hier, der Tab gilt als ungesichert. recovery_*:
+     * Wiederherstellungsdatei (recovery.h) dieses Dokuments, NULL = keine;
+     * mit welchem Inhaltsstand und wann zuletzt geschrieben. */
+    BtnFileStamp disk;
+    int missing_on_disk;
+    unsigned recovery_id;
+    char *recovery_file;
+    size_t recovery_seq;
+    BtnEol recovery_eol;
+    int recovery_eol_raw;
+    long recovery_time;
     /* Gecachtes, fertig formatiertes Tab-Label (siehe doc_display_name()),
      * damit on_draw() es nicht bei JEDEM Redraw (jedem Tastendruck, da die
      * App ohne Dirty-Region-Tracking das ganze Fenster neu zeichnet) fuer
@@ -78,6 +96,25 @@ typedef struct {
 static Document g_docs[MAX_TABS];
 static int g_doc_count = 0;
 static int g_active_doc = 0;
+
+/* Wiederherstellung nach Absturz (recovery.h): Ordner (NULL = aus, kein
+ * HOME) und fortlaufende Nummer fuer die Dateinamen der Dokumente. Alle
+ * BTN_RECOVERY_INTERVAL Sekunden schreibt ein Timer den Stand jedes
+ * ungesicherten Dokuments - bei grossen Dokumenten seltener (pro
+ * BTN_RECOVERY_BYTES_PER_SECOND eine Sekunde mehr Abstand), damit ein
+ * 1-GB-Dokument nicht alle paar Sekunden komplett geschrieben wird. */
+#define BTN_RECOVERY_INTERVAL 5
+#define BTN_RECOVERY_BYTES_PER_SECOND (20L * 1024 * 1024)
+static char *g_recovery_dir = NULL;
+static unsigned g_next_recovery_id = 1;
+
+static void discard_recovery(Document *d) {
+    if (d->recovery_file) {
+        unlink(d->recovery_file);
+        free(d->recovery_file);
+        d->recovery_file = NULL;
+    }
+}
 
 static CGRect g_bounds = { { 0, 0 }, { 900, 600 } };
 
@@ -197,11 +234,17 @@ static const char *basename_of(const char *path) {
     return slash ? slash + 1 : path;
 }
 
-static int doc_is_dirty(Document *d) {
+/* Eigene Aenderungen seit dem letzten Laden/Sichern. */
+static int doc_has_edits(Document *d) {
     /* Bewusst ueber edit_seq statt ueber undo.pos: Undo-Coalescing kann
      * pos unveraendert lassen, obwohl sich der Inhalt geaendert hat (siehe
      * editor.h-Kommentar bei edit_seq). */
     return d->editor.edit_seq != d->saved_edit_seq || d->eol != d->saved_eol || d->eol_raw != d->saved_eol_raw;
+}
+
+/* Ungesichert: eigene Aenderungen, oder die Datei auf der Platte ist weg. */
+static int doc_is_dirty(Document *d) {
+    return doc_has_edits(d) || d->missing_on_disk;
 }
 
 /* Merkt den aktuellen Stand als gesichert (nach Laden, Sichern oder "Nicht
@@ -210,6 +253,7 @@ static void mark_doc_saved(Document *d) {
     d->saved_edit_seq = d->editor.edit_seq;
     d->saved_eol = d->eol;
     d->saved_eol_raw = d->eol_raw;
+    d->missing_on_disk = 0;
 }
 
 static int is_dirty(void) {
@@ -537,6 +581,7 @@ static void switch_to_tab(int idx) {
 }
 
 static void doc_free(Document *d) {
+    discard_recovery(d); /* das Dokument ist weg, also auch seine Sicherung */
     editor_free(&d->editor);
     free(d->path);
 }
@@ -558,6 +603,10 @@ static int add_tab(void) {
     d->scroll_row = 0;
     d->scroll_accum = 0.0;
     d->label_cache_valid = 0;
+    memset(&d->disk, 0, sizeof(d->disk));
+    d->missing_on_disk = 0;
+    d->recovery_id = g_next_recovery_id++;
+    d->recovery_file = NULL;
     return g_doc_count++;
 }
 
@@ -1820,6 +1869,22 @@ static void set_doc_line_ending(Document *d, BtnEol eol) {
     d->eol_raw = 0;
 }
 
+/* Fuellt d mit dem Dateiinhalt contents (wird dabei veraendert):
+ * Einheitliche Zeilenenden erkennen und im Puffer auf '\n' bringen; beim
+ * Sichern wird zurueckgewandelt (bytegleich, wenn nichts geaendert wurde).
+ * Gemischte Dateien und Binaerdateien bleiben Byte fuer Byte, wie sie sind -
+ * ein '\r' kann dort Nutzdaten sein. */
+static void load_doc_contents(Document *d, char *contents, size_t len, int binary) {
+    int mixed = 0;
+    d->binary = binary;
+    d->eol = binary ? BTN_EOL_LF : btn_eol_detect(contents, len, &mixed);
+    d->eol_raw = binary || mixed;
+    if (!d->eol_raw) {
+        len = btn_eol_normalize(contents, len);
+    }
+    editor_set_text(&d->editor, contents, len);
+}
+
 /* Gemeinsame Ladelogik fuer Datei > Oeffnen... und Klicks im "Zuletzt
  * geoeffnet"-Untermenue - beide muessen dieselbe Reihenfolge (lesen, Editor
  * fuellen, Pfad/Dirty-Status/Recent-Liste synchronisieren) einhalten. Laedt
@@ -1835,21 +1900,11 @@ static void open_file_path(Document *d, const char *path) {
             free(contents);
             return;
         }
-        /* Einheitliche Zeilenenden erkennen und im Puffer auf '\n' bringen;
-         * beim Sichern wird zurueckgewandelt (bytegleich, wenn nichts
-         * geaendert wurde). Gemischte Dateien und Binaerdateien bleiben Byte
-         * fuer Byte, wie sie sind - ein '\r' kann dort Nutzdaten sein. */
-        int mixed = 0;
-        d->binary = binary;
-        d->eol = binary ? BTN_EOL_LF : btn_eol_detect(contents, len, &mixed);
-        d->eol_raw = binary || mixed;
-        if (!d->eol_raw) {
-            len = btn_eol_normalize(contents, len);
-        }
-        editor_set_text(&d->editor, contents, len);
+        load_doc_contents(d, contents, len, binary);
         free(contents);
         set_doc_path(d, path);
         mark_doc_saved(d);
+        btn_file_stamp(d->path, &d->disk);
         /* d->path statt path: set_doc_path() dupliziert path selbst dann
          * sauber, wenn path zufaellig mit dem *alten* d->path identisch war
          * (und dieser Speicher dabei freigegeben wird) - path waere in dem
@@ -1923,6 +1978,19 @@ static int perform_save_doc(Document *d, int force_save_as) {
         must_free_path = 1;
     } else {
         path = d->path;
+        /* Hat ein anderes Programm die Datei seit dem letzten Laden/Sichern
+         * geaendert (und niemand hat danach "Meine Version behalten"
+         * gewaehlt), wuerde Sichern das still ueberschreiben. Eine
+         * verschwundene Datei wird einfach neu angelegt. */
+        BtnFileStamp now;
+        if (btn_file_stamp(path, &now) && !btn_file_stamp_equal(&now, &d->disk)) {
+            char title[512];
+            snprintf(title, sizeof(title), btn_tr(BTN_STR_SAVE_CONFLICT_TITLE_FMT), doc_display_name(d));
+            if (!btn_show_choice_alert(title, btn_tr(BTN_STR_SAVE_CONFLICT_INFO), btn_tr(BTN_STR_BTN_SAVE_ANYWAY),
+                                       btn_tr(BTN_STR_BTN_CANCEL))) {
+                return 0;
+            }
+        }
     }
 
     /* Roh (gemischt/binaer) oder LF ohne '\r' im Puffer: unveraendert
@@ -1944,6 +2012,8 @@ static int perform_save_doc(Document *d, int force_save_as) {
     if (ok) {
         set_doc_path(d, path);
         mark_doc_saved(d);
+        btn_file_stamp(d->path, &d->disk);
+        discard_recovery(d);
         /* d->path statt path: siehe Begruendung in open_file_path(). */
         add_recent_file(d->path);
     } else {
@@ -2092,8 +2162,261 @@ static int should_close(void) {
         if (choices[i] == 2) {
             mark_doc_saved(&g_docs[i]);
         }
+        /* Alles gesichert oder bewusst verworfen - beim naechsten Start soll
+         * nichts zur Wiederherstellung angeboten werden. */
+        discard_recovery(&g_docs[i]);
     }
     return 1;
+}
+
+/* ---- Schutz der Arbeit: Aenderungen von aussen, Wiederherstellung ---- */
+
+/* Laedt d ohne Rueckfrage neu von der Platte (die Binaer-Warnung entfaellt:
+ * die Datei war schon offen). Cursor und Selektion bleiben an ihrer Stelle,
+ * soweit der neue Text reicht. Nicht lesbar: der Text bleibt, der Tab gilt
+ * als ungesichert (missing_on_disk). */
+static void reload_doc(Document *d) {
+    size_t len;
+    BtnReadResult result;
+    char *contents = read_file_contents(d->path, &len, &result);
+    if (!contents) {
+        btn_file_stamp(d->path, &d->disk);
+        d->missing_on_disk = 1;
+        return;
+    }
+    size_t cursor = d->editor.cursor, anchor = d->editor.anchor;
+    load_doc_contents(d, contents, len, looks_binary(contents, len));
+    free(contents);
+    editor_set_cursor(&d->editor, editor_utf8_seq_start(&d->editor, anchor), 0);
+    editor_set_cursor(&d->editor, editor_utf8_seq_start(&d->editor, cursor), 1);
+    mark_doc_saved(d);
+    btn_file_stamp(d->path, &d->disk);
+    discard_recovery(d);
+}
+
+/* Vergleicht Tab idx mit seiner Datei. Ohne eigene Aenderungen wird still
+ * neu geladen; mit eigenen fragt ask = 1 (Tab wird vorher sichtbar), ask = 0
+ * (Timer, der Nutzer tippt vielleicht gerade) laesst es fuer die naechste
+ * Aktivierung bzw. das Sichern liegen. Rueckgabe 1 = etwas hat sich
+ * geaendert (neu zeichnen). */
+static int check_doc_on_disk(int idx, int ask) {
+    Document *d = &g_docs[idx];
+    if (!d->path) {
+        return 0;
+    }
+    BtnFileStamp now;
+    btn_file_stamp(d->path, &now);
+    if (btn_file_stamp_equal(&now, &d->disk)) {
+        return 0;
+    }
+    if (!now.valid) {
+        /* Geloescht oder verschoben: der Text existiert nur noch hier.
+         * Taucht die Datei wieder auf, ist das wieder eine Aenderung. */
+        d->disk = now;
+        d->missing_on_disk = 1;
+        return 1;
+    }
+    if (!doc_has_edits(d)) {
+        reload_doc(d);
+        return 1;
+    }
+    if (!ask) {
+        return 0;
+    }
+    if (idx != g_active_doc) {
+        switch_to_tab(idx);
+        btn_app_request_redraw();
+    }
+    char title[512];
+    snprintf(title, sizeof(title), btn_tr(BTN_STR_FILE_CHANGED_TITLE_FMT), doc_display_name(d));
+    if (btn_show_choice_alert(title, btn_tr(BTN_STR_FILE_CHANGED_INFO), btn_tr(BTN_STR_BTN_KEEP_MINE),
+                              btn_tr(BTN_STR_BTN_RELOAD))) {
+        /* Behalten: erst die naechste Aenderung fragt wieder, Sichern
+         * ueberschreibt ohne weitere Rueckfrage. */
+        d->disk = now;
+        d->missing_on_disk = 0;
+    } else {
+        reload_doc(d);
+    }
+    return 1;
+}
+
+/* Schreibt fuer jedes ungesicherte Dokument seinen Stand in die
+ * Wiederherstellungsdatei - nur wenn er sich seit dem letzten Mal geaendert
+ * hat und genug Zeit vergangen ist (die erste Sicherung sofort). Gesicherte
+ * Dokumente verlieren ihre Datei. now: Sekunden (time()). */
+static void autosave_recovery(long now) {
+    if (!g_recovery_dir) {
+        return;
+    }
+    for (int i = 0; i < g_doc_count; i++) {
+        Document *d = &g_docs[i];
+        if (!doc_is_dirty(d)) {
+            discard_recovery(d);
+            continue;
+        }
+        if (d->recovery_file && d->recovery_seq == d->editor.edit_seq && d->recovery_eol == d->eol &&
+            d->recovery_eol_raw == d->eol_raw) {
+            continue;
+        }
+        long wait = BTN_RECOVERY_INTERVAL + (long)(editor_length(&d->editor) / BTN_RECOVERY_BYTES_PER_SECOND);
+        if (d->recovery_file && now - d->recovery_time < wait) {
+            continue;
+        }
+        if (!btn_recovery_ensure_dir(g_recovery_dir)) {
+            return;
+        }
+        char *file = d->recovery_file ? d->recovery_file
+                                       : btn_recovery_file_name(g_recovery_dir, (long)getpid(), d->recovery_id);
+        if (!file) {
+            continue;
+        }
+        const char *a, *b;
+        size_t alen, blen;
+        gb_segments(&d->editor.buffer, &a, &alen, &b, &blen);
+        if (btn_recovery_write(file, d->path, (int)d->eol, d->eol_raw, d->binary, a, alen, b, blen)) {
+            d->recovery_file = file;
+            d->recovery_seq = d->editor.edit_seq;
+            d->recovery_eol = d->eol;
+            d->recovery_eol_raw = d->eol_raw;
+            d->recovery_time = now;
+        } else if (file != d->recovery_file) {
+            free(file);
+        }
+    }
+}
+
+/* Timer (alle BTN_RECOVERY_INTERVAL Sekunden): unveraenderte Tabs folgen
+ * ihrer Datei auf der Platte (z.B. ein Log), und ungesicherte Dokumente
+ * werden fuer die Wiederherstellung gesichert. Den aktiven Tab nicht
+ * anfassen, solange mit der Maus markiert oder per Eingabemethode getippt
+ * wird. */
+static void on_timer(void) {
+    int changed = 0;
+    int busy = g_drag != BTN_DRAG_NONE || g_marked.len > 0;
+    for (int i = 0; i < g_doc_count; i++) {
+        if (!(busy && i == g_active_doc)) {
+            changed |= check_doc_on_disk(i, 0);
+        }
+    }
+    autosave_recovery((long)time(NULL));
+    if (changed) {
+        sync_window_state();
+        clamp_scroll();
+        btn_app_request_redraw();
+    }
+}
+
+/* App kommt in den Vordergrund - typischer Moment, nachdem in einem anderen
+ * Programm (Editor, git) Dateien geaendert wurden: alle Tabs pruefen, bei
+ * eigenen Aenderungen nachfragen. */
+static int g_checking_disk = 0;
+
+static void on_activate(void) {
+    if (g_checking_disk) {
+        return;
+    }
+    g_checking_disk = 1;
+    commit_marked();
+    int original_active = g_active_doc;
+    int changed = 0, asked = 0;
+    for (int i = 0; i < g_doc_count; i++) {
+        int before = g_active_doc;
+        changed |= check_doc_on_disk(i, 1);
+        asked |= g_active_doc != before;
+    }
+    if (asked) {
+        switch_to_tab(original_active);
+    }
+    if (changed) {
+        sync_window_state();
+        sync_scroll_to_cursor();
+        btn_app_request_redraw();
+    }
+    g_checking_disk = 0;
+}
+
+/* Ein wiederhergestelltes Dokument in einen Tab: in den Tab derselben Datei,
+ * falls sie beim Start schon geoeffnet wurde, sonst in den leeren ersten
+ * oder einen neuen. Es bleibt ungesichert, bis der Nutzer sichert.
+ * Rueckgabe 0 = kein Tab mehr frei. */
+static int restore_into_tab(BtnRecovered *r) {
+    int idx = r->path ? find_tab_for_path(r->path) : -1;
+    if (idx >= 0) {
+        switch_to_tab(idx);
+    } else if (doc_is_blank(active_doc())) {
+        close_find_bar();
+    } else {
+        idx = add_tab();
+        if (idx < 0) {
+            return 0;
+        }
+        switch_to_tab(idx);
+    }
+    Document *d = active_doc();
+    editor_set_text(&d->editor, r->text, r->len);
+    d->eol = (BtnEol)r->eol;
+    d->eol_raw = r->raw;
+    d->binary = r->binary;
+    set_doc_path(d, r->path);
+    mark_doc_saved(d);
+    /* Kein edit_seq ist je (size_t)-1: der Tab bleibt ungesichert, auch
+     * wenn der Nutzer alles widerruft - der Text entspricht nicht der Datei. */
+    d->saved_edit_seq = (size_t)-1;
+    btn_file_stamp(d->path, &d->disk);
+    return 1;
+}
+
+/* Beim Start: Wiederherstellungsdateien eines abgestuerzten Laufs anbieten.
+ * Die alten Dateien verschwinden erst, wenn die wiederhergestellten Tabs
+ * ihre eigene Sicherung geschrieben haben; eine unlesbare Datei wird zu
+ * "*.damaged" umbenannt (nicht geloescht, nicht erneut angeboten). */
+static void restore_recovered_documents(void) {
+    if (!g_recovery_dir) {
+        return;
+    }
+    char **files;
+    size_t count = btn_recovery_find_orphans(g_recovery_dir, (long)getpid(), &files);
+    if (count == 0) {
+        return;
+    }
+    char info[512];
+    snprintf(info, sizeof(info), btn_tr(BTN_STR_RECOVERY_INFO_FMT), (int)count);
+    int restore = btn_show_choice_alert(btn_tr(BTN_STR_RECOVERY_TITLE), info, btn_tr(BTN_STR_BTN_RESTORE),
+                                        btn_tr(BTN_STR_BTN_DISCARD));
+    int *restored = calloc(count, sizeof(int));
+    for (size_t i = 0; i < count && restore; i++) {
+        BtnRecovered r;
+        if (!btn_recovery_read(files[i], &r)) {
+            size_t n = strlen(files[i]) + sizeof(".damaged");
+            char *damaged = malloc(n);
+            if (damaged) {
+                snprintf(damaged, n, "%s.damaged", files[i]);
+                rename(files[i], damaged);
+                free(damaged);
+            }
+            continue;
+        }
+        if (restored) {
+            restored[i] = restore_into_tab(&r);
+        }
+        btn_recovery_free(&r);
+    }
+    autosave_recovery((long)time(NULL));
+    for (size_t i = 0; i < count; i++) {
+        if (!restore || (restored && restored[i])) {
+            unlink(files[i]);
+        }
+    }
+    free(restored);
+    btn_recovery_free_list(files, count);
+}
+
+static void on_launch(void) {
+    restore_recovered_documents();
+    sync_window_state();
+    sync_scroll_to_cursor();
+    btn_app_request_redraw();
 }
 
 static void on_draw(CGContextRef ctx, CGRect bounds) {
@@ -3103,6 +3426,10 @@ int main(void) {
     btn_app_set_menu_callback(on_menu);
     btn_app_set_should_close_callback(should_close);
     btn_app_set_open_file_callback(on_open_file);
+    btn_app_set_launch_callback(on_launch);
+    btn_app_set_activate_callback(on_activate);
+    g_recovery_dir = btn_recovery_dir();
+    btn_app_start_repeating_timer(BTN_RECOVERY_INTERVAL, on_timer);
     static const BtnTextInputCallbacks text_input = {
         ti_insert_text, ti_set_marked_text, ti_unmark_text, ti_query, ti_substring, ti_caret_rect,
     };

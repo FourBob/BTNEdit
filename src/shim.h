@@ -86,6 +86,8 @@ typedef int (*btn_should_close_callback)(void);
  * absoluter Dateisystempfad (kein NSURL, main.c bleibt Cocoa-frei). */
 typedef void (*btn_open_file_callback)(const char *path);
 
+typedef void (*btn_void_callback)(void);
+
 /* Eingabemethoden (NSTextInputClient, siehe textinput.h). keyDown: gibt
  * jede Taste an macOS (interpretKeyEvents:): fertiger Text - auch aus
  * Tottasten, Pinyin, Kana, der Emoji-Palette - kommt ueber insert_text;
@@ -125,6 +127,14 @@ void btn_app_set_mouse_callback(btn_mouse_callback cb);
 void btn_app_set_scroll_callback(btn_scroll_callback cb);
 void btn_app_set_should_close_callback(btn_should_close_callback cb);
 void btn_app_set_open_file_callback(btn_open_file_callback cb);
+/* Einmal, nachdem die App fertig gestartet ist (Dateien aus "Oeffnen mit"
+ * sind dann schon angekommen) - z.B. fuer die Wiederherstellung nach einem
+ * Absturz. */
+void btn_app_set_launch_callback(btn_void_callback cb);
+/* Jedes Mal, wenn die App in den Vordergrund kommt (auch beim Start). */
+void btn_app_set_activate_callback(btn_void_callback cb);
+/* Ruft cb alle seconds Sekunden auf - nicht waehrend modaler Dialoge. */
+void btn_app_start_repeating_timer(double seconds, btn_void_callback cb);
 void btn_app_set_text_input_callbacks(const BtnTextInputCallbacks *cb);
 /* Sagt der Eingabemethode, dass ihr vorlaeufiger Text verworfen ist (main.c
  * hat ihn selbst festgeschrieben, z.B. vor einem Tab-Wechsel). */
@@ -225,6 +235,11 @@ int btn_app_is_dark_mode(void);
  * anderen Systemdialoge reine Chrome, kein eigenes Content-Fenster noetig
  * fuer eine simple, statische Liste. */
 void btn_show_help_alert(void);
+
+/* Frage mit zwei Knoepfen (first ist der Standard, second reagiert auch auf
+ * Escape). Rueckgabe 1 = first, 0 = second. title/info wie bei
+ * btn_show_error_alert(). */
+int btn_show_choice_alert(const char *title, const char *info, const char *first, const char *second);
 
 /* Einfache Fehlermeldung mit OK-Knopf (z.B. Datei nicht lesbar/zu gross).
  * title/info duerfen ungueltiges UTF-8 enthalten (Latin-1-Fallback). */

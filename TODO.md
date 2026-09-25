@@ -5,16 +5,12 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
 
 ## Fehlende Features (nach Priorität)
 
-1. **Schutz der Arbeit.** Keine Erkennung, wenn ein anderes Programm eine
-   offene Datei auf der Platte ändert (Neu laden anbieten). Kein Autosave /
-   keine Wiederherstellung nach Absturz - wichtiger, seit Speichermangel im
-   Gap-Buffer bewusst mit `abort()` endet.
-2. **Code-Editor-Funktionen.** Kommentar umschalten (⌘/), Zeile duplizieren,
+1. **Code-Editor-Funktionen.** Kommentar umschalten (⌘/), Zeile duplizieren,
    Zeile(n) hoch/runter verschieben, unsichtbare Zeichen anzeigen,
    Wortumbruch an/aus, Kodierung beim Öffnen/Sichern wählen (heute: Bytes
    unverändert, Anzeige als UTF-8 mit Latin-1-Fallback), Suche über alle
    Tabs.
-3. **KI-Vervollständigung mit lokalem LLM (optional, standardmäßig aus).**
+2. **KI-Vervollständigung mit lokalem LLM (optional, standardmäßig aus).**
    Kein eingebautes Modell: BTNEdit fragt per HTTP einen lokal laufenden
    Server an (Ollama oder llama-server), Adresse und Modellname in der
    Prefs-Datei; ohne Server fehlt die Funktion einfach. Code-Modell mit
@@ -29,6 +25,16 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
    der Eingabemethoden (render.c, `draw_marked_overlay`) als Vorlage nehmen.
 
 ## Bekannte Einschränkungen (bewusst zurückgestellt, kein akuter Bug)
+
+- Schutz der Arbeit: Änderungen von außen werden beim Aktivieren der App,
+  alle 5 Sekunden (nur Tabs ohne eigene Änderungen, still) und vor dem
+  Sichern erkannt - nicht sofort per Dateisystem-Benachrichtigung (FSEvents).
+  Die Wiederherstellungsdatei ist bis zu 5 Sekunden alt (bei großen
+  Dokumenten länger: pro 20 MB eine Sekunde mehr), was danach getippt wurde,
+  fehlt nach einem Absturz. Wiederhergestellt wird nur der Text samt Pfad
+  und Zeilenenden - nicht Undo-Verlauf, Cursor oder Scrollposition. Es gibt
+  kein macOS-"Autosave in place" und keine Versionen (Ablage > Zurück zu).
+  Ein still neu geladener Tab verliert seinen Undo-Verlauf.
 
 - Maus: Der Scrollbalken ist immer sichtbar, sobald das Dokument länger als
   das Fenster ist (kein Ein-/Ausblenden wie bei macOS-Overlay-Scrollbars),
@@ -122,7 +128,8 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
   für Suche/Sichern, Row-Layout). Geht beim Bearbeiten trotzdem der Speicher
   aus, bricht die App im Gap-Buffer bzw. Layout mit einer Meldung ab
   (`btn_xmalloc`) - dort ist ein sauberer Rückweg durch jede Bearbeitungs-
-  funktion nicht vorgesehen. Nur der Undo-Verlauf behandelt es weich: er
+  funktion nicht vorgesehen (die letzte Wiederherstellungsdatei wird beim
+  nächsten Start angeboten). Nur der Undo-Verlauf behandelt es weich: er
   wird dann verworfen, die Bearbeitung selbst bleibt.
 - Live-Suche im Regex-Modus fällt aus, wenn verschachtelte/verkettete
   `{n,m}` zusammen mehr als 1000 Kopien eines Teilausdrucks ergäben

@@ -53,6 +53,13 @@ Graphics/Core Text gezeichnet.
 - UI-Sprache folgt der Systemeinstellung: Deutsch, Englisch, Französisch,
   Spanisch, Chinesisch (vereinfacht)
 - Ungesichert-Dialog beim Schließen/Beenden (pro Tab, keiner geht verloren)
+- Schutz der Arbeit: Ändert ein anderes Programm eine offene Datei, lädt
+  BTNEdit sie still neu (ohne eigene Änderungen) oder fragt "Neu laden" /
+  "Meine Version behalten"; Sichern warnt, bevor es fremde Änderungen
+  überschreibt; eine gelöschte Datei macht den Tab ungesichert.
+  Ungesicherte Dokumente werden laufend in
+  `~/Library/Application Support/BTNEdit/Recovery` gesichert und nach einem
+  Absturz beim nächsten Start zur Wiederherstellung angeboten
 - Hilfe-Menü mit Tastenkürzel-Übersicht
 - Drucken (über den System-Druckdialog, mit Syntax-Highlighting, seitenweise
   umgebrochen)
@@ -74,6 +81,8 @@ Was noch fehlt bzw. bekannte Einschränkungen: siehe [TODO.md](TODO.md).
 | `src/gapbuffer.c`/`.h` | Der Gap Buffer selbst (Puffer-Grundlage von editor.c). |
 | `src/textinput.c`/`.h` | Eingabemethoden: UTF-16 ↔ Bytes nach der Zeichenregel, vorläufiger Text, Bereiche relativ zum Cursor. `shim.m` übersetzt nur `NSTextInputClient`. |
 | `src/eol.c`/`.h` | Zeilenenden erkennen, im Puffer auf `\n` vereinheitlichen und beim Sichern zurückwandeln. |
+| `src/filestamp.c`/`.h` | Fingerabdruck einer Datei (Inode, Größe, Änderungszeit in ns), um Änderungen durch andere Programme zu erkennen. |
+| `src/recovery.c`/`.h` | Wiederherstellungsdateien schreiben/lesen (binärsicher, atomar) und die eines abgestürzten Laufs finden. |
 | `src/shim.m`/`.h` | Der einzige Objective-C-Code: NSWindow/NSMenu/NSApplication/Event-Weiterleitung/NSPasteboard/NSOpenPanel/NSSavePanel/NSAlert - reine Chrome, keine Content-Widgets. |
 | `src/main.c` | Reines C: verdrahtet Shim-Callbacks mit editor.c/render.c, Datei-I/O, Tab-/Dokumentverwaltung, Scroll-Zustand. |
 
@@ -125,7 +134,7 @@ make bench                 # Laufzeit pro Tastendruck bei großen Dokumenten
 
 Die Tests brauchen kein macOS und kein Xcode-Projekt (für Tests, die
 `render.h`/`shim.h` einbinden, ersetzt `tests/stubs/` die CoreGraphics-Typen): `editor.c`,
-`eol.c`, `gapbuffer.c`, `highlight.c` und `strings.c` werden direkt gelinkt. Die reinen
+`eol.c`, `gapbuffer.c`, `highlight.c`, `strings.c`, `filestamp.c` und `recovery.c` werden direkt gelinkt. Die reinen
 C-Teile aus `main.c` und `render.c` (Regex-Suche, Sichern, Laden, Layout, ...)
 schneidet `tests/gen_headers.py` bei jedem Lauf frisch aus dem Quelltext
 heraus - ein Test prüft also immer den Code, der gerade im Repo steht. Welche
@@ -148,6 +157,8 @@ umbenennt, muss sie dort nachziehen.
 | `test_eol` | Zeilenenden: Erkennung, bytegenauer Round-Trip LF/CRLF/CR, Umwandeln aus zwei Pufferhälften |
 | `test_eol_glue` | Laden/Sichern/Menü aus `main.c` mit echten Dateien: gemischte und Binärdateien bleiben bytegleich |
 | `test_gapbuffer`, `test_oom` | Gap-Buffer und Speichermangel-Helfer |
+| `test_recovery` | Datei-Fingerabdruck (gleiche Größe, 1 ns, `rename`), Wiederherstellungsdateien: Round-Trip, beschädigte Dateien, Waisen toter Prozesse |
+| `test_protect` | Schutz der Arbeit aus `main.c` mit echten Dateien: still neu laden, Nachfrage, Behalten, Konflikt beim Sichern, gelöschte Datei, wann Wiederherstellungsdateien entstehen/verschwinden, nachgestellter Absturz |
 | `test_strings`, `test_tab_label`, `test_font_size`, `test_row_capacity` | Übersetzungstabelle, Tab-Beschriftung, Schriftgröße, sichtbare Zeilen |
 
 Die Objective-C-Seite (`shim.m`: Tastatur, Maus, Dialoge) lässt sich so nicht

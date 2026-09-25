@@ -14,6 +14,7 @@
 #include "eol.h"
 #include "gapbuffer.h"
 #include "strings.h"
+#include "filestamp.h"
 #include "doc_extracted.h"
 
 /* ---- Stubs fuer das, was die extrahierten Funktionen sonst anfassen ---- */
@@ -32,6 +33,11 @@ static void set_doc_path(Document *d, const char *path) {
     d->path = copy;
 }
 static void add_recent_file(const char *path) { (void)path; }
+static const char *doc_display_name(Document *d) { (void)d; return "doc"; }
+static int btn_show_choice_alert(const char *t, const char *i, const char *a, const char *b) {
+    (void)t; (void)i; (void)a; (void)b;
+    return 1; /* Konflikt beim Sichern: trotzdem sichern (eigener Test: test_protect) */
+}
 
 #include "eol_glue_extracted.h"
 

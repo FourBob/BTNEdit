@@ -27,7 +27,7 @@ CFLAGS   := -Wall -Wextra -std=c11 -O2 -Isrc $(SDKFLAG) $(EXTRA_CFLAGS)
 OBJCFLAGS:= -Wall -Wextra -fno-objc-arc -O2 -Isrc $(SDKFLAG) $(EXTRA_CFLAGS)
 FRAMEWORKS := -framework Cocoa -framework CoreText -framework CoreGraphics $(SDKFLAG)
 
-SRC_C := src/main.c src/render.c src/editor.c src/gapbuffer.c src/highlight.c src/strings.c src/eol.c src/textinput.c
+SRC_C := src/main.c src/render.c src/editor.c src/gapbuffer.c src/highlight.c src/strings.c src/eol.c src/textinput.c src/filestamp.c src/recovery.c
 SRC_M := src/shim.m
 
 OBJ := $(SRC_C:.c=.o) $(SRC_M:.m=.o)

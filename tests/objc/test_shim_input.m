@@ -109,7 +109,8 @@ static void open_cb(const char *path) {
     opened++;
 }
 
-static int ticks, ups;
+static int ticks, ups, timer_calls;
+static void timer_cb(void) { timer_calls++; }
 static double tick_x, tick_y;
 static void mouse_cb(btn_mouse_phase phase, double x, double y, int clicks, unsigned long mods) {
     (void)clicks; (void)mods;
@@ -340,6 +341,11 @@ int main(void) {
         spin(0.2);
         CHECK(ticks == t4, "and the autoscroll stops");
         btn_shim_test_set_mouse_button(-1);
+
+        /* Wiederholungs-Timer (Wiederherstellung, Dateien pruefen) */
+        btn_app_start_repeating_timer(0.1, timer_cb);
+        spin(0.55);
+        CHECK(timer_calls >= 2, "repeating timer fires (%d)", timer_calls);
         [[NSProcessInfo processInfo] endActivity:activity];
 
         /* I-Beam-Flaechen: setzen, gleich setzen, leeren - ohne Absturz */

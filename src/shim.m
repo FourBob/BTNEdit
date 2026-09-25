@@ -20,6 +20,8 @@ static btn_mouse_callback g_mouse_cb = NULL;
 static btn_scroll_callback g_scroll_cb = NULL;
 static btn_should_close_callback g_should_close_cb = NULL;
 static btn_open_file_callback g_open_file_cb = NULL;
+static btn_void_callback g_launch_cb = NULL;
+static btn_void_callback g_activate_cb = NULL;
 static BtnTextInputCallbacks g_ti;
 static BOOL g_ti_set = NO;
 
@@ -440,6 +442,16 @@ static void btn_activate_and_focus_window(void) {
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     (void)notification;
     btn_activate_and_focus_window();
+    if (g_launch_cb) {
+        g_launch_cb();
+    }
+}
+
+- (void)applicationDidBecomeActive:(NSNotification *)notification {
+    (void)notification;
+    if (g_activate_cb) {
+        g_activate_cb();
+    }
 }
 
 - (BOOL)windowShouldClose:(id)sender {
@@ -578,6 +590,24 @@ void btn_app_set_mouse_callback(btn_mouse_callback cb) {
 
 void btn_app_set_scroll_callback(btn_scroll_callback cb) {
     g_scroll_cb = cb;
+}
+
+void btn_app_set_launch_callback(btn_void_callback cb) {
+    g_launch_cb = cb;
+}
+
+void btn_app_set_activate_callback(btn_void_callback cb) {
+    g_activate_cb = cb;
+}
+
+void btn_app_start_repeating_timer(double seconds, btn_void_callback cb) {
+    NSTimer *timer = [NSTimer timerWithTimeInterval:seconds repeats:YES block:^(NSTimer *t) {
+        (void)t;
+        cb();
+    }];
+    /* Nur Standardmodus: hinter einem Dialog (Sichern?, Datei geaendert?)
+     * soll nichts neu geladen oder geschrieben werden. */
+    [[NSRunLoop currentRunLoop] addTimer:timer forMode:NSDefaultRunLoopMode];
 }
 
 void btn_app_set_autoscroll(int on) {
@@ -950,6 +980,18 @@ int btn_show_unsaved_changes_alert(const char *display_name) {
             return 2;
         }
         return 0;
+    }
+}
+
+int btn_show_choice_alert(const char *title, const char *info, const char *first, const char *second) {
+    @autoreleasepool {
+        NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+        [alert setMessageText:ns_from_c(title)];
+        [alert setInformativeText:ns_from_c(info)];
+        [alert addButtonWithTitle:ns_from_c(first)];
+        NSButton *other = [alert addButtonWithTitle:ns_from_c(second)];
+        [other setKeyEquivalent:@"\033"];
+        return [alert runModal] == NSAlertFirstButtonReturn ? 1 : 0;
     }
 }
 

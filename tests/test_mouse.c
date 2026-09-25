@@ -10,6 +10,7 @@
 #include "eol.h"
 #include "render.h"
 #include "shim.h"
+#include "filestamp.h"
 #include "doc_extracted.h"
 #include "focus_extracted.h"
 #include "drag_type_extracted.h"

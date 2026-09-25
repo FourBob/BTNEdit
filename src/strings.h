@@ -119,6 +119,19 @@ typedef enum {
     BTN_STR_FULL_SCREEN,
     BTN_STR_NEXT_TAB,
     BTN_STR_PREVIOUS_TAB,
+    /* Schutz der Arbeit: Datei von aussen geaendert ("%s" = Dateiname),
+     * Konflikt beim Sichern, Wiederherstellung nach Absturz ("%d" = Anzahl). */
+    BTN_STR_FILE_CHANGED_TITLE_FMT,
+    BTN_STR_FILE_CHANGED_INFO,
+    BTN_STR_BTN_RELOAD,
+    BTN_STR_BTN_KEEP_MINE,
+    BTN_STR_SAVE_CONFLICT_TITLE_FMT,
+    BTN_STR_SAVE_CONFLICT_INFO,
+    BTN_STR_BTN_SAVE_ANYWAY,
+    BTN_STR_RECOVERY_TITLE,
+    BTN_STR_RECOVERY_INFO_FMT,
+    BTN_STR_BTN_RESTORE,
+    BTN_STR_BTN_DISCARD,
     BTN_STR_COUNT
 } BtnStringId;
 

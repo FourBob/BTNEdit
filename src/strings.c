@@ -57,7 +57,18 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Zoom",
         "Enter Full Screen",
         "Show Next Tab",
-        "Show Previous Tab"
+        "Show Previous Tab",
+        "“%s” was changed by another application.",
+        "Reloading replaces the text in BTNEdit with the version on disk. Your unsaved changes will be lost.",
+        "Reload",
+        "Keep My Version",
+        "“%s” has been changed by another application since it was opened or last saved.",
+        "Saving will overwrite those changes.",
+        "Save Anyway",
+        "BTNEdit quit unexpectedly.",
+        "Unsaved changes to %d document(s) were found. Restore them now? Discarding cannot be undone.",
+        "Restore",
+        "Discard"
     },
     /* BTN_LANG_DE */
     {
@@ -107,7 +118,18 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Zoomen",
         "Vollbildmodus aktivieren",
         "Nächsten Tab zeigen",
-        "Vorherigen Tab zeigen"
+        "Vorherigen Tab zeigen",
+        "„%s“ wurde von einem anderen Programm geändert.",
+        "Neu laden ersetzt den Text in BTNEdit durch die Version auf der Festplatte. Deine ungesicherten Änderungen gehen dabei verloren.",
+        "Neu laden",
+        "Meine Version behalten",
+        "„%s“ wurde seit dem Öffnen oder letzten Sichern von einem anderen Programm geändert.",
+        "Sichern überschreibt diese Änderungen.",
+        "Trotzdem sichern",
+        "BTNEdit wurde unerwartet beendet.",
+        "Es gibt ungesicherte Änderungen an %d Dokument(en). Jetzt wiederherstellen? Verwerfen lässt sich nicht rückgängig machen.",
+        "Wiederherstellen",
+        "Verwerfen"
     },
     /* BTN_LANG_FR */
     {
@@ -157,7 +179,18 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Réduire/agrandir",
         "Passer en mode plein écran",
         "Afficher l’onglet suivant",
-        "Afficher l’onglet précédent"
+        "Afficher l’onglet précédent",
+        "« %s » a été modifié par une autre application.",
+        "Recharger remplace le texte dans BTNEdit par la version sur le disque. Vos modifications non enregistrées seront perdues.",
+        "Recharger",
+        "Garder ma version",
+        "« %s » a été modifié par une autre application depuis son ouverture ou le dernier enregistrement.",
+        "L’enregistrement écrasera ces modifications.",
+        "Enregistrer quand même",
+        "BTNEdit s’est fermé de manière inattendue.",
+        "Des modifications non enregistrées de %d document(s) ont été trouvées. Les restaurer maintenant ? L’abandon est irréversible.",
+        "Restaurer",
+        "Abandonner"
     },
     /* BTN_LANG_ES */
     {
@@ -207,7 +240,18 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Zoom",
         "Entrar en pantalla completa",
         "Mostrar pestaña siguiente",
-        "Mostrar pestaña anterior"
+        "Mostrar pestaña anterior",
+        "«%s» fue modificado por otra aplicación.",
+        "Recargar reemplaza el texto de BTNEdit por la versión del disco. Se perderán los cambios no guardados.",
+        "Recargar",
+        "Mantener mi versión",
+        "«%s» fue modificado por otra aplicación desde que se abrió o se guardó por última vez.",
+        "Guardar sobrescribirá esos cambios.",
+        "Guardar de todos modos",
+        "BTNEdit se cerró inesperadamente.",
+        "Se encontraron cambios sin guardar en %d documento(s). ¿Restaurarlos ahora? Descartarlos no se puede deshacer.",
+        "Restaurar",
+        "Descartar"
     },
     /* BTN_LANG_ZH (Simplified) */
     {
@@ -260,7 +304,18 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "缩放",
         "进入全屏幕",
         "显示下一个标签页",
-        "显示上一个标签页"
+        "显示上一个标签页",
+        "“%s”已被其他应用程序修改。",
+        "重新载入会用磁盘上的版本替换 BTNEdit 中的文本，未存储的更改将会丢失。",
+        "重新载入",
+        "保留我的版本",
+        "自打开或上次存储以来，“%s”已被其他应用程序修改。",
+        "存储将覆盖这些更改。",
+        "仍然存储",
+        "BTNEdit 意外退出。",
+        "发现 %d 个文稿有未存储的更改。现在恢复吗？丢弃后无法撤销。",
+        "恢复",
+        "丢弃"
     }
 };
 

@@ -34,7 +34,7 @@ HEADERS = {
     "expensive_extracted.h": ("main.c", ["#BTN_LIVE_REGEX_MAX_COPIES",
                                          "regex_too_expensive_for_live_search"]),
     "replsel_extracted.h": ("main.c", ["replace_selection"]),
-    "doc_extracted.h": ("main.c", ["typedef:Document", "doc_is_dirty", "mark_doc_saved"]),
+    "doc_extracted.h": ("main.c", ["typedef:Document", "doc_has_edits", "doc_is_dirty", "mark_doc_saved"]),
     "focus_extracted.h": ("main.c", ["typedef:BtnFocus"]),
     "shortcuts_extracted.h": ("main.c", [
         "take_selection_as_search_text", "find_next_from_menu", "use_selection_for_find", "next_tab_index",
@@ -45,7 +45,8 @@ HEADERS = {
     "eol_glue_extracted.h": ("main.c", [
         "typedef:BtnReadResult", "#BTN_MAX_FILE_MB", "#BTN_MAX_FILE_SIZE", "basename_of", "looks_binary",
         "write_stream_checked", "write_file_atomic", "write_file_contents", "read_file_contents",
-        "show_file_error", "set_doc_line_ending", "open_file_path", "perform_save_doc"]),
+        "show_file_error", "set_doc_line_ending", "load_doc_contents", "discard_recovery", "open_file_path",
+        "perform_save_doc"]),
     "render_pure_extracted.h": ("render.c", [
         "rows_push", "layout_build", "struct:g_layout", "btn_layout_get",
         "btn_layout_row_for_offset", "btn_row_offset_for_column", "first_row_of_line",
@@ -63,6 +64,13 @@ HEADERS = {
         "btn_scrollbar_knob", "btn_scrollbar_row_for_knob_top", "typedef:FindBarGeometry",
         "find_bar_geometry", "btn_text_cursor_rects"]),
     "drag_type_extracted.h": ("main.c", ["typedef:BtnDrag"]),
+    "protect_extracted.h": ("main.c", [
+        "#BTN_RECOVERY_INTERVAL", "#BTN_RECOVERY_BYTES_PER_SECOND", "#BTN_MAX_FILE_MB", "#BTN_MAX_FILE_SIZE",
+        "typedef:BtnReadResult", "active_doc", "discard_recovery", "basename_of", "doc_display_name", "set_doc_path",
+        "doc_is_blank", "add_tab", "find_tab_for_path", "read_file_contents", "show_file_error",
+        "write_stream_checked", "write_file_atomic", "write_file_contents", "looks_binary", "load_doc_contents",
+        "open_file_path", "perform_save_doc", "reload_doc", "check_doc_on_disk", "autosave_recovery", "on_timer",
+        "on_activate", "restore_into_tab", "restore_recovered_documents"]),
     "mouse_extracted.h": ("main.c", [
         "content_bounds", "visible_line_capacity", "build_current_rows",
         "clamp_scroll_to_row_count", "clamp_scroll", "sync_scroll_to_cursor", "stop_mouse_drag",

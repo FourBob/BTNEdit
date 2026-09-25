@@ -8,6 +8,7 @@
 
 /* Echtes Document samt doc_is_dirty()/mark_doc_saved() aus main.c, dazu
  * Stubs fuer den Rest dessen, was should_close() anfasst. */
+#include "filestamp.h"
 #include "doc_extracted.h"
 #define MAX_TABS 20
 
@@ -19,6 +20,8 @@ static int g_commits = 0;
 static void commit_marked(void) { g_commits++; } /* laufende Eingabe festschreiben */
 static void btn_app_request_redraw(void) {}
 static const char *doc_display_name(Document *d) { (void)d; return "doc"; }
+static int g_discards = 0;
+static void discard_recovery(Document *d) { (void)d; g_discards++; } /* Wiederherstellungsdatei loeschen */
 
 /* Skript: Antwort des Ungesichert-Dialogs pro Tab, Ergebnis des Speicherns pro Tab. */
 static int g_alert_choice[MAX_TABS];
@@ -65,6 +68,7 @@ int main(void) {
     check(r == 0, "S1 cancelled save -> should_close returns 0");
     check(doc_is_dirty(&g_docs[0]), "S1 'Don't Save' tab A is STILL dirty (not silently marked clean)");
     check(g_active_doc == 0, "S1 active tab restored");
+    check(g_discards == 0, "S1 cancelled close keeps the recovery files");
 
     /* Beide erfolgreich: A markiert, B gespeichert */
     setup_two_dirty();
@@ -72,6 +76,7 @@ int main(void) {
     g_save_result[1] = 1;
     r = should_close();
     check(r == 1, "S2 all ok -> 1");
+    check(g_discards == 2, "S2 closing: recovery files of both tabs removed");
     check(!doc_is_dirty(&g_docs[0]), "S2 'Don't Save' tab A marked clean");
     check(!doc_is_dirty(&g_docs[1]), "S2 saved tab B clean");
 
@@ -81,6 +86,7 @@ int main(void) {
     r = should_close();
     check(r == 0 && doc_is_dirty(&g_docs[0]) && doc_is_dirty(&g_docs[1]) && g_save_calls == 0,
           "S3 cancel in dialog -> nothing saved, nothing marked");
+    check(g_discards == 2, "S3 cancelled: recovery files kept");
 
     /* Reihenfolge umgekehrt: A = Sichern (scheitert), B = Nicht sichern */
     setup_two_dirty();

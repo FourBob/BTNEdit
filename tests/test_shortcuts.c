@@ -6,6 +6,7 @@
 #include <string.h>
 #include "editor.h"
 #include "eol.h"
+#include "filestamp.h"
 #include "doc_extracted.h"
 
 static long fails = 0, checks = 0;
