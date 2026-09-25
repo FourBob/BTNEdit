@@ -35,6 +35,7 @@ static BOOL g_eolMenuEnabled = YES;
 static BOOL g_mouse_down = NO;
 static NSPoint g_last_mouse;
 static NSTimer *g_autoscroll_timer = nil; /* gehalten von der Run Loop */
+static int g_test_button_state = -1;       /* btn_shim_test_set_mouse_button() */
 
 /* I-Beam-Flaechen, siehe btn_app_set_text_cursor_rects() */
 #define BTN_MAX_CURSOR_RECTS 4
@@ -589,13 +590,30 @@ void btn_app_set_autoscroll(int on) {
     }
     g_autoscroll_timer = [NSTimer timerWithTimeInterval:0.05 repeats:YES block:^(NSTimer *timer) {
         (void)timer;
+        /* Das mouseUp kann verloren gehen (Loslassen waehrend eines modalen
+         * Dialogs, z.B. nach Cmd+W mitten im Markieren) - ohne diese Pruefung
+         * liefe der Autoscroll danach bis zum Dokumentende weiter. */
+        BOOL pressed = g_test_button_state >= 0 ? g_test_button_state : ([NSEvent pressedMouseButtons] & 1) != 0;
+        if (!pressed) {
+            g_mouse_down = NO;
+            stop_autoscroll();
+            if (g_mouse_cb) {
+                g_mouse_cb(BTN_MOUSE_UP, g_last_mouse.x, g_last_mouse.y, 1, (unsigned long)[NSEvent modifierFlags]);
+            }
+            return;
+        }
         if (g_mouse_cb) {
             g_mouse_cb(BTN_MOUSE_AUTOSCROLL, g_last_mouse.x, g_last_mouse.y, 1, (unsigned long)[NSEvent modifierFlags]);
         }
     }];
-    /* Common Modes: laeuft auch, falls AppKit die Run Loop gerade im
-     * Event-Tracking-Modus betreibt. */
-    [[NSRunLoop currentRunLoop] addTimer:g_autoscroll_timer forMode:NSRunLoopCommonModes];
+    /* Nicht NSRunLoopCommonModes: die enthalten auch den Modus modaler
+     * Dialoge, und hinter einem Sichern-Dialog soll nichts scrollen. */
+    [[NSRunLoop currentRunLoop] addTimer:g_autoscroll_timer forMode:NSDefaultRunLoopMode];
+    [[NSRunLoop currentRunLoop] addTimer:g_autoscroll_timer forMode:NSEventTrackingRunLoopMode];
+}
+
+void btn_shim_test_set_mouse_button(int state) {
+    g_test_button_state = state;
 }
 
 void btn_app_set_text_cursor_rects(const CGRect *rects, int count) {

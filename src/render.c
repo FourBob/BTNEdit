@@ -1480,9 +1480,9 @@ static void draw_scroll_knob(CGContextRef ctx, CGRect knob) {
     CGPathRelease(path);
 }
 
-int btn_text_cursor_rects(CGRect window, CGRect content, int find_bar_visible, CGRect out[3]) {
+int btn_text_cursor_rects(CGRect window, CGRect content, int find_bar_visible, int scrollbar_visible, CGRect out[3]) {
     int n = 0;
-    double w = content.size.width - GUTTER_WIDTH - BTN_SCROLLBAR_WIDTH;
+    double w = content.size.width - GUTTER_WIDTH - (scrollbar_visible ? BTN_SCROLLBAR_WIDTH : 0.0);
     double h = content.size.height - BTN_FOOTER_HEIGHT;
     if (w > 0.0 && h > 0.0) {
         out[n++] = CGRectMake(GUTTER_WIDTH, BTN_FOOTER_HEIGHT, w, h);

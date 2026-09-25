@@ -115,12 +115,14 @@ static void test_geometry(void) {
     /* I-Beam-Flaechen */
     CGRect r[3];
     CGRect win = CGRectMake(0, 0, 900, 600);
-    int n = btn_text_cursor_rects(win, cb, 0, r);
+    int n = btn_text_cursor_rects(win, cb, 0, 1, r);
     CHECK(n == 1 && r[0].origin.x == GUTTER_WIDTH && r[0].origin.x + r[0].size.width == 900 - BTN_SCROLLBAR_WIDTH &&
           r[0].origin.y == BTN_FOOTER_HEIGHT && r[0].origin.y + r[0].size.height == 568,
           "text area without gutter, scrollbar, footer and tab bar");
+    n = btn_text_cursor_rects(win, cb, 0, 0, r);
+    CHECK(n == 1 && r[0].origin.x + r[0].size.width == 900, "no knob: the strip is text (I-beam up to the edge)");
     CGRect cb2 = CGRectMake(0, 0, 900, 568 - BTN_FIND_BAR_HEIGHT);
-    n = btn_text_cursor_rects(win, cb2, 1, r);
+    n = btn_text_cursor_rects(win, cb2, 1, 1, r);
     double bar_bottom = 600 - BTN_TAB_BAR_HEIGHT - BTN_FIND_BAR_HEIGHT, bar_top = 600 - BTN_TAB_BAR_HEIGHT;
     CHECK(n == 3 && r[0].origin.y + r[0].size.height == bar_bottom, "find bar open: text area ends below it");
     for (int i = 1; i < n; i++) {
@@ -128,7 +130,7 @@ static void test_geometry(void) {
               "find field %d inside the find bar", i);
     }
     CHECK(n == 3 && r[1].origin.x + r[1].size.width <= r[2].origin.x, "search and replace field side by side");
-    CHECK(btn_text_cursor_rects(CGRectMake(0, 0, 50, 600), CGRectMake(0, 0, 50, 568), 0, r) == 0,
+    CHECK(btn_text_cursor_rects(CGRectMake(0, 0, 50, 600), CGRectMake(0, 0, 50, 568), 0, 1, r) == 0,
           "window narrower than gutter + scrollbar: no text area");
 }
 
@@ -174,24 +176,36 @@ static void test_drag_select(void) {
     }
     CHECK(g_doc.scroll_row == 0 && ed->cursor == 4 && editor_selection_end(ed) == 53 * 9 + 2,
           "ticks stop at the top, anchor kept (%ld)", g_doc.scroll_row);
+    CHECK(!g_autoscroll_on, "at the top: no more ticks requested");
+    mouse(BTN_MOUSE_DRAGGED, col_x(4), top + 30);
+    CHECK(!g_autoscroll_on && ed->cursor == 4, "above the text at the top: selection to row 0, no timer");
 
     mouse(BTN_MOUSE_DRAGGED, col_x(4), row_y(5));
     CHECK(!g_autoscroll_on && g_doc.scroll_row == 0 && ed->cursor == 5 * 9 + 4, "back inside: autoscroll off");
 
-    mouse(BTN_MOUSE_DRAGGED, col_x(1), bottom - 1);
-    CHECK(g_autoscroll_on && g_doc.scroll_row == 0 && ed->cursor == 28 * 9 + 1, "below: selection to the last visible row");
-    mouse(BTN_MOUSE_AUTOSCROLL, col_x(1), bottom - 1);
+    /* Angeschnittene Row ueber der Statuszeile: gehoert zur letzten ganzen,
+     * kein Autoscroll, kein Scrollen */
+    for (int i = 0; i < 5; i++) {
+        mouse(BTN_MOUSE_DRAGGED, col_x(1 + i), bottom - 1 - i);
+    }
+    CHECK(!g_autoscroll_on && g_doc.scroll_row == 0 && ed->cursor == 28 * 9 + 5,
+          "partial row above the footer: last full row, no autoscroll (%ld, %zu)", g_doc.scroll_row, ed->cursor);
+    double below = BTN_FOOTER_HEIGHT - 1;
+    mouse(BTN_MOUSE_DRAGGED, col_x(1), below);
+    CHECK(g_autoscroll_on && g_doc.scroll_row == 0 && ed->cursor == 28 * 9 + 1, "on the footer: selection to the last full row, autoscroll");
+    mouse(BTN_MOUSE_AUTOSCROLL, col_x(1), below);
     CHECK(g_doc.scroll_row == 1 && ed->cursor == 29 * 9 + 1, "tick below: one row down (%ld)", g_doc.scroll_row);
     for (int i = 0; i < 300; i++) {
-        mouse(BTN_MOUSE_AUTOSCROLL, col_x(1), bottom - 1);
+        mouse(BTN_MOUSE_AUTOSCROLL, col_x(1), below);
     }
     CHECK(g_doc.scroll_row == 172 && ed->cursor == 1800, "ticks stop at the end (%ld, cursor %zu)", g_doc.scroll_row, ed->cursor);
+    CHECK(!g_autoscroll_on, "at the end: no more ticks requested");
 
-    mouse(BTN_MOUSE_UP, col_x(1), bottom - 1);
+    mouse(BTN_MOUSE_UP, col_x(1), below);
     CHECK(!g_autoscroll_on && g_drag == BTN_DRAG_NONE, "mouse up: autoscroll off");
     size_t cur = ed->cursor;
     g_doc.scroll_row = 100;
-    mouse(BTN_MOUSE_AUTOSCROLL, col_x(1), bottom - 50);
+    mouse(BTN_MOUSE_AUTOSCROLL, col_x(1), 5);
     mouse(BTN_MOUSE_DRAGGED, col_x(1), row_y(2));
     CHECK(g_doc.scroll_row == 100 && ed->cursor == cur, "after mouse up: late tick/drag ignored");
 
@@ -219,7 +233,9 @@ static void test_scrollbar_clicks(void) {
     CGRect k;
     btn_scrollbar_knob(cb, 201, 0, &k);
     double kx = k.origin.x + k.size.width / 2, ky = k.origin.y + k.size.height / 2;
+    int commits = g_commits;
     mouse(BTN_MOUSE_DOWN, kx, ky);
+    CHECK(g_commits == commits, "scrollbar click keeps a running input-method composition");
     CHECK(g_drag == BTN_DRAG_SCROLLBAR && ed->cursor == 0 && !editor_has_selection(ed) && g_doc.scroll_row == 0,
           "click on the knob: knob drag, cursor unchanged");
     mouse(BTN_MOUSE_AUTOSCROLL, kx, ky - 100);
@@ -243,6 +259,15 @@ static void test_scrollbar_clicks(void) {
     mouse(BTN_MOUSE_DOWN, kx, BTN_FOOTER_HEIGHT + 3);
     CHECK(g_doc.scroll_row == 172, "paging clamps at the end");
     mouse(BTN_MOUSE_UP, kx, BTN_FOOTER_HEIGHT + 3);
+
+    /* Rechter Rand der Tab-/Suchleiste gehoert nicht zum Scrollbalken */
+    g_find_bar_visible = 1;
+    int finds = g_find_clicks, tabs = g_tab_clicks;
+    mouse(BTN_MOUSE_DOWN, kx, 600 - BTN_TAB_BAR_HEIGHT - 5);
+    mouse(BTN_MOUSE_DOWN, kx, 600 - 5);
+    CHECK(g_find_clicks == finds + 1 && g_tab_clicks == tabs + 1 && g_commits > commits,
+          "clicks at the right edge of find/tab bar go to the bars");
+    g_find_bar_visible = 0;
 
     /* Kurzes Dokument: kein Knopf, der Streifen ist normaler Text */
     set_lines(10);

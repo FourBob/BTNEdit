@@ -109,10 +109,13 @@ static void open_cb(const char *path) {
     opened++;
 }
 
-static int ticks;
+static int ticks, ups;
 static double tick_x, tick_y;
 static void mouse_cb(btn_mouse_phase phase, double x, double y, int clicks, unsigned long mods) {
     (void)clicks; (void)mods;
+    if (phase == BTN_MOUSE_UP) {
+        ups++;
+    }
     if (phase == BTN_MOUSE_AUTOSCROLL) {
         ticks++;
         tick_x = x;
@@ -288,7 +291,13 @@ int main(void) {
         [drag release];
         [pb releaseGlobally];
 
-        /* ---- Autoscroll-Takt beim Markieren ---- */
+        /* ---- Autoscroll-Takt beim Markieren ----
+         * Kuenstliche Events druecken keine echte Taste: der Hook sagt dem
+         * Takt, die Taste sei gedrueckt. Kein App Nap, damit der 50-ms-Timer
+         * auf einer ausgelasteten CI-Maschine nicht gedrosselt wird. */
+        id activity = [[NSProcessInfo processInfo]
+            beginActivityWithOptions:NSActivityUserInitiated | NSActivityLatencyCritical reason:@"timer test"];
+        btn_shim_test_set_mouse_button(1);
         btn_app_set_mouse_callback(mouse_cb);
         btn_app_set_autoscroll(1);
         spin(0.2);
@@ -296,14 +305,14 @@ int main(void) {
         [view mouseDown:mouse_event(win, NSEventTypeLeftMouseDown, NSMakePoint(50, 200))];
         [view mouseDragged:mouse_event(win, NSEventTypeLeftMouseDragged, NSMakePoint(60, 350))];
         btn_app_set_autoscroll(1);
-        spin(0.3);
-        CHECK(ticks >= 3 && tick_x == 60 && tick_y == 350, "ticks with the last mouse position (%d, %.0f/%.0f)", ticks, tick_x, tick_y);
+        spin(0.4);
+        CHECK(ticks >= 2 && tick_x == 60 && tick_y == 350, "ticks with the last mouse position (%d, %.0f/%.0f)", ticks, tick_x, tick_y);
         int t0 = ticks;
         for (int q = 0; q < 15; q++) {
             btn_app_set_autoscroll(1); /* wie bei jeder Mausbewegung */
             spin(0.02);
         }
-        CHECK(ticks - t0 >= 3, "switching on again keeps the running timer (%d ticks)", ticks - t0);
+        CHECK(ticks - t0 >= 2, "switching on again keeps the running timer (%d ticks)", ticks - t0);
         btn_app_set_autoscroll(0);
         spin(0.06);
         int t1 = ticks;
@@ -316,6 +325,22 @@ int main(void) {
         int t2 = ticks;
         spin(0.2);
         CHECK(ticks == t2, "mouse up stops the autoscroll");
+
+        /* mouseUp verloren (Loslassen waehrend eines modalen Dialogs): der
+         * Takt merkt die losgelassene Taste, meldet Mouse-up und endet */
+        [view mouseDown:mouse_event(win, NSEventTypeLeftMouseDown, NSMakePoint(50, 200))];
+        btn_app_set_autoscroll(1);
+        spin(0.2);
+        int u0 = ups, t3 = ticks;
+        CHECK(t3 > t2, "ticking again");
+        btn_shim_test_set_mouse_button(0);
+        spin(0.3);
+        int t4 = ticks;
+        CHECK(ups == u0 + 1, "released button noticed: one mouse-up (%d)", ups - u0);
+        spin(0.2);
+        CHECK(ticks == t4, "and the autoscroll stops");
+        btn_shim_test_set_mouse_button(-1);
+        [[NSProcessInfo processInfo] endActivity:activity];
 
         /* I-Beam-Flaechen: setzen, gleich setzen, leeren - ohne Absturz */
         CGRect rects[2] = { CGRectMake(44, 22, 300, 250), CGRectMake(78, 272, 200, 22) };

@@ -203,8 +203,8 @@ double btn_render_text_width(const char *utf8, size_t len);
 long btn_visible_row_capacity(double content_height);
 
 /* Senkrechter Bereich der voll sichtbaren Rows (bounds wie bei
- * btn_render_frame()): Oberkante der ersten, Unterkante der letzten. Liegt
- * die Maus beim Markieren ausserhalb, scrollt main.c automatisch. */
+ * btn_render_frame()): Oberkante der ersten, Unterkante der letzten. Beim
+ * Markieren darueber hinaus endet die Selektion an der Randzeile. */
 void btn_text_rows_extent(CGRect bounds, double *top, double *bottom);
 
 /* Scrollbalken: nur ein Knopf (keine Schiene) in einem Streifen dieser
@@ -221,11 +221,12 @@ long btn_scrollbar_row_for_knob_top(CGRect bounds, size_t row_count, double knob
 void btn_render_set_scrollbar_active(int active);
 
 /* Flaechen, ueber denen der Mauszeiger ein I-Beam ist (View-Koordinaten):
- * Textbereich des Dokuments ohne Zeilennummern, Scrollbalken und
- * Statuszeile, bei offener Suchleiste auch ihre beiden Felder. window =
+ * Textbereich des Dokuments ohne Zeilennummern, Statuszeile und - falls
+ * sichtbar (scrollbar_visible) - Scrollbalken; ohne Knopf ist der Streifen
+ * normaler Text. Bei offener Suchleiste auch ihre beiden Felder. window =
  * ganzes Fenster, content = Inhaltsbereich wie bei btn_render_frame().
  * Rueckgabe: Anzahl in out (hoechstens 3). */
-int btn_text_cursor_rects(CGRect window, CGRect content, int find_bar_visible, CGRect out[3]);
+int btn_text_cursor_rects(CGRect window, CGRect content, int find_bar_visible, int scrollbar_visible, CGRect out[3]);
 
 /* Wieviele Rows auf eine Druckseite der gegebenen Hoehe (in Punkten) passen -
  * main.c braucht das vor dem Druck, um die per btn_layout_build() erzeugten

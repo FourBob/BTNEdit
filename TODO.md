@@ -32,7 +32,8 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
 
 - Maus: Der Scrollbalken ist immer sichtbar, sobald das Dokument länger als
   das Fenster ist (kein Ein-/Ausblenden wie bei macOS-Overlay-Scrollbars),
-  und ein Klick daneben blättert genau eine Seite - Gedrückthalten
+  und ein Klick daneben blättert eine Seite (eine Zeile bleibt zur
+  Orientierung stehen) - Gedrückthalten
   wiederholt nicht, und die Systemeinstellung "Klicken in die Rollleiste:
   an die angeklickte Stelle springen" wird nicht beachtet. Nach Doppel-/
   Dreifachklick erweitert Ziehen die Auswahl nicht wort- bzw. zeilenweise.

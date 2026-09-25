@@ -2153,8 +2153,11 @@ static void on_draw(CGContextRef ctx, CGRect bounds) {
     btn_render_set_scrollbar_active(g_drag == BTN_DRAG_SCROLLBAR);
     /* Hier statt bei jeder Layout-Aenderung (Fenstergroesse, Suchleiste):
      * der Shim setzt die Flaechen nur neu, wenn sie sich geaendert haben. */
-    CGRect cursor_rects[3];
-    int cursor_rect_count = btn_text_cursor_rects(bounds, content_bounds(), g_find_bar_visible, cursor_rects);
+    CGRect cursor_rects[3], knob;
+    const BtnRow *rows;
+    size_t row_count = build_current_rows(&rows);
+    int has_knob = btn_scrollbar_knob(content_bounds(), row_count, active_doc()->scroll_row, &knob);
+    int cursor_rect_count = btn_text_cursor_rects(bounds, content_bounds(), g_find_bar_visible, has_knob, cursor_rects);
     btn_app_set_text_cursor_rects(cursor_rects, cursor_rect_count);
     btn_render_set_marked_text(g_marked.text, g_marked.len, g_marked.sel_start,
                                g_focus == BTN_FOCUS_SEARCH    ? BTN_MARKED_SEARCH
@@ -2652,23 +2655,31 @@ static long autoscroll_rows(double y, double top, double bottom, long max_rows) 
     return sign * (n > 0 ? n : 1);
 }
 
-/* Markieren per Ziehen bis (x, y). Steht die Maus ueber/unter den
- * sichtbaren Rows, reicht die Selektion bis zur Randzeile, und der Shim
- * taktet (BTN_MOUSE_AUTOSCROLL). Gescrollt wird nur im Takt (tick), damit
- * das Tempo nicht davon abhaengt, wie oft die Maus bewegt wird. */
+/* Markieren per Ziehen bis (x, y). Steht die Maus ueber der ersten Row
+ * oder auf der Statuszeile, reicht die Selektion bis zur Randzeile, und der
+ * Shim taktet (BTN_MOUSE_AUTOSCROLL), solange es dorthin noch etwas zu
+ * scrollen gibt. Gescrollt wird nur im Takt (tick), damit das Tempo nicht
+ * davon abhaengt, wie oft die Maus bewegt wird. Die angeschnittene Row ueber
+ * der Statuszeile zaehlt zur letzten ganzen - sonst liefe dort beim
+ * Markieren eines Wortes schon der Autoscroll. */
 static void drag_select_to(double x, double y, int tick) {
     Document *doc = active_doc();
     CGRect cb = content_bounds();
+    const BtnRow *rows;
+    long row_count = (long)build_current_rows(&rows);
     double top, bottom;
     btn_text_rows_extent(cb, &top, &bottom);
-    long step = autoscroll_rows(y, top, bottom, visible_line_capacity());
-    btn_app_set_autoscroll(step != 0);
-    if (step != 0) {
-        if (tick) {
-            doc->scroll_row += step;
-            clamp_scroll();
-        }
-        y = step < 0 ? top - BTN_LINE_HEIGHT / 2.0 : bottom + BTN_LINE_HEIGHT / 2.0;
+    long step = autoscroll_rows(y, top, BTN_FOOTER_HEIGHT, visible_line_capacity());
+    if (step != 0 && tick) {
+        doc->scroll_row += step;
+        clamp_scroll_to_row_count(row_count);
+    }
+    long max_scroll = row_count - visible_line_capacity();
+    btn_app_set_autoscroll(step < 0 ? doc->scroll_row > 0 : step > 0 && doc->scroll_row < max_scroll);
+    if (y > top) {
+        y = top - BTN_LINE_HEIGHT / 2.0;
+    } else if (y < bottom) {
+        y = bottom + BTN_LINE_HEIGHT / 2.0;
     }
     editor_set_cursor(&doc->editor, btn_hit_test(&doc->editor, cb, x, y, doc->scroll_row), 1);
 }
@@ -2679,7 +2690,7 @@ static void drag_select_to(double x, double y, int tick) {
  * - dann ist es ein normaler Klick in den Text. */
 static int scrollbar_mouse_down(double x, double y) {
     CGRect cb = content_bounds();
-    if (x < cb.size.width - BTN_SCROLLBAR_WIDTH || y < BTN_FOOTER_HEIGHT) {
+    if (x < cb.size.width - BTN_SCROLLBAR_WIDTH || y < BTN_FOOTER_HEIGHT || y >= cb.size.height) {
         return 0;
     }
     Document *d = active_doc();
@@ -2716,8 +2727,15 @@ static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, 
 
     switch (phase) {
         case BTN_MOUSE_DOWN: {
-            commit_marked(); /* Klick beendet eine laufende Eingabe (wie in NSTextView) */
             stop_mouse_drag();
+            if (scrollbar_mouse_down(x, y)) {
+                /* Scrollen bewegt den Cursor nicht (kein sync_scroll_to_cursor())
+                 * und laesst eine laufende Eingabe offen - wie das Mausrad. */
+                btn_text_input_invalidate();
+                btn_app_request_redraw();
+                return;
+            }
+            commit_marked(); /* Klick beendet eine laufende Eingabe (wie in NSTextView) */
             if (y >= g_bounds.size.height - BTN_TAB_BAR_HEIGHT) {
                 handle_tab_bar_click(x);
                 btn_app_request_redraw();
@@ -2729,12 +2747,6 @@ static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, 
                 return;
             }
             if (y < BTN_FOOTER_HEIGHT) {
-                return;
-            }
-            if (scrollbar_mouse_down(x, y)) {
-                /* Scrollen bewegt den Cursor nicht - kein sync_scroll_to_cursor() */
-                btn_text_input_invalidate();
-                btn_app_request_redraw();
                 return;
             }
             /* Klick im Dokument entzieht der Suchen-Leiste den Fokus (die

@@ -140,6 +140,9 @@ void btn_app_build_menu(void);
  * Einschalten laesst einen laufenden Takt weiterlaufen; Loslassen der
  * Maustaste schaltet ab. */
 void btn_app_set_autoscroll(int on);
+/* Nur fuer tests/objc: kuenstliche Maus-Events druecken keine echte Taste.
+ * 1/0 = Taste gilt als gedrueckt/losgelassen, -1 = echte Maus (Standard). */
+void btn_shim_test_set_mouse_button(int state);
 
 /* Flaechen mit I-Beam-Mauszeiger (View-Koordinaten, hoechstens 4), sonst
  * Pfeil. Darf bei jedem Zeichnen gerufen werden - nur eine Aenderung setzt
