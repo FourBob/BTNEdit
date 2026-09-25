@@ -5,19 +5,16 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
 
 ## Fehlende Features (nach Priorität)
 
-1. **Maus und Scrollen.** Keine Scrollbar, kein Autoscroll beim Ziehen einer
-   Selektion über den Fensterrand, Mauszeiger bleibt ein Pfeil statt
-   I-Beam, Datei aufs Fenster ziehen öffnet sie nicht (Drag & Drop).
-2. **Schutz der Arbeit.** Keine Erkennung, wenn ein anderes Programm eine
+1. **Schutz der Arbeit.** Keine Erkennung, wenn ein anderes Programm eine
    offene Datei auf der Platte ändert (Neu laden anbieten). Kein Autosave /
    keine Wiederherstellung nach Absturz - wichtiger, seit Speichermangel im
    Gap-Buffer bewusst mit `abort()` endet.
-3. **Code-Editor-Funktionen.** Kommentar umschalten (⌘/), Zeile duplizieren,
+2. **Code-Editor-Funktionen.** Kommentar umschalten (⌘/), Zeile duplizieren,
    Zeile(n) hoch/runter verschieben, unsichtbare Zeichen anzeigen,
    Wortumbruch an/aus, Kodierung beim Öffnen/Sichern wählen (heute: Bytes
    unverändert, Anzeige als UTF-8 mit Latin-1-Fallback), Suche über alle
    Tabs.
-4. **KI-Vervollständigung mit lokalem LLM (optional, standardmäßig aus).**
+3. **KI-Vervollständigung mit lokalem LLM (optional, standardmäßig aus).**
    Kein eingebautes Modell: BTNEdit fragt per HTTP einen lokal laufenden
    Server an (Ollama oder llama-server), Adresse und Modellname in der
    Prefs-Datei; ohne Server fehlt die Funktion einfach. Code-Modell mit
@@ -32,6 +29,15 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
    der Eingabemethoden (render.c, `draw_marked_overlay`) als Vorlage nehmen.
 
 ## Bekannte Einschränkungen (bewusst zurückgestellt, kein akuter Bug)
+
+- Maus: Der Scrollbalken ist immer sichtbar, sobald das Dokument länger als
+  das Fenster ist (kein Ein-/Ausblenden wie bei macOS-Overlay-Scrollbars),
+  und ein Klick daneben blättert genau eine Seite - Gedrückthalten
+  wiederholt nicht, und die Systemeinstellung "Klicken in die Rollleiste:
+  an die angeklickte Stelle springen" wird nicht beachtet. Nach Doppel-/
+  Dreifachklick erweitert Ziehen die Auswahl nicht wort- bzw. zeilenweise.
+  Text (statt Dateien) lässt sich nicht ins Fenster ziehen, und markierter
+  Text lässt sich nicht per Maus verschieben.
 
 - Eingabemethoden: Der vorläufige Text (z.B. Pinyin vor der Auswahl) wird
   als Overlay am Cursor gezeichnet und verdeckt so lange den Text dahinter,

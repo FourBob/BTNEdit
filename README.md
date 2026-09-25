@@ -17,6 +17,10 @@ Graphics/Core Text gezeichnet.
 - Zuletzt geöffnet (persistiert über Neustarts hinweg)
 - Wortumbruch, Zeilennummern-Gutter, Statuszeile (Zeilen/Wörter/Zeichen,
   Zeilenenden)
+- Maus: I-Beam-Zeiger über dem Text, Scrollbalken (Knopf ziehen, daneben
+  klicken blättert eine Seite), Markieren über den Fensterrand hinaus
+  scrollt automatisch (je weiter draußen, desto schneller), Dateien aus dem
+  Finder ins Fenster ziehen öffnet sie in Tabs
 - Zeilenenden: LF (macOS/Unix), CRLF (Windows) und CR (klassisches Mac OS)
   werden beim Öffnen erkannt und beim Sichern beibehalten; umstellen über
   Ablage > Zeilenenden. Eingefügter Text wird angepasst. Dateien mit
@@ -119,7 +123,8 @@ ONLY=undo make test        # nur Tests, deren Name "undo" enthält
 make bench                 # Laufzeit pro Tastendruck bei großen Dokumenten
 ```
 
-Die Tests brauchen kein macOS und kein Xcode-Projekt: `editor.c`,
+Die Tests brauchen kein macOS und kein Xcode-Projekt (für Tests, die
+`render.h`/`shim.h` einbinden, ersetzt `tests/stubs/` die CoreGraphics-Typen): `editor.c`,
 `eol.c`, `gapbuffer.c`, `highlight.c` und `strings.c` werden direkt gelinkt. Die reinen
 C-Teile aus `main.c` und `render.c` (Regex-Suche, Sichern, Laden, Layout, ...)
 schneidet `tests/gen_headers.py` bei jedem Lauf frisch aus dem Quelltext
@@ -136,6 +141,7 @@ umbenennt, muss sie dort nachziehen.
 | `test_undo` | Undo-Gruppen und Fuzzing mit simulierten Allokationsfehlern |
 | `test_textinput` | Eingabemethoden: UTF-16-Umrechnung, nachgestellte Abläufe (Tottaste, Pinyin, Akzent-Menü, Emoji, Suchfeld) mit dem Code aus `main.c` |
 | `test_shortcuts` | Weitersuchen, Auswahl für Suche (auch mit NUL-Byte), Tab-Wechsel mit Umlauf |
+| `test_mouse` | Scrollbalken-Geometrie samt Umkehrung, I-Beam-Flächen, Autoscroll-Tempo; `on_mouse()` aus `main.c` mit echtem Layout: Markieren mit Autoscroll-Takt, Knopf ziehen, Seite blättern |
 | `test_indent` | Auto-Indent bei Return, Tab/⇧Tab über mehrere Zeilen, Tab vs. Leerzeichen, Fuzz: Ausrücken nach Einrücken = Original |
 | `test_save_atomic`, `test_save_links_perms`, `test_file_io` | atomares Sichern, Symlinks, Schreibschutz, Laden, Recent-Liste |
 | `test_close_flow` | Schließen/Beenden verliert nie ungesicherte Änderungen |
@@ -147,7 +153,7 @@ umbenennt, muss sie dort nachziehen.
 Die Objective-C-Seite (`shim.m`: Tastatur, Maus, Dialoge) lässt sich so nicht
 testen. `make test-objc` (nur macOS) erzeugt deshalb die echte View und prüft
 die Eingabemethoden-Schnittstelle mit Protokollaufrufen und künstlichen
-Tasten-Events. Dafür baut die CI (`.github/workflows/build.yml`) bei jedem Push auf
+Tasten-Events, das Ablegen von Dateien und den Autoscroll-Takt. Dafür baut die CI (`.github/workflows/build.yml`) bei jedem Push auf
 einem macOS-Runner die echte App mit `-Werror`, startet sie kurz und führt die
 Tests mit Apples Regex-Engine aus; ein zweiter Job führt sie unter Linux mit
 gcc aus. Neue Tests: `tests/test_<name>.c` anlegen und in `tests/run_tests.sh`

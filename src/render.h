@@ -91,7 +91,8 @@ void btn_render_zoom_in(void);
 void btn_render_zoom_out(void);
 void btn_render_zoom_reset(void);
 
-/* Verfuegbare Breite fuer Text (Fensterbreite minus Gutter/Polsterung). */
+/* Verfuegbare Breite fuer Text (Fensterbreite minus Gutter/Polsterung und
+ * Scrollbalken-Streifen). */
 double btn_layout_text_width(CGRect bounds);
 
 /* Berechnet das komplette Zeilenumbruch-Layout fuer den aktuellen
@@ -200,6 +201,31 @@ double btn_render_text_width(const char *utf8, size_t len);
  * btn_render_frame() vor die erste Row setzt (mindestens 1). main.c's
  * Scroll-Klemmung und "Cursor sichtbar halten" rechnen damit. */
 long btn_visible_row_capacity(double content_height);
+
+/* Senkrechter Bereich der voll sichtbaren Rows (bounds wie bei
+ * btn_render_frame()): Oberkante der ersten, Unterkante der letzten. Liegt
+ * die Maus beim Markieren ausserhalb, scrollt main.c automatisch. */
+void btn_text_rows_extent(CGRect bounds, double *top, double *bottom);
+
+/* Scrollbalken: nur ein Knopf (keine Schiene) in einem Streifen dieser
+ * Breite am rechten Rand der Textflaeche - der Text bricht davor um. */
+#define BTN_SCROLLBAR_WIDTH 12.0
+#define BTN_SCROLLBAR_MIN_KNOB 24.0
+/* Rechteck des Knopfs fuer row_count Rows ab scroll_row (bounds wie bei
+ * btn_render_frame()). Rueckgabe 0 = kein Knopf, alles passt ins Fenster. */
+int btn_scrollbar_knob(CGRect bounds, size_t row_count, long scroll_row, CGRect *out_knob);
+/* Umkehrung beim Ziehen: scroll_row fuer einen Knopf mit Oberkante knob_top
+ * (geklemmt auf [0, row_count - Sichtkapazitaet]). */
+long btn_scrollbar_row_for_knob_top(CGRect bounds, size_t row_count, double knob_top);
+/* Knopf dunkler zeichnen, solange er gezogen wird. */
+void btn_render_set_scrollbar_active(int active);
+
+/* Flaechen, ueber denen der Mauszeiger ein I-Beam ist (View-Koordinaten):
+ * Textbereich des Dokuments ohne Zeilennummern, Scrollbalken und
+ * Statuszeile, bei offener Suchleiste auch ihre beiden Felder. window =
+ * ganzes Fenster, content = Inhaltsbereich wie bei btn_render_frame().
+ * Rueckgabe: Anzahl in out (hoechstens 3). */
+int btn_text_cursor_rects(CGRect window, CGRect content, int find_bar_visible, CGRect out[3]);
 
 /* Wieviele Rows auf eine Druckseite der gegebenen Hoehe (in Punkten) passen -
  * main.c braucht das vor dem Druck, um die per btn_layout_build() erzeugten

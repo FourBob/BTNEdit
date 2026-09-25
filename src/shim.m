@@ -30,6 +30,45 @@ static NSMenu *g_recentMenu = nil;
 static NSMenuItem *g_eolItems[3];
 static BOOL g_eolMenuEnabled = YES;
 
+/* Maustaste gedrueckt und ihre letzte Position (View-Koordinaten) - der
+ * Autoscroll-Takt schickt sie erneut, solange die Maus still steht. */
+static BOOL g_mouse_down = NO;
+static NSPoint g_last_mouse;
+static NSTimer *g_autoscroll_timer = nil; /* gehalten von der Run Loop */
+
+/* I-Beam-Flaechen, siehe btn_app_set_text_cursor_rects() */
+#define BTN_MAX_CURSOR_RECTS 4
+static CGRect g_cursor_rects[BTN_MAX_CURSOR_RECTS];
+static int g_cursor_rect_count = 0;
+
+static void stop_autoscroll(void) {
+    [g_autoscroll_timer invalidate];
+    g_autoscroll_timer = nil;
+}
+
+/* "Oeffnen mit", Dock-Icon und Ablegen im Fenster: jede Datei einzeln an
+ * main.c (dieselbe Logik wie Ablage > Oeffnen...). */
+static void open_file_urls(NSArray<NSURL *> *urls) {
+    if (!g_open_file_cb) {
+        return;
+    }
+    for (NSURL *url in urls) {
+        if (![url isFileURL]) {
+            continue;
+        }
+        const char *path = [[url path] UTF8String];
+        if (path) {
+            g_open_file_cb(path);
+        }
+    }
+}
+
+/* Nur Datei-URLs (keine Web-Links, kein Text) */
+static NSArray<NSURL *> *dropped_file_urls(id<NSDraggingInfo> info) {
+    return [[info draggingPasteboard] readObjectsForClasses:@[ [NSURL class] ]
+                                                    options:@{ NSPasteboardURLReadingFileURLsOnlyKey : @YES }];
+}
+
 /* Gibt ein Tasten-Event wie frueher an main.c weiter (Keycode, Modifier und
  * characters) - fuer alles, was keinen Text erzeugt. */
 static void forward_key_event(NSEvent *event) {
@@ -74,7 +113,43 @@ static long ns_loc(NSRange r) {
 
 @implementation BTNContentView
 
+- (instancetype)initWithFrame:(NSRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        [self registerForDraggedTypes:@[ NSPasteboardTypeFileURL ]];
+    }
+    return self;
+}
+
 - (BOOL)acceptsFirstResponder {
+    return YES;
+}
+
+- (void)resetCursorRects {
+    for (int i = 0; i < g_cursor_rect_count; i++) {
+        [self addCursorRect:NSRectFromCGRect(g_cursor_rects[i]) cursor:[NSCursor IBeamCursor]];
+    }
+}
+
+/* Dateien aus dem Finder ins Fenster ziehen: jede wird in einem Tab
+ * geoeffnet. Text (z.B. aus einem Browser) wird nicht angenommen. */
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+    return (g_open_file_cb && [dropped_file_urls(sender) count] > 0) ? NSDragOperationCopy : NSDragOperationNone;
+}
+
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    NSArray<NSURL *> *urls = dropped_file_urls(sender);
+    if (!g_open_file_cb || [urls count] == 0) {
+        return NO;
+    }
+    /* Erst nach dem Ende der Drag-Sitzung oeffnen: eine Fehlermeldung
+     * (Datei zu gross, Ordner, ...) waere sonst ein modaler Dialog mitten
+     * im Ablegen, und der Finder wartete so lange auf das Ende. */
+    dispatch_async(dispatch_get_main_queue(), ^{
+        open_file_urls(urls);
+        [NSApp activateIgnoringOtherApps:YES];
+        [[self window] makeKeyAndOrderFront:nil];
+    });
     return YES;
 }
 
@@ -87,6 +162,7 @@ static long ns_loc(NSRange r) {
 }
 
 - (void)keyDown:(NSEvent *)event {
+    [NSCursor setHiddenUntilMouseMoves:YES]; /* wie in TextEdit beim Tippen */
     if (!g_ti_set) {
         forward_key_event(event); /* ohne Eingabemethoden-Callbacks wie frueher */
         return;
@@ -221,20 +297,25 @@ static long ns_loc(NSRange r) {
 }
 
 - (void)mouseDown:(NSEvent *)event {
+    g_mouse_down = YES;
+    g_last_mouse = [self convertPoint:[event locationInWindow] fromView:nil];
     if (g_mouse_cb) {
-        NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
-        g_mouse_cb(BTN_MOUSE_DOWN, p.x, p.y, (int)[event clickCount], (unsigned long)[event modifierFlags]);
+        g_mouse_cb(BTN_MOUSE_DOWN, g_last_mouse.x, g_last_mouse.y, (int)[event clickCount],
+                   (unsigned long)[event modifierFlags]);
     }
 }
 
 - (void)mouseDragged:(NSEvent *)event {
+    g_last_mouse = [self convertPoint:[event locationInWindow] fromView:nil];
     if (g_mouse_cb) {
-        NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
-        g_mouse_cb(BTN_MOUSE_DRAGGED, p.x, p.y, (int)[event clickCount], (unsigned long)[event modifierFlags]);
+        g_mouse_cb(BTN_MOUSE_DRAGGED, g_last_mouse.x, g_last_mouse.y, (int)[event clickCount],
+                   (unsigned long)[event modifierFlags]);
     }
 }
 
 - (void)mouseUp:(NSEvent *)event {
+    g_mouse_down = NO;
+    stop_autoscroll();
     if (g_mouse_cb) {
         NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
         g_mouse_cb(BTN_MOUSE_UP, p.x, p.y, (int)[event clickCount], (unsigned long)[event modifierFlags]);
@@ -387,15 +468,7 @@ static void btn_activate_and_focus_window(void) {
     if (!g_open_file_cb) {
         return;
     }
-    for (NSURL *url in urls) {
-        if (![url isFileURL]) {
-            continue;
-        }
-        const char *path = [[url path] UTF8String];
-        if (path) {
-            g_open_file_cb(path);
-        }
-    }
+    open_file_urls(urls);
     btn_activate_and_focus_window();
 }
 
@@ -504,6 +577,43 @@ void btn_app_set_mouse_callback(btn_mouse_callback cb) {
 
 void btn_app_set_scroll_callback(btn_scroll_callback cb) {
     g_scroll_cb = cb;
+}
+
+void btn_app_set_autoscroll(int on) {
+    if (!on || !g_mouse_down) {
+        stop_autoscroll();
+        return;
+    }
+    if (g_autoscroll_timer) {
+        return; /* laeuft schon - bei jeder Mausbewegung neu starten hiesse nie ticken */
+    }
+    g_autoscroll_timer = [NSTimer timerWithTimeInterval:0.05 repeats:YES block:^(NSTimer *timer) {
+        (void)timer;
+        if (g_mouse_cb) {
+            g_mouse_cb(BTN_MOUSE_AUTOSCROLL, g_last_mouse.x, g_last_mouse.y, 1, (unsigned long)[NSEvent modifierFlags]);
+        }
+    }];
+    /* Common Modes: laeuft auch, falls AppKit die Run Loop gerade im
+     * Event-Tracking-Modus betreibt. */
+    [[NSRunLoop currentRunLoop] addTimer:g_autoscroll_timer forMode:NSRunLoopCommonModes];
+}
+
+void btn_app_set_text_cursor_rects(const CGRect *rects, int count) {
+    if (count < 0) {
+        count = 0;
+    }
+    if (count > BTN_MAX_CURSOR_RECTS) {
+        count = BTN_MAX_CURSOR_RECTS;
+    }
+    if (count == g_cursor_rect_count &&
+        (count == 0 || memcmp(rects, g_cursor_rects, (size_t)count * sizeof(CGRect)) == 0)) {
+        return;
+    }
+    if (count > 0) {
+        memcpy(g_cursor_rects, rects, (size_t)count * sizeof(CGRect));
+    }
+    g_cursor_rect_count = count;
+    [[g_view window] invalidateCursorRectsForView:g_view];
 }
 
 void btn_app_set_should_close_callback(btn_should_close_callback cb) {

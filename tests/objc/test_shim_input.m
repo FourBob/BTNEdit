@@ -75,6 +75,60 @@ static NSMenuItem *find_item(NSMenu *menu, NSString *key, NSEventModifierFlags m
     return nil;
 }
 
+/* Ablegen im Fenster: der Shim liest nur draggingPasteboard. */
+@interface FakeDrag : NSObject {
+    NSPasteboard *_pb;
+}
+- (instancetype)initWithPasteboard:(NSPasteboard *)pb;
+- (NSPasteboard *)draggingPasteboard;
+@end
+
+@implementation FakeDrag
+- (instancetype)initWithPasteboard:(NSPasteboard *)pb {
+    self = [super init];
+    if (self) {
+        _pb = [pb retain];
+    }
+    return self;
+}
+- (void)dealloc {
+    [_pb release];
+    [super dealloc];
+}
+- (NSPasteboard *)draggingPasteboard {
+    return _pb;
+}
+@end
+
+static int opened;
+static char opened_paths[4][64];
+static void open_cb(const char *path) {
+    if (opened < 4) {
+        snprintf(opened_paths[opened], sizeof opened_paths[0], "%s", path);
+    }
+    opened++;
+}
+
+static int ticks;
+static double tick_x, tick_y;
+static void mouse_cb(btn_mouse_phase phase, double x, double y, int clicks, unsigned long mods) {
+    (void)clicks; (void)mods;
+    if (phase == BTN_MOUSE_AUTOSCROLL) {
+        ticks++;
+        tick_x = x;
+        tick_y = y;
+    }
+}
+
+static void spin(double seconds) {
+    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:seconds]];
+}
+
+static NSEvent *mouse_event(NSWindow *w, NSEventType type, NSPoint p) {
+    return [NSEvent mouseEventWithType:type location:p modifierFlags:0 timestamp:0 windowNumber:[w windowNumber]
+                               context:nil eventNumber:0 clickCount:1 pressure:1.0f];
+}
+
 static NSEvent *key_event(NSWindow *w, NSString *chars, NSString *ignoring, unsigned short code, NSEventModifierFlags mods) {
     return [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:mods timestamp:0
                         windowNumber:[w windowNumber] context:nil characters:chars charactersIgnoringModifiers:ignoring
@@ -207,6 +261,67 @@ int main(void) {
               "Window menu registered with Zoom");
         it = find_item(menubar, @"f", cmd);
         CHECK(it && [it tag] == BTN_MENU_FIND, "Cmd+F still Find (no clash with full screen)");
+
+        /* ---- Dateien ins Fenster ziehen ---- */
+        btn_app_set_open_file_callback(open_cb);
+        CHECK([[view registeredDraggedTypes] containsObject:NSPasteboardTypeFileURL], "view accepts dragged file URLs");
+        NSPasteboard *pb = [NSPasteboard pasteboardWithUniqueName];
+        [pb clearContents];
+        [pb writeObjects:@[ [NSURL fileURLWithPath:@"/tmp/btn a.txt"], [NSURL fileURLWithPath:@"/tmp/b.c"] ]];
+        FakeDrag *drag = [[FakeDrag alloc] initWithPasteboard:pb];
+        id<NSDraggingInfo> info = (id<NSDraggingInfo>)drag;
+        id dest = view;
+        CHECK([dest draggingEntered:info] == NSDragOperationCopy, "file drag: copy cursor");
+        CHECK([dest performDragOperation:info], "file drop accepted");
+        CHECK(opened == 0, "files opened only after the drop has returned");
+        spin(0.2);
+        CHECK(opened == 2 && strcmp(opened_paths[0], "/tmp/btn a.txt") == 0 && strcmp(opened_paths[1], "/tmp/b.c") == 0,
+              "both dropped files opened, in order (%d)", opened);
+        [pb clearContents];
+        [pb writeObjects:@[ @"just text" ]];
+        CHECK([dest draggingEntered:info] == NSDragOperationNone && ![dest performDragOperation:info], "text drag refused");
+        [pb clearContents];
+        [pb writeObjects:@[ [NSURL URLWithString:@"https://example.com/a.txt"] ]];
+        CHECK([dest draggingEntered:info] == NSDragOperationNone && ![dest performDragOperation:info], "web link refused");
+        spin(0.1);
+        CHECK(opened == 2, "nothing opened for refused drops");
+        [drag release];
+        [pb releaseGlobally];
+
+        /* ---- Autoscroll-Takt beim Markieren ---- */
+        btn_app_set_mouse_callback(mouse_cb);
+        btn_app_set_autoscroll(1);
+        spin(0.2);
+        CHECK(ticks == 0, "no autoscroll without a pressed mouse button");
+        [view mouseDown:mouse_event(win, NSEventTypeLeftMouseDown, NSMakePoint(50, 200))];
+        [view mouseDragged:mouse_event(win, NSEventTypeLeftMouseDragged, NSMakePoint(60, 350))];
+        btn_app_set_autoscroll(1);
+        spin(0.3);
+        CHECK(ticks >= 3 && tick_x == 60 && tick_y == 350, "ticks with the last mouse position (%d, %.0f/%.0f)", ticks, tick_x, tick_y);
+        int t0 = ticks;
+        for (int q = 0; q < 15; q++) {
+            btn_app_set_autoscroll(1); /* wie bei jeder Mausbewegung */
+            spin(0.02);
+        }
+        CHECK(ticks - t0 >= 3, "switching on again keeps the running timer (%d ticks)", ticks - t0);
+        btn_app_set_autoscroll(0);
+        spin(0.06);
+        int t1 = ticks;
+        spin(0.2);
+        CHECK(ticks == t1, "switched off: no more ticks");
+        btn_app_set_autoscroll(1);
+        spin(0.2);
+        CHECK(ticks > t1, "switched on again while the button is down");
+        [view mouseUp:mouse_event(win, NSEventTypeLeftMouseUp, NSMakePoint(60, 350))];
+        int t2 = ticks;
+        spin(0.2);
+        CHECK(ticks == t2, "mouse up stops the autoscroll");
+
+        /* I-Beam-Flaechen: setzen, gleich setzen, leeren - ohne Absturz */
+        CGRect rects[2] = { CGRectMake(44, 22, 300, 250), CGRectMake(78, 272, 200, 22) };
+        btn_app_set_text_cursor_rects(rects, 2);
+        btn_app_set_text_cursor_rects(rects, 2);
+        btn_app_set_text_cursor_rects(NULL, 0);
 
         [win orderOut:nil];
     }

@@ -60,7 +60,9 @@ enum {
 typedef enum {
     BTN_MOUSE_DOWN,
     BTN_MOUSE_DRAGGED,
-    BTN_MOUSE_UP
+    BTN_MOUSE_UP,
+    /* Takt waehrend btn_app_set_autoscroll(1), mit der letzten Mausposition */
+    BTN_MOUSE_AUTOSCROLL
 } btn_mouse_phase;
 
 typedef void (*btn_draw_callback)(CGContextRef ctx, CGRect bounds);
@@ -79,7 +81,7 @@ typedef int (*btn_should_close_callback)(void);
 
 /* Wird einmal pro Datei aufgerufen, die per "Oeffnen mit" (Finder), per
  * Doppelklick auf eine Datei eines registrierten Typs, oder per Drag&Drop
- * aufs Dock-Icon geoeffnet werden soll - sowohl beim Programmstart (App war
+ * aufs Dock-Icon oder ins Fenster geoeffnet werden soll - sowohl beim Programmstart (App war
  * noch nicht offen) als auch waehrend die App bereits laeuft. path ist ein
  * absoluter Dateisystempfad (kein NSURL, main.c bleibt Cocoa-frei). */
 typedef void (*btn_open_file_callback)(const char *path);
@@ -131,6 +133,18 @@ void btn_text_input_discard(void);
  * neuen Cursorposition folgen. */
 void btn_text_input_invalidate(void);
 void btn_app_build_menu(void);
+
+/* Autoscroll beim Markieren: solange an und die Maustaste gedrueckt ist,
+ * kommt alle 50 ms BTN_MOUSE_AUTOSCROLL mit der letzten Mausposition - auch
+ * wenn die Maus still ueber/unter der Textflaeche steht. Erneutes
+ * Einschalten laesst einen laufenden Takt weiterlaufen; Loslassen der
+ * Maustaste schaltet ab. */
+void btn_app_set_autoscroll(int on);
+
+/* Flaechen mit I-Beam-Mauszeiger (View-Koordinaten, hoechstens 4), sonst
+ * Pfeil. Darf bei jedem Zeichnen gerufen werden - nur eine Aenderung setzt
+ * die Cursor-Rechtecke des Fensters neu. */
+void btn_app_set_text_cursor_rects(const CGRect *rects, int count);
 
 /* Baut das "Zuletzt geoeffnet"-Untermenue komplett neu aus paths[0..count)
  * auf (paths[0] = neuester Eintrag). main.c ruft das nach jedem Laden/

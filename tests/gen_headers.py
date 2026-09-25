@@ -56,6 +56,17 @@ HEADERS = {
     "cap_extracted.h": ("render.c", ["btn_visible_row_capacity"]),
     "fontsize_extracted.h": ("render.c", ["btn_render_set_font_size"]),
     "footer_fmt_extracted.h": ("render.c", ["btn_footer_format_ok"]),
+    "mouse_render_extracted.h": ("render.c", [
+        "#GUTTER_WIDTH", "#LINE_HEIGHT", "#LEFT_PADDING", "#TOP_PADDING", "chars_per_row_for",
+        "btn_layout_text_width", "btn_hit_test", "btn_visible_row_capacity", "btn_text_rows_extent",
+        "#SCROLLBAR_INSET", "#SCROLLBAR_KNOB_WIDTH", "typedef:ScrollbarTrack", "scrollbar_track",
+        "btn_scrollbar_knob", "btn_scrollbar_row_for_knob_top", "typedef:FindBarGeometry",
+        "find_bar_geometry", "btn_text_cursor_rects"]),
+    "drag_type_extracted.h": ("main.c", ["typedef:BtnDrag"]),
+    "mouse_extracted.h": ("main.c", [
+        "content_bounds", "visible_line_capacity", "build_current_rows",
+        "clamp_scroll_to_row_count", "clamp_scroll", "sync_scroll_to_cursor", "stop_mouse_drag",
+        "autoscroll_rows", "drag_select_to", "scrollbar_mouse_down", "scrollbar_drag_to", "on_mouse"]),
 }
 
 

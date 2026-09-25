@@ -80,7 +80,20 @@ static int g_doc_count = 0;
 static int g_active_doc = 0;
 
 static CGRect g_bounds = { { 0, 0 }, { 900, 600 } };
-static int g_dragging = 0;
+
+/* Was die gedrueckte Maustaste gerade tut. */
+typedef enum {
+    BTN_DRAG_NONE,
+    BTN_DRAG_TEXT,      /* Selektion ziehen (mit Autoscroll am Rand) */
+    BTN_DRAG_SCROLLBAR  /* Scrollbalken-Knopf ziehen */
+} BtnDrag;
+static BtnDrag g_drag = BTN_DRAG_NONE;
+static double g_drag_knob_offset; /* Knopf-Oberkante minus Klickpunkt */
+
+static void stop_mouse_drag(void) {
+    g_drag = BTN_DRAG_NONE;
+    btn_app_set_autoscroll(0);
+}
 
 static char *g_recent_paths[BTN_MAX_RECENT_FILES]; /* [0] = neuester Eintrag */
 static int g_recent_count = 0;
@@ -515,6 +528,7 @@ static void open_find_bar(void) {
  * bezieht sich sonst auf ein Dokument, das gerade nicht mehr sichtbar ist. */
 static void switch_to_tab(int idx) {
     commit_marked();
+    stop_mouse_drag(); /* ein Ziehen gehoerte zum bisherigen Dokument */
     close_find_bar();
     g_active_doc = idx;
     btn_set_window_title(doc_display_name(active_doc()));
@@ -2136,6 +2150,12 @@ static void on_draw(CGContextRef ctx, CGRect bounds) {
                  btn_eol_name(active->eol));
     }
     btn_render_set_footer_eol(eol_label);
+    btn_render_set_scrollbar_active(g_drag == BTN_DRAG_SCROLLBAR);
+    /* Hier statt bei jeder Layout-Aenderung (Fenstergroesse, Suchleiste):
+     * der Shim setzt die Flaechen nur neu, wenn sie sich geaendert haben. */
+    CGRect cursor_rects[3];
+    int cursor_rect_count = btn_text_cursor_rects(bounds, content_bounds(), g_find_bar_visible, cursor_rects);
+    btn_app_set_text_cursor_rects(cursor_rects, cursor_rect_count);
     btn_render_set_marked_text(g_marked.text, g_marked.len, g_marked.sel_start,
                                g_focus == BTN_FOCUS_SEARCH    ? BTN_MARKED_SEARCH
                                : g_focus == BTN_FOCUS_REPLACE ? BTN_MARKED_REPLACE
@@ -2609,12 +2629,95 @@ static void on_resize(CGSize size) {
     btn_app_request_redraw();
 }
 
+/* Zeilen pro Autoscroll-Takt, wenn die Maus beim Markieren bei y ueber
+ * (> top) oder unter (< bottom) den sichtbaren Rows steht: negativ = nach
+ * oben, 0 = innerhalb. Je weiter draussen, desto schneller - hoechstens
+ * max_rows (eine Seite). */
+static long autoscroll_rows(double y, double top, double bottom, long max_rows) {
+    double dist;
+    long sign;
+    if (y > top) {
+        dist = y - top;
+        sign = -1;
+    } else if (y < bottom) {
+        dist = bottom - y;
+        sign = 1;
+    } else {
+        return 0;
+    }
+    long n = 1 + (long)(dist / BTN_LINE_HEIGHT);
+    if (n > max_rows) {
+        n = max_rows;
+    }
+    return sign * (n > 0 ? n : 1);
+}
+
+/* Markieren per Ziehen bis (x, y). Steht die Maus ueber/unter den
+ * sichtbaren Rows, reicht die Selektion bis zur Randzeile, und der Shim
+ * taktet (BTN_MOUSE_AUTOSCROLL). Gescrollt wird nur im Takt (tick), damit
+ * das Tempo nicht davon abhaengt, wie oft die Maus bewegt wird. */
+static void drag_select_to(double x, double y, int tick) {
+    Document *doc = active_doc();
+    CGRect cb = content_bounds();
+    double top, bottom;
+    btn_text_rows_extent(cb, &top, &bottom);
+    long step = autoscroll_rows(y, top, bottom, visible_line_capacity());
+    btn_app_set_autoscroll(step != 0);
+    if (step != 0) {
+        if (tick) {
+            doc->scroll_row += step;
+            clamp_scroll();
+        }
+        y = step < 0 ? top - BTN_LINE_HEIGHT / 2.0 : bottom + BTN_LINE_HEIGHT / 2.0;
+    }
+    editor_set_cursor(&doc->editor, btn_hit_test(&doc->editor, cb, x, y, doc->scroll_row), 1);
+}
+
+/* Klick in den Scrollbalken-Streifen: auf den Knopf = ziehen, darueber/
+ * darunter = eine Seite blaettern. Rueckgabe 0 = nicht behandelt (kein
+ * Knopf, weil alles ins Fenster passt, oder Klick ausserhalb des Streifens)
+ * - dann ist es ein normaler Klick in den Text. */
+static int scrollbar_mouse_down(double x, double y) {
+    CGRect cb = content_bounds();
+    if (x < cb.size.width - BTN_SCROLLBAR_WIDTH || y < BTN_FOOTER_HEIGHT) {
+        return 0;
+    }
+    Document *d = active_doc();
+    const BtnRow *rows;
+    size_t row_count = build_current_rows(&rows);
+    CGRect knob;
+    if (!btn_scrollbar_knob(cb, row_count, d->scroll_row, &knob)) {
+        return 0;
+    }
+    double knob_top = knob.origin.y + knob.size.height;
+    long page = visible_line_capacity() > 1 ? visible_line_capacity() - 1 : 1;
+    if (y > knob_top) {
+        d->scroll_row -= page;
+    } else if (y < knob.origin.y) {
+        d->scroll_row += page;
+    } else {
+        g_drag = BTN_DRAG_SCROLLBAR;
+        g_drag_knob_offset = knob_top - y;
+    }
+    clamp_scroll_to_row_count((long)row_count);
+    return 1;
+}
+
+static void scrollbar_drag_to(double y) {
+    const BtnRow *rows;
+    size_t row_count = build_current_rows(&rows);
+    Document *d = active_doc();
+    d->scroll_row = btn_scrollbar_row_for_knob_top(content_bounds(), row_count, y + g_drag_knob_offset);
+    clamp_scroll_to_row_count((long)row_count);
+}
+
 static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, unsigned long modifierFlags) {
     int shift = (modifierFlags & BTN_MOD_SHIFT) != 0;
 
     switch (phase) {
         case BTN_MOUSE_DOWN: {
             commit_marked(); /* Klick beendet eine laufende Eingabe (wie in NSTextView) */
+            stop_mouse_drag();
             if (y >= g_bounds.size.height - BTN_TAB_BAR_HEIGHT) {
                 handle_tab_bar_click(x);
                 btn_app_request_redraw();
@@ -2628,6 +2731,12 @@ static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, 
             if (y < BTN_FOOTER_HEIGHT) {
                 return;
             }
+            if (scrollbar_mouse_down(x, y)) {
+                /* Scrollen bewegt den Cursor nicht - kein sync_scroll_to_cursor() */
+                btn_text_input_invalidate();
+                btn_app_request_redraw();
+                return;
+            }
             /* Klick im Dokument entzieht der Suchen-Leiste den Fokus (die
              * Leiste selbst bleibt offen) - genau wie das Anklicken von
              * irgendwas anderem ein fokussiertes Textfeld sonst auch
@@ -2637,26 +2746,38 @@ static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, 
             size_t offset = btn_hit_test(&doc->editor, content_bounds(), x, y, doc->scroll_row);
             if (clickCount >= 3) {
                 editor_select_line_at(&doc->editor, offset);
-                g_dragging = 0;
             } else if (clickCount == 2) {
                 editor_select_word_at(&doc->editor, offset);
-                g_dragging = 0;
             } else {
                 editor_set_cursor(&doc->editor, offset, shift);
-                g_dragging = 1;
+                g_drag = BTN_DRAG_TEXT;
             }
             break;
         }
         case BTN_MOUSE_DRAGGED:
-            if (g_dragging) {
-                Document *doc = active_doc();
-                size_t offset = btn_hit_test(&doc->editor, content_bounds(), x, y, doc->scroll_row);
-                editor_set_cursor(&doc->editor, offset, 1);
+        case BTN_MOUSE_AUTOSCROLL:
+            if (g_drag == BTN_DRAG_SCROLLBAR) {
+                if (phase == BTN_MOUSE_DRAGGED) {
+                    scrollbar_drag_to(y);
+                    btn_text_input_invalidate();
+                    btn_app_request_redraw();
+                }
+                return;
+            }
+            if (g_drag != BTN_DRAG_TEXT) {
+                return;
+            }
+            drag_select_to(x, y, phase == BTN_MOUSE_AUTOSCROLL);
+            break;
+        case BTN_MOUSE_UP: {
+            BtnDrag was = g_drag;
+            stop_mouse_drag();
+            if (was != BTN_DRAG_TEXT) {
+                btn_app_request_redraw(); /* Knopf wieder in Normalfarbe */
+                return;
             }
             break;
-        case BTN_MOUSE_UP:
-            g_dragging = 0;
-            break;
+        }
     }
 
     sync_scroll_to_cursor();

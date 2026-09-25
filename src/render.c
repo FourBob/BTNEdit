@@ -111,6 +111,10 @@ static BtnColor col_cursor(void)          { return pick_color(0.1, 0.1, 0.1, 1.0
 static BtnColor col_match_highlight(void) { return pick_color(1.0, 0.85, 0.25, 0.45, 0.60, 0.48, 0.08, 0.55); }
 static BtnColor col_selection(void)       { return pick_color(0.68, 0.82, 1.0, 0.55, 0.25, 0.42, 0.68, 0.55); }
 static BtnColor col_bracket(void)         { return pick_color(0.75, 0.85, 1.0, 0.6,  0.30, 0.45, 0.68, 0.6); }
+static BtnColor col_scroll_knob(int active) {
+    return active ? pick_color(0.0, 0.0, 0.0, 0.55, 1.0, 1.0, 1.0, 0.55)
+                  : pick_color(0.0, 0.0, 0.0, 0.28, 1.0, 1.0, 1.0, 0.28);
+}
 
 static CGColorRef get_token_color(BtnTokenKind kind) {
     if (!g_token_colors[kind]) {
@@ -370,7 +374,7 @@ static size_t decode_row_for_display(const unsigned char *raw, size_t len, UniCh
 /* ---- Wortumbruch-Layout ---- */
 
 double btn_layout_text_width(CGRect bounds) {
-    double w = bounds.size.width - GUTTER_WIDTH - LEFT_PADDING - LEFT_PADDING;
+    double w = bounds.size.width - GUTTER_WIDTH - LEFT_PADDING - BTN_SCROLLBAR_WIDTH;
     return w > 1.0 ? w : 1.0;
 }
 
@@ -1393,6 +1397,106 @@ static void draw_row_line(CGContextRef ctx, Editor *ed, const BtnLangSpec *lang,
     CFRelease(lineStr);
 }
 
+long btn_visible_row_capacity(double content_height) {
+    /* Row k (0 = oberste sichtbare) hat top_y = H - TOP_PADDING - (k+1) *
+     * LINE_HEIGHT (siehe btn_render_frame()) und ist ganz sichtbar, solange
+     * top_y >= BTN_FOOTER_HEIGHT. */
+    double usable = content_height - TOP_PADDING - BTN_FOOTER_HEIGHT;
+    long n = usable > 0.0 ? (long)(usable / LINE_HEIGHT) : 0;
+    return n > 0 ? n : 1;
+}
+
+void btn_text_rows_extent(CGRect bounds, double *top, double *bottom) {
+    *top = bounds.size.height - TOP_PADDING;
+    *bottom = *top - (double)btn_visible_row_capacity(bounds.size.height) * LINE_HEIGHT;
+}
+
+/* ---- Scrollbalken ----
+ * Die (unsichtbare) Schiene reicht ueber die Inhaltshoehe oberhalb der
+ * Statuszeile, der Knopf ist so hoch wie der sichtbare Anteil (mindestens
+ * BTN_SCROLLBAR_MIN_KNOB) und mittig im Streifen am rechten Rand. */
+#define SCROLLBAR_INSET 2.0
+#define SCROLLBAR_KNOB_WIDTH 6.0
+
+typedef struct {
+    double top, range; /* Oberkante der Schiene, Weg der Knopf-Oberkante */
+    double knob_h;
+    long max_scroll;
+} ScrollbarTrack;
+
+/* 0 = kein Knopf (alles sichtbar oder Fenster zu niedrig). */
+static int scrollbar_track(CGRect bounds, size_t row_count, ScrollbarTrack *t) {
+    long capacity = btn_visible_row_capacity(bounds.size.height);
+    double bottom = BTN_FOOTER_HEIGHT + SCROLLBAR_INSET;
+    t->top = bounds.size.height - SCROLLBAR_INSET;
+    double track_h = t->top - bottom;
+    t->max_scroll = (long)row_count - capacity;
+    if (t->max_scroll <= 0 || track_h < BTN_SCROLLBAR_MIN_KNOB) {
+        return 0;
+    }
+    t->knob_h = track_h * (double)capacity / (double)row_count;
+    if (t->knob_h < BTN_SCROLLBAR_MIN_KNOB) {
+        t->knob_h = BTN_SCROLLBAR_MIN_KNOB;
+    }
+    t->range = track_h - t->knob_h;
+    return 1;
+}
+
+int btn_scrollbar_knob(CGRect bounds, size_t row_count, long scroll_row, CGRect *out_knob) {
+    ScrollbarTrack t;
+    if (!scrollbar_track(bounds, row_count, &t)) {
+        return 0;
+    }
+    double frac = (double)scroll_row / (double)t.max_scroll;
+    frac = frac < 0.0 ? 0.0 : frac > 1.0 ? 1.0 : frac;
+    double knob_top = t.top - frac * t.range;
+    double x = bounds.size.width - (BTN_SCROLLBAR_WIDTH + SCROLLBAR_KNOB_WIDTH) / 2.0;
+    *out_knob = CGRectMake(x, knob_top - t.knob_h, SCROLLBAR_KNOB_WIDTH, t.knob_h);
+    return 1;
+}
+
+long btn_scrollbar_row_for_knob_top(CGRect bounds, size_t row_count, double knob_top) {
+    ScrollbarTrack t;
+    if (!scrollbar_track(bounds, row_count, &t) || t.range <= 0.0) {
+        return 0;
+    }
+    double frac = (t.top - knob_top) / t.range;
+    frac = frac < 0.0 ? 0.0 : frac > 1.0 ? 1.0 : frac;
+    return (long)(frac * (double)t.max_scroll + 0.5);
+}
+
+static int g_scrollbar_active = 0;
+
+void btn_render_set_scrollbar_active(int active) {
+    g_scrollbar_active = active;
+}
+
+static void draw_scroll_knob(CGContextRef ctx, CGRect knob) {
+    set_fill(ctx, col_scroll_knob(g_scrollbar_active));
+    double radius = SCROLLBAR_KNOB_WIDTH / 2.0;
+    CGPathRef path = CGPathCreateWithRoundedRect(knob, radius, radius, NULL);
+    CGContextAddPath(ctx, path);
+    CGContextFillPath(ctx);
+    CGPathRelease(path);
+}
+
+int btn_text_cursor_rects(CGRect window, CGRect content, int find_bar_visible, CGRect out[3]) {
+    int n = 0;
+    double w = content.size.width - GUTTER_WIDTH - BTN_SCROLLBAR_WIDTH;
+    double h = content.size.height - BTN_FOOTER_HEIGHT;
+    if (w > 0.0 && h > 0.0) {
+        out[n++] = CGRectMake(GUTTER_WIDTH, BTN_FOOTER_HEIGHT, w, h);
+    }
+    if (find_bar_visible) {
+        /* Wie draw_find_field()/btn_render_find_caret_rect() */
+        FindBarGeometry g = find_bar_geometry();
+        double y = window.size.height - BTN_TAB_BAR_HEIGHT - BTN_FIND_BAR_HEIGHT + 4.0;
+        out[n++] = CGRectMake(g.search_field_x, y, BTN_FIND_FIELD_WIDTH, BTN_FIND_BAR_HEIGHT - 8.0);
+        out[n++] = CGRectMake(g.replace_field_x, y, BTN_FIND_FIELD_WIDTH, BTN_FIND_BAR_HEIGHT - 8.0);
+    }
+    return n;
+}
+
 void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_row, const BtnLangSpec *lang,
                        const size_t *match_starts, const size_t *match_ends, size_t match_count) {
     set_fill(ctx, col_bg());
@@ -1529,18 +1633,13 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
     }
 
     draw_gutter(ctx, bounds, rows, row_count, scroll_row);
+    CGRect knob;
+    if (btn_scrollbar_knob(bounds, row_count, scroll_row, &knob)) {
+        draw_scroll_knob(ctx, knob);
+    }
     draw_footer(ctx, bounds, ed, rows, row_count);
     /* rows gehoert dem Layout-Cache (btn_layout_get()) - nicht freigeben. */
     /* attrs ist gecacht (siehe get_text_attrs()) - keine Freigabe hier. */
-}
-
-long btn_visible_row_capacity(double content_height) {
-    /* Row k (0 = oberste sichtbare) hat top_y = H - TOP_PADDING - (k+1) *
-     * LINE_HEIGHT (siehe btn_render_frame()) und ist ganz sichtbar, solange
-     * top_y >= BTN_FOOTER_HEIGHT. */
-    double usable = content_height - TOP_PADDING - BTN_FOOTER_HEIGHT;
-    long n = usable > 0.0 ? (long)(usable / LINE_HEIGHT) : 0;
-    return n > 0 ? n : 1;
 }
 
 size_t btn_rows_per_page(double page_height) {
