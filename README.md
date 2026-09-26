@@ -105,10 +105,23 @@ ollama pull qwen2.5-coder:1.5b   # kleines Code-Modell mit Fill-in-the-Middle
 ollama serve                     # falls Ollama nicht schon als App läuft
 ```
 
-Dann in BTNEdit Bearbeiten > KI-Vervollständigung einschalten. Das legt
-`~/.btnedit_ai` an; dort lassen sich Server und Modell ändern. Die Datei wird
-beim Start und bei jedem Umschalten im Menü gelesen; das Umschalten ändert
-nur die Zeile `enabled=`, Kommentare und eigene Einträge bleiben:
+Dann in BTNEdit Bearbeiten > KI-Vervollständigung einschalten. BTNEdit
+prüft dabei (und bei jedem Start), ob der Server erreichbar ist und welche
+Modelle installiert sind - ohne Dokumenttext, nur `GET /api/tags`. Ist das
+eingestellte Modell nicht installiert, nimmt es das kleinste installierte
+Code-Modell (Name enthält `coder`, `codellama`, `codegemma`, `codestral`
+oder `starcoder`); gibt es keins, kommt ein Hinweis. Im Untermenü
+**Bearbeiten > KI-Modell** stehen:
+
+- eine Statuszeile ("Ollama: 3 Modelle installiert", "Nicht erreichbar:
+  http://…"),
+- alle installierten Modelle, das gewählte mit Haken - ein Klick wechselt,
+- "Liste aktualisieren" (nach `ollama pull`) und "KI-Verbindung testen…".
+
+Die Einstellungen stehen in `~/.btnedit_ai` (wird beim ersten Einschalten
+angelegt). Die Datei wird beim Start, bei jedem Umschalten, Aktualisieren und
+Testen gelesen; das Menü ändert nur die Zeilen `enabled=` und `model=`,
+Kommentare und eigene Einträge bleiben:
 
 ```
 enabled=1
@@ -129,7 +142,10 @@ So läuft es ab:
   übernimmt ihn als eigenen Undo-Schritt, `Esc` verwirft ihn, wer seinen
   Anfang tippt, behält den Rest; jede andere Änderung lässt ihn
   verschwinden.
-- Läuft kein Server, passiert nichts (keine Meldungen).
+- Läuft kein Server, bleibt es beim Tippen still; nur beim Einschalten,
+  Aktualisieren und Testen kommt eine Meldung. Mit llama-server gibt es keine
+  Modellliste (dort läuft genau das beim Start geladene Modell), geprüft
+  wird nur `/health`.
 
 Datenschutz: Nach der Tipp-Pause gehen bis zu 4 KB Text vor und 1 KB nach
 dem Cursor an `url` - nur einen Server eintragen, dem man den
@@ -143,10 +159,10 @@ Nullbreite) schneiden sie ab.
 
 ### Wenn keine Vorschläge kommen
 
-1. **Bearbeiten > KI-Verbindung testen…** schickt eine kleine Anfrage an
-   den eingetragenen Server und meldet, ob er erreichbar ist, ob das
-   Modell fehlt (z.B. `model "…" not found` - dann `ollama pull …`) und was
-   es vorschlägt.
+1. **Bearbeiten > KI-Modell** zeigt, ob der Server erreichbar ist und
+   welches Modell gewählt ist. **KI-Verbindung testen…** darunter holt die
+   Modellliste und schickt dann eine kleine Anfrage an das gewählte Modell:
+   die Meldung nennt Modell und Vorschlag oder den Fehler des Servers.
 2. Ist der Haken bei Bearbeiten > KI-Vervollständigung gesetzt?
 3. Gefragt wird nur, wenn rechts vom Cursor höchstens Leerraum oder
    Schließendes steht, und der Vorschlag ist eine Zeile: am Ende von
@@ -293,8 +309,8 @@ diesen Tests Stubs.
 | `test_close_flow` | Schließen/Beenden verliert nie ungesicherte Änderungen |
 | `test_recovery` | Datei-Fingerabdruck (gleiche Größe, 1 ns, `rename`, ctime), Wiederherstellungsdateien: Round-Trip, beschädigte Dateien, Sperren und verwaiste Dateien abgestürzter Läufe |
 | `test_protect` | Schutz der Arbeit aus `main.c` mit echten Dateien: still neu laden, Nachfrage, Behalten, Konflikt beim Sichern, gelöschte Datei, Schreiben während des Lesens, volle Platte, wann Wiederherstellungsdateien entstehen/verschwinden, nachgestellter Absturz |
-| `test_ai` | KI: Einstellungsdatei, JSON-Rundlauf (auch kaputtes UTF-8, Steuerzeichen), Antworten (Escapes, Surrogatpaare, verschachtelte Werte, kaputtes JSON), Vorschlag bereinigen |
-| `test_ai_glue` | KI-Ablauf aus `main.c`: wann gefragt wird, Kontextgrenzen, veraltete/fehlerhafte Antworten, Geistertext, Tab als eigener Undo-Schritt, Weitertippen, Abbrechen, Einstellungsdatei |
+| `test_ai` | KI: Einstellungsdatei, JSON-Rundlauf (auch kaputtes UTF-8, Steuerzeichen), Antworten (Escapes, Surrogatpaare, verschachtelte Werte, kaputtes JSON), Vorschlag bereinigen, Modellliste lesen und Code-Modell wählen |
+| `test_ai_glue` | KI-Ablauf aus `main.c`: wann gefragt wird, Kontextgrenzen, veraltete/fehlerhafte Antworten, Geistertext, Tab als eigener Undo-Schritt, Weitertippen, Abbrechen, Einstellungsdatei, Modellliste (fehlendes Modell ersetzen, Server nicht erreichbar, kein Code-Modell), Verbindungstest |
 | `test_gapbuffer`, `test_oom` | Gap-Buffer und Speichermangel-Helfer |
 | `test_strings`, `test_tab_label`, `test_font_size`, `test_row_capacity` | Übersetzungstabelle, Tab-Beschriftung, Schriftgröße, sichtbare Zeilen |
 

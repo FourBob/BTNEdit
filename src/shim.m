@@ -35,6 +35,7 @@ static NSMenuItem *g_invisiblesItem = nil;
 static BOOL g_invisiblesOn = NO; /* auch vor dem Menuebau gesetzt (Einstellung) */
 static NSMenuItem *g_aiItem = nil;
 static BOOL g_aiOn = NO;
+static NSMenu *g_aiModelMenu = nil;
 
 /* Laufende HTTP-Anfragen nach Kennung - was hier fehlt, ist abgebrochen. */
 static NSMutableDictionary *g_httpTasks = nil;
@@ -779,7 +780,10 @@ void btn_app_build_menu(void) {
         [editMenu addItem:[NSMenuItem separatorItem]];
         g_aiItem = add_item(editMenu, trs(BTN_STR_AI_COMPLETION), @"", BTN_MENU_AI_COMPLETION);
         [g_aiItem setState:g_aiOn ? NSControlStateValueOn : NSControlStateValueOff];
-        add_item(editMenu, trs(BTN_STR_AI_TEST), @"", BTN_MENU_AI_TEST);
+        g_aiModelMenu = [[NSMenu alloc] initWithTitle:trs(BTN_STR_AI_MODEL_MENU)];
+        NSMenuItem *modelItem = [editMenu addItemWithTitle:trs(BTN_STR_AI_MODEL_MENU) action:nil keyEquivalent:@""];
+        [modelItem setSubmenu:g_aiModelMenu];
+        btn_app_set_ai_model_menu(btn_tr(BTN_STR_AI_STATUS_UNKNOWN), NULL, 0, -1);
         [editMenuItem setSubmenu:editMenu];
 
         NSMenuItem *viewMenuItem = [NSMenuItem new];
@@ -843,6 +847,29 @@ void btn_app_set_recent_files(const char **paths, int count) {
     }
 }
 
+void btn_app_set_ai_model_menu(const char *status, const char *const *names, int count, int selected) {
+    if (!g_aiModelMenu) {
+        return;
+    }
+    [g_aiModelMenu removeAllItems];
+    if (status) {
+        [g_aiModelMenu addItemWithTitle:ns_from_c(status) action:nil keyEquivalent:@""]; /* grau: nur Anzeige */
+        [g_aiModelMenu addItem:[NSMenuItem separatorItem]];
+    }
+    if (count > BTN_MAX_AI_MODELS) {
+        count = BTN_MAX_AI_MODELS;
+    }
+    for (int i = 0; i < count; i++) {
+        NSMenuItem *item = add_item(g_aiModelMenu, ns_from_c(names[i]), @"", BTN_MENU_AI_MODEL_BASE + i);
+        [item setState:i == selected ? NSControlStateValueOn : NSControlStateValueOff];
+    }
+    if (count > 0) {
+        [g_aiModelMenu addItem:[NSMenuItem separatorItem]];
+    }
+    add_item(g_aiModelMenu, trs(BTN_STR_AI_MODELS_REFRESH), @"", BTN_MENU_AI_MODELS_REFRESH);
+    add_item(g_aiModelMenu, trs(BTN_STR_AI_TEST), @"", BTN_MENU_AI_TEST);
+}
+
 void btn_app_set_ai_menu(int on) {
     g_aiOn = on ? YES : NO;
     [g_aiItem setState:on ? NSControlStateValueOn : NSControlStateValueOff];
@@ -882,8 +909,9 @@ static NSURLSession *http_session(void) {
     return session;
 }
 
-unsigned long btn_http_post_json(const char *url, const char *body, size_t len, double timeout_seconds,
-                                 btn_http_callback cb) {
+/* body == NULL: GET, sonst POST mit JSON-Koerper. */
+static unsigned long http_request(const char *url, const char *body, size_t len, double timeout_seconds,
+                                  btn_http_callback cb) {
     @autoreleasepool {
         NSURL *u = url ? [NSURL URLWithString:ns_from_c(url)] : nil;
         if (!u || !cb || ![[u scheme] length]) {
@@ -892,9 +920,11 @@ unsigned long btn_http_post_json(const char *url, const char *body, size_t len, 
         NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:u
                                                            cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
                                                        timeoutInterval:timeout_seconds];
-        [req setHTTPMethod:@"POST"];
-        [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-        [req setHTTPBody:[NSData dataWithBytes:body length:len]];
+        if (body) {
+            [req setHTTPMethod:@"POST"];
+            [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+            [req setHTTPBody:[NSData dataWithBytes:body length:len]];
+        }
         if (!g_httpTasks) {
             g_httpTasks = [[NSMutableDictionary alloc] init];
         }
@@ -926,6 +956,15 @@ unsigned long btn_http_post_json(const char *url, const char *body, size_t len, 
         [task resume];
         return rid;
     }
+}
+
+unsigned long btn_http_post_json(const char *url, const char *body, size_t len, double timeout_seconds,
+                                 btn_http_callback cb) {
+    return http_request(url, body ? body : "", len, timeout_seconds, cb);
+}
+
+unsigned long btn_http_get(const char *url, double timeout_seconds, btn_http_callback cb) {
+    return http_request(url, NULL, 0, timeout_seconds, cb);
 }
 
 void btn_http_cancel(unsigned long id) {

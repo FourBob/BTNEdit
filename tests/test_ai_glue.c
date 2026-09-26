@@ -71,7 +71,39 @@ static void btn_app_restart_idle_timer(double seconds, btn_void_callback cb) {
     g_timer_starts++;
 }
 static void btn_app_set_ai_menu(int on) { g_menu_state = on; }
+#define BTN_MAX_AI_MODELS 100
+static char g_get_url[256];
+static int g_gets = 0, g_alerts = 0, g_menu_count = -1, g_menu_selected = -2;
+static char g_alert_info[1024], g_menu_status[300], g_menu_first[64];
+static btn_http_callback g_get_cb = NULL;
+static unsigned long btn_http_get(const char *url, double timeout, btn_http_callback cb) {
+    (void)timeout;
+    snprintf(g_get_url, sizeof g_get_url, "%s", url);
+    g_get_cb = cb;
+    g_gets++;
+    return g_next_id++;
+}
+static void btn_show_error_alert(const char *title, const char *info) {
+    (void)title;
+    snprintf(g_alert_info, sizeof g_alert_info, "%s", info);
+    g_alerts++;
+}
+static void btn_app_set_ai_model_menu(const char *status, const char *const *names, int count, int selected) {
+    snprintf(g_menu_status, sizeof g_menu_status, "%s", status ? status : "");
+    snprintf(g_menu_first, sizeof g_menu_first, "%s", count > 0 ? names[0] : "");
+    g_menu_count = count;
+    g_menu_selected = selected;
+}
 static void btn_app_request_redraw(void) { g_redraws++; }
+
+/* ---- Zustand der Verbindungspruefung/Modellliste aus main.c ---- */
+static unsigned long g_ai_test_request = 0;
+static BtnAiModel *g_ai_models = NULL;
+static size_t g_ai_model_count = 0;
+static unsigned long g_ai_models_request = 0;
+static int g_ai_models_notify = 0;
+static int g_ai_test_after = 0;
+static char g_ai_status[300] = "";
 
 #include "ai_glue_extracted.h"
 
@@ -344,9 +376,136 @@ static void test_config_file(void) {
     rmdir(home);
 }
 
+static void answer_get(int status, const char *body) {
+    g_get_cb(g_next_id - 1, status, body, body ? strlen(body) : 0);
+}
+
+static const char USER_TAGS[] =
+    "{\"models\":[{\"name\":\"qwen2.5-coder:7b\",\"model\":\"qwen2.5-coder:7b\",\"size\":4683087332,"
+    "\"details\":{\"families\":[\"qwen2\"],\"parameter_size\":\"7.6B\"}},"
+    "{\"name\":\"qwen3.6-coder:latest\",\"size\":23000000000,\"details\":{}},"
+    "{\"name\":\"qwen3.6:35b-a3b\",\"size\":23000000000}]}";
+
+static void test_models(void) {
+    char home[] = "/tmp/btn_aim_XXXXXX";
+    if (!mkdtemp(home)) {
+        return;
+    }
+    setenv("HOME", home, 1);
+    char path[300];
+    snprintf(path, sizeof path, "%s/.btnedit_ai", home);
+    FILE *f = fopen(path, "w");
+    fputs("# meins\nenabled=1\nmodel=qwen2.5-coder:1.5b\n", f);
+    fclose(f);
+    load_ai_config();
+
+    /* Der Fall aus der Praxis: eingestelltes Modell fehlt, 7b ist da */
+    ai_refresh_models(1);
+    CHECK(g_gets == 1 && strcmp(g_get_url, "http://127.0.0.1:11434/api/tags") == 0 &&
+              strcmp(g_menu_status, btn_tr(BTN_STR_AI_STATUS_CHECKING)) == 0,
+          "refresh: GET /api/tags, menu shows 'checking'");
+    answer_get(200, USER_TAGS);
+    CHECK(strcmp(g_ai.model, "qwen2.5-coder:7b") == 0, "missing model replaced by the smallest code model (%s)", g_ai.model);
+    CHECK(g_menu_count == 3 && g_menu_selected == 0 && strcmp(g_menu_first, "qwen2.5-coder:7b") == 0,
+          "menu lists 3 models, the chosen one checked");
+    char want[100];
+    snprintf(want, sizeof want, btn_tr(BTN_STR_AI_STATUS_COUNT_FMT), 3);
+    CHECK(strcmp(g_menu_status, want) == 0 && g_alerts == 0, "status '%s', no alert", g_menu_status);
+    f = fopen(path, "r");
+    char buf[256];
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = 0;
+    CHECK(strcmp(buf, "# meins\nenabled=1\nmodel=qwen2.5-coder:7b\n") == 0, "choice saved, comment kept (%s)", buf);
+
+    /* Auswahl im Menue */
+    g_ai_last_seq = 5;
+    ai_set_model(g_ai_models[1].name);
+    CHECK(g_ai_last_seq == (size_t)-1, "new model: the same text is asked again");
+    ai_update_model_menu();
+    CHECK(strcmp(g_ai.model, "qwen3.6-coder:latest") == 0 && g_menu_selected == 1, "picking another model");
+    ai_refresh_models(0);
+    answer_get(200, USER_TAGS);
+    CHECK(strcmp(g_ai.model, "qwen3.6-coder:latest") == 0, "an installed choice is kept on refresh");
+    snprintf(g_ai.model, sizeof g_ai.model, "%s", "qwen3.6-coder");
+    ai_refresh_models(0);
+    answer_get(200, USER_TAGS);
+    CHECK(strcmp(g_ai.model, "qwen3.6-coder") == 0 && g_menu_selected == 1, "'name' matches 'name:latest'");
+
+    /* Nicht erreichbar */
+    int alerts = g_alerts;
+    ai_refresh_models(0);
+    answer_get(0, NULL);
+    snprintf(want, sizeof want, btn_tr(BTN_STR_AI_STATUS_UNREACHABLE_FMT), g_ai.url);
+    CHECK(strcmp(g_menu_status, want) == 0 && g_menu_count == 0 && g_alerts == alerts, "unreachable: status line, silent at start");
+    ai_refresh_models(1);
+    answer_get(0, NULL);
+    CHECK(g_alerts == alerts + 1 && strstr(g_alert_info, "127.0.0.1:11434"), "unreachable when switching on: alert");
+
+    /* Kein Code-Modell */
+    snprintf(g_ai.model, sizeof g_ai.model, "%s", "gone:1b");
+    ai_refresh_models(1);
+    answer_get(200, "{\"models\":[{\"name\":\"llama3:8b\",\"size\":5}]}");
+    CHECK(strcmp(g_ai.model, "gone:1b") == 0 && g_alerts == alerts + 2 &&
+              strcmp(g_alert_info, btn_tr(BTN_STR_AI_NO_CODER)) == 0,
+          "no code model: model kept, hint shown");
+    int posts0 = g_posts;
+    ai_test_connection();
+    answer_get(200, "{\"models\":[{\"name\":\"llama3:8b\",\"size\":5}]}");
+    CHECK(g_posts == posts0 && g_alerts == alerts + 3, "test without a code model: hint only, no request");
+    ai_refresh_models(1);
+    answer_get(200, "{\"models\":[]}");
+    CHECK(strcmp(g_menu_status, btn_tr(BTN_STR_AI_STATUS_NONE)) == 0 && g_menu_count == 0, "no models at all");
+
+    /* Veraltete Antwort */
+    ai_refresh_models(0);
+    unsigned long first = g_next_id - 1;
+    ai_refresh_models(0);
+    g_get_cb(first, 200, USER_TAGS, strlen(USER_TAGS));
+    CHECK(g_menu_count == 0, "answer of a superseded request ignored");
+    answer_get(200, USER_TAGS);
+
+    /* Verbindungstest: erst Liste, dann Anfrage mit dem gewaehlten Modell */
+    f = fopen(path, "w");
+    fputs("enabled=1\nmodel=qwen2.5-coder:1.5b\n", f);
+    fclose(f);
+    int posts = g_posts;
+    ai_test_connection();
+    CHECK(g_posts == posts, "test: model list first");
+    answer_get(200, USER_TAGS);
+    CHECK(g_posts == posts + 1 && prompt_is("model", "qwen2.5-coder:7b", 16), "then the test request with the installed model");
+    alerts = g_alerts;
+    g_post_cb(g_next_id - 1, 200, "{\"response\":\"a + b\"}", 20);
+    CHECK(g_alerts == alerts + 1 && strstr(g_alert_info, "qwen2.5-coder:7b") && strstr(g_alert_info, "a + b"),
+          "test result names the model and the suggestion (%s)", g_alert_info);
+    posts = g_posts;
+    ai_test_connection();
+    answer_get(0, NULL);
+    CHECK(g_posts == posts && g_alerts == alerts + 2, "test with the server down: alert, no request");
+
+    /* llama-server (eine alte Ollama-Liste verschwindet) */
+    ai_refresh_models(0);
+    answer_get(200, USER_TAGS);
+    CHECK(g_menu_count == 3, "list loaded before switching the server type");
+    g_ai.api = BTN_AI_API_LLAMA;
+    ai_refresh_models(1);
+    CHECK(strstr(g_get_url, "/health") != NULL, "llama-server: GET /health");
+    answer_get(200, "{\"status\":\"ok\"}");
+    CHECK(strcmp(g_menu_status, btn_tr(BTN_STR_AI_STATUS_LLAMA)) == 0 && g_menu_count == 0 && g_menu_selected == -1,
+          "llama-server: status line, no model list");
+    g_ai.api = BTN_AI_API_OLLAMA;
+
+    btn_ai_models_free(g_ai_models, g_ai_model_count);
+    g_ai_models = NULL;
+    g_ai_model_count = 0;
+    unlink(path);
+    rmdir(home);
+}
+
 int main(void) {
     editor_init(ed);
     test_flow();
+    test_models();
     test_config_file();
     ghost_clear();
     editor_free(ed);

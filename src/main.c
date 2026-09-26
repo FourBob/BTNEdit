@@ -2727,9 +2727,8 @@ static void ai_on_test_response(unsigned long id, int status, const char *body, 
     btn_show_error_alert(btn_tr(BTN_STR_AI_TEST_TITLE), info);
 }
 
-static void ai_test_connection(void) {
-    size_t len;
-    free(load_ai_config_text(&len)); /* Aenderungen an der Datei gelten */
+/* Die eigentliche Testanfrage (nach der Modellliste, siehe unten). */
+static void ai_send_test(void) {
     static const char prefix[] = "def add(a, b):\n    return ";
     size_t body_len;
     char *body = btn_ai_request_body(&g_ai, prefix, sizeof(prefix) - 1, "\n", 1, &body_len);
@@ -2744,6 +2743,134 @@ static void ai_test_connection(void) {
     }
     free(url);
     free(body);
+}
+
+/* ---- Bearbeiten > KI-Modell ----
+ * BTNEdit fragt den Server nach den installierten Modellen (Ollama: GET
+ * /api/tags, llama-server: /health - dort gibt es nur das beim Start
+ * geladene). Kein Dokumenttext geht dabei raus. Fehlt das eingestellte
+ * Modell, wird das kleinste Code-Modell genommen und in ~/.btnedit_ai
+ * gemerkt. */
+static BtnAiModel *g_ai_models = NULL;
+static size_t g_ai_model_count = 0;
+static unsigned long g_ai_models_request = 0;
+static int g_ai_models_notify = 0; /* Probleme als Meldung (Einschalten, Aktualisieren) */
+static int g_ai_test_after = 0;    /* danach die Testanfrage schicken */
+static char g_ai_status[300] = "";
+
+static void ai_update_model_menu(void) {
+    const char *names[BTN_MAX_AI_MODELS];
+    int n = g_ai_model_count < BTN_MAX_AI_MODELS ? (int)g_ai_model_count : BTN_MAX_AI_MODELS;
+    for (int i = 0; i < n; i++) {
+        names[i] = g_ai_models[i].name;
+    }
+    int sel = g_ai.api == BTN_AI_API_OLLAMA ? btn_ai_find_model(g_ai_models, g_ai_model_count, g_ai.model) : -1;
+    btn_app_set_ai_model_menu(g_ai_status[0] ? g_ai_status : btn_tr(BTN_STR_AI_STATUS_UNKNOWN), names, n, sel);
+}
+
+/* key=value in ~/.btnedit_ai setzen, der Rest der Datei bleibt; ohne Datei
+ * wird sie mit der aktuellen Einstellung angelegt. */
+static void ai_write_config_value(const char *key, const char *value) {
+    char *path = ai_config_path();
+    if (!path) {
+        return;
+    }
+    size_t len;
+    BtnReadResult result;
+    char *old = read_file_contents(path, &len, &result, NULL);
+    char *text = old ? btn_ai_config_set_value(old, len, key, value) : btn_ai_config_format(&g_ai);
+    if (text) {
+        write_file_contents(path, text, strlen(text));
+    }
+    free(text);
+    free(old);
+    free(path);
+}
+
+static void ai_set_model(const char *name) {
+    if (strlen(name) >= sizeof(g_ai.model) || strcmp(name, g_ai.model) == 0) {
+        return;
+    }
+    snprintf(g_ai.model, sizeof(g_ai.model), "%s", name);
+    ai_write_config_value("model", g_ai.model);
+    ai_cancel();
+    ghost_clear();
+    g_ai_last_seq = (size_t)-1; /* mit dem neuen Modell neu fragen */
+}
+
+static void ai_on_models(unsigned long id, int status, const char *body, size_t len) {
+    if (id != g_ai_models_request) {
+        return;
+    }
+    g_ai_models_request = 0;
+    int notify = g_ai_models_notify, test = g_ai_test_after;
+    g_ai_models_notify = g_ai_test_after = 0;
+    char info[1024];
+    btn_ai_models_free(g_ai_models, g_ai_model_count);
+    g_ai_models = NULL;
+    g_ai_model_count = 0;
+    if (status != 200) {
+        snprintf(g_ai_status, sizeof(g_ai_status), btn_tr(BTN_STR_AI_STATUS_UNREACHABLE_FMT), g_ai.url);
+        ai_update_model_menu();
+        if (notify || test) {
+            char *url = btn_ai_endpoint(&g_ai);
+            snprintf(info, sizeof(info), btn_tr(BTN_STR_AI_TEST_UNREACHABLE_FMT), url);
+            free(url);
+            btn_show_error_alert(btn_tr(BTN_STR_AI_TEST_TITLE), info);
+        }
+        return;
+    }
+    if (g_ai.api == BTN_AI_API_LLAMA) {
+        snprintf(g_ai_status, sizeof(g_ai_status), "%s", btn_tr(BTN_STR_AI_STATUS_LLAMA));
+    } else {
+        g_ai_model_count = btn_ai_parse_models(body, len, &g_ai_models);
+        if (g_ai_model_count == 0) {
+            snprintf(g_ai_status, sizeof(g_ai_status), "%s", btn_tr(BTN_STR_AI_STATUS_NONE));
+        } else {
+            snprintf(g_ai_status, sizeof(g_ai_status), btn_tr(BTN_STR_AI_STATUS_COUNT_FMT), (int)g_ai_model_count);
+        }
+        if (btn_ai_find_model(g_ai_models, g_ai_model_count, g_ai.model) < 0) {
+            int pick = btn_ai_pick_model(g_ai_models, g_ai_model_count);
+            if (pick >= 0) {
+                ai_set_model(g_ai_models[pick].name);
+            } else if (notify || test) {
+                btn_show_error_alert(btn_tr(BTN_STR_AI_TEST_TITLE), btn_tr(BTN_STR_AI_NO_CODER));
+                test = 0; /* ohne passendes Modell kaeme nur "not found" */
+            }
+        }
+    }
+    ai_update_model_menu();
+    if (test) {
+        ai_send_test();
+    }
+}
+
+/* Modellliste neu holen; notify: Probleme als Meldung zeigen. */
+static void ai_refresh_models(int notify) {
+    btn_http_cancel(g_ai_models_request);
+    g_ai_models_notify = notify;
+    size_t n = strlen(g_ai.url) + 16;
+    char *url = malloc(n);
+    if (!url) {
+        return;
+    }
+    snprintf(url, n, "%s%s", g_ai.url, g_ai.api == BTN_AI_API_LLAMA ? "/health" : "/api/tags");
+    snprintf(g_ai_status, sizeof(g_ai_status), "%s", btn_tr(BTN_STR_AI_STATUS_CHECKING));
+    ai_update_model_menu();
+    g_ai_models_request = btn_http_get(url, 10.0, ai_on_models);
+    free(url);
+    if (!g_ai_models_request) {
+        ai_on_models(0, 0, NULL, 0); /* ungueltige Adresse: wie nicht erreichbar */
+    }
+}
+
+/* Bearbeiten > KI-Modell > Verbindung testen: Datei neu lesen, Modellliste
+ * holen (dabei ggf. ein vorhandenes Code-Modell waehlen), dann eine
+ * Testanfrage mit genau diesem Modell. */
+static void ai_test_connection(void) {
+    load_ai_config(); /* Aenderungen an der Datei gelten */
+    g_ai_test_after = 1;
+    ai_refresh_models(0);
 }
 
 /* Tab: Vorschlag uebernehmen - als eigener Undo-Schritt (die Gruppe wird
@@ -3675,6 +3802,14 @@ static void on_menu(int tag) {
     /* Sichern, Kopieren usw. sollen den Text sehen, der gerade getippt wird. */
     commit_marked();
 
+    if (tag >= BTN_MENU_AI_MODEL_BASE && tag < BTN_MENU_AI_MODEL_BASE + BTN_MAX_AI_MODELS) {
+        size_t index = (size_t)(tag - BTN_MENU_AI_MODEL_BASE);
+        if (index < g_ai_model_count) {
+            ai_set_model(g_ai_models[index].name);
+            ai_update_model_menu();
+        }
+        return;
+    }
     if (tag >= BTN_MENU_RECENT_BASE) {
         int index = tag - BTN_MENU_RECENT_BASE;
         if (index < g_recent_count) {
@@ -3714,10 +3849,16 @@ static void on_menu(int tag) {
             if (!g_ai.enabled) {
                 ai_cancel();
                 ghost_clear();
+            } else {
+                ai_refresh_models(1); /* Server da? Modell vorhanden? */
             }
             break;
         case BTN_MENU_AI_TEST:
             ai_test_connection();
+            break;
+        case BTN_MENU_AI_MODELS_REFRESH:
+            load_ai_config();
+            ai_refresh_models(1);
             break;
         case BTN_MENU_SHOW_INVISIBLES:
             apply_show_invisibles(!g_show_invisibles);
@@ -3895,6 +4036,9 @@ int main(void) {
      * BTN_DEFAULT_FONT_SIZE aufzublitzen. */
     load_prefs();
     load_ai_config();
+    if (g_ai.enabled) {
+        ai_refresh_models(0); /* still: stellt nur ein fehlendes Modell um */
+    }
     btn_app_run();
 
     for (int i = 0; i < g_doc_count; i++) {

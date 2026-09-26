@@ -33,6 +33,25 @@ void btn_ai_config_parse(BtnAiConfig *c, const char *text, size_t len);
  * angehaengt), Kommentare und andere Schluessel bleiben (malloc). */
 char *btn_ai_config_set_enabled(const char *text, size_t len, int enabled);
 
+/* Allgemein: key=value setzen (erste passende Zeile ersetzt, sonst
+ * angehaengt), der Rest der Datei bleibt (malloc). */
+char *btn_ai_config_set_value(const char *text, size_t len, const char *key, const char *value);
+
+/* Installierte Modelle laut Ollama (GET /api/tags). */
+typedef struct {
+    char *name;     /* z.B. "qwen2.5-coder:7b" */
+    long long size; /* Bytes */
+} BtnAiModel;
+/* Rueckgabe: Anzahl, *out (malloc) mit btn_ai_models_free() freigeben. */
+size_t btn_ai_parse_models(const char *json, size_t len, BtnAiModel **out);
+void btn_ai_models_free(BtnAiModel *models, size_t count);
+/* Code-Modell mit Fill-in-the-Middle (am Namen: coder, codellama, ...). */
+int btn_ai_model_is_coder(const char *name);
+/* Index des kleinsten (schnellsten) Code-Modells, -1 = keins. */
+int btn_ai_pick_model(const BtnAiModel *models, size_t count);
+/* Index des Modells name ("name" passt auch auf "name:latest"), -1 = fehlt. */
+int btn_ai_find_model(const BtnAiModel *models, size_t count, const char *name);
+
 /* Schreibt die Konfiguration im selben Format (malloc, NUL-terminiert). */
 char *btn_ai_config_format(const BtnAiConfig *c);
 

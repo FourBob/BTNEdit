@@ -372,6 +372,27 @@ int main(void) {
         btn_app_set_ai_menu(1);
         CHECK(aiItem && [aiItem state] == NSControlStateValueOn, "AI completion checkmark on");
         btn_app_set_ai_menu(0);
+        NSMenu *modelMenu = nil;
+        for (NSMenuItem *m in [[[menubar itemAtIndex:2] submenu] itemArray]) {
+            if ([m submenu]) {
+                modelMenu = [m submenu];
+            }
+        }
+        CHECK(modelMenu && [modelMenu numberOfItems] == 4 && [[modelMenu itemAtIndex:2] tag] == BTN_MENU_AI_MODELS_REFRESH &&
+                  [[modelMenu itemAtIndex:3] tag] == BTN_MENU_AI_TEST,
+              "AI model submenu: status, separator, refresh, test (%ld items)", (long)[modelMenu numberOfItems]);
+        const char *models[] = {"qwen2.5-coder:7b", "qwen3.6-coder:latest", "qwen3.6:35b-a3b"};
+        btn_app_set_ai_model_menu("3 Modelle", models, 3, 1);
+        [modelMenu update];
+        CHECK([modelMenu numberOfItems] == 8 && [[[modelMenu itemAtIndex:0] title] isEqualToString:@"3 Modelle"] &&
+                  ![[modelMenu itemAtIndex:0] isEnabled],
+              "status line shown, not clickable");
+        CHECK([[modelMenu itemAtIndex:3] tag] == BTN_MENU_AI_MODEL_BASE + 1 && [[modelMenu itemAtIndex:3] state] == NSControlStateValueOn &&
+                  [[modelMenu itemAtIndex:2] state] == NSControlStateValueOff && [[modelMenu itemAtIndex:2] isEnabled] &&
+                  [[[modelMenu itemAtIndex:4] title] isEqualToString:@"qwen3.6:35b-a3b"],
+              "models listed, the chosen one checked");
+        btn_app_set_ai_model_menu(NULL, NULL, 0, -1);
+        CHECK([modelMenu numberOfItems] == 2, "no status, no models: only refresh and test");
 
         /* ---- Dateien ins Fenster ziehen ---- */
         btn_app_set_open_file_callback(open_cb);

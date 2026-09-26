@@ -46,7 +46,7 @@ TESTS=(
     "test_shortcuts|$EDITOR_SRC|"
     "test_lines|$EDITOR_SRC|"
     "test_ai|src/ai.c src/gapbuffer.c|"
-    "test_ai_glue|$EDITOR_SRC src/ai.c src/textinput.c src/filestamp.c|"
+    "test_ai_glue|$EDITOR_SRC src/ai.c src/textinput.c src/filestamp.c src/strings.c|"
     "test_mouse|$EDITOR_SRC -Itests/stubs|"
     "test_recovery|src/recovery.c src/filestamp.c|"
     "test_protect|$EDITOR_SRC src/recovery.c src/filestamp.c|"

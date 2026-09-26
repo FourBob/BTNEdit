@@ -292,7 +292,8 @@ static int json_skip_value(const char *j, size_t len, size_t *i) {
     return p > start;
 }
 
-int btn_ai_json_get_string(const char *json, size_t len, const char *key, char **out, size_t *out_len) {
+/* Position des Werts von key auf oberster Ebene eines JSON-Objekts. */
+static int json_find_key(const char *json, size_t len, const char *key, size_t *value_pos) {
     size_t i = skip_ws(json, len, 0);
     if (i >= len || json[i] != '{') {
         return 0;
@@ -316,17 +317,9 @@ int btn_ai_json_get_string(const char *json, size_t len, const char *key, char *
             return 0;
         }
         i = skip_ws(json, len, i + 1);
-        if (match && i < len && json[i] == '"') {
-            Buf v = { 0 };
-            if (!json_read_string(json, len, &i, &v)) {
-                free(v.d);
-                return 0;
-            }
-            buf_reserve(&v, 0); /* auch ein leerer String kommt als "" */
-            v.d[v.len] = '\0';
-            *out = v.d;
-            *out_len = v.len;
-            return 1;
+        if (match) {
+            *value_pos = i;
+            return i < len;
         }
         if (!json_skip_value(json, len, &i)) {
             return 0;
@@ -336,8 +329,25 @@ int btn_ai_json_get_string(const char *json, size_t len, const char *key, char *
             i++;
             continue;
         }
-        return 0; /* '}' oder kaputt: nicht gefunden */
+        return 0;
     }
+}
+
+int btn_ai_json_get_string(const char *json, size_t len, const char *key, char **out, size_t *out_len) {
+    size_t i;
+    if (!json_find_key(json, len, key, &i) || json[i] != '"') {
+        return 0;
+    }
+    Buf v = { 0 };
+    if (!json_read_string(json, len, &i, &v)) {
+        free(v.d);
+        return 0;
+    }
+    buf_reserve(&v, 0); /* auch ein leerer String kommt als "" */
+    v.d[v.len] = '\0';
+    *out = v.d;
+    *out_len = v.len;
+    return 1;
 }
 
 /* ---- Konfiguration ---- */
@@ -570,8 +580,9 @@ size_t btn_ai_clean_suggestion(char *s, size_t len, const char *rest, size_t res
     return len;
 }
 
-char *btn_ai_config_set_enabled(const char *text, size_t len, int enabled) {
+char *btn_ai_config_set_value(const char *text, size_t len, const char *key, const char *value) {
     Buf b = { 0 };
+    size_t kl = strlen(key);
     int done = 0;
     size_t i = 0;
     while (i < len) {
@@ -584,13 +595,15 @@ char *btn_ai_config_set_enabled(const char *text, size_t len, int enabled) {
         while (lead < n && isspace((unsigned char)line[lead])) {
             lead++;
         }
-        if (!done && n - lead >= 7 && memcmp(line + lead, "enabled", 7) == 0) {
-            size_t k = lead + 7;
+        if (!done && n - lead >= kl && memcmp(line + lead, key, kl) == 0) {
+            size_t k = lead + kl;
             while (k < n && (line[k] == ' ' || line[k] == '\t')) {
                 k++;
             }
             if (k < n && line[k] == '=') {
-                buf_str(&b, enabled ? "enabled=1" : "enabled=0");
+                buf_str(&b, key);
+                buf_add(&b, "=", 1);
+                buf_str(&b, value);
                 done = 1;
                 if (e < len) {
                     buf_add(&b, "\n", 1);
@@ -606,11 +619,112 @@ char *btn_ai_config_set_enabled(const char *text, size_t len, int enabled) {
         if (b.len > 0 && b.d[b.len - 1] != '\n') {
             buf_add(&b, "\n", 1);
         }
-        buf_str(&b, enabled ? "enabled=1\n" : "enabled=0\n");
+        buf_str(&b, key);
+        buf_add(&b, "=", 1);
+        buf_str(&b, value);
+        buf_add(&b, "\n", 1);
     }
     buf_reserve(&b, 0);
     b.d[b.len] = '\0';
     return b.d;
+}
+
+char *btn_ai_config_set_enabled(const char *text, size_t len, int enabled) {
+    return btn_ai_config_set_value(text, len, "enabled", enabled ? "1" : "0");
+}
+
+/* ---- Modellliste (Ollama /api/tags) ---- */
+
+void btn_ai_models_free(BtnAiModel *models, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        free(models[i].name);
+    }
+    free(models);
+}
+
+size_t btn_ai_parse_models(const char *json, size_t len, BtnAiModel **out) {
+    *out = NULL;
+    size_t i;
+    if (!json_find_key(json, len, "models", &i) || i >= len || json[i] != '[') {
+        return 0;
+    }
+    i++;
+    size_t count = 0, cap = 0;
+    BtnAiModel *list = NULL;
+    for (;;) {
+        i = skip_ws(json, len, i);
+        if (i >= len || json[i] == ']') {
+            break;
+        }
+        size_t start = i;
+        if (!json_skip_value(json, len, &i)) {
+            break;
+        }
+        char *name = NULL;
+        size_t nl;
+        if (json[start] == '{' && btn_ai_json_get_string(json + start, i - start, "name", &name, &nl) && nl > 0 &&
+            !memchr(name, '\0', nl)) {
+            size_t vp;
+            long long size = 0;
+            if (json_find_key(json + start, i - start, "size", &vp)) {
+                size = strtoll(json + start + vp, NULL, 10);
+            }
+            if (count == cap) {
+                cap = cap ? cap * 2 : 8;
+                list = btn_xrealloc(list, btn_xmul(cap, sizeof(BtnAiModel)));
+            }
+            list[count].name = name;
+            list[count].size = size;
+            count++;
+        } else {
+            free(name);
+        }
+        i = skip_ws(json, len, i);
+        if (i < len && json[i] == ',') {
+            i++;
+        }
+    }
+    *out = list;
+    return count;
+}
+
+/* Modelle, die Code mit Fill-in-the-Middle koennen - am Namen erkannt. */
+int btn_ai_model_is_coder(const char *name) {
+    static const char *const marks[] = { "coder", "codellama", "codegemma", "codestral", "starcoder" };
+    for (size_t i = 0; i < sizeof(marks) / sizeof(marks[0]); i++) {
+        if (strstr(name, marks[i])) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int btn_ai_pick_model(const BtnAiModel *models, size_t count) {
+    int best = -1;
+    for (size_t i = 0; i < count; i++) {
+        if (btn_ai_model_is_coder(models[i].name) && (best < 0 || models[i].size < models[best].size)) {
+            best = (int)i;
+        }
+    }
+    return best;
+}
+
+int btn_ai_find_model(const BtnAiModel *models, size_t count, const char *name) {
+    for (size_t i = 0; i < count; i++) {
+        if (strcmp(models[i].name, name) == 0) {
+            return (int)i;
+        }
+    }
+    /* "qwen2.5-coder" meint bei Ollama "qwen2.5-coder:latest" */
+    if (!strchr(name, ':')) {
+        for (size_t i = 0; i < count; i++) {
+            size_t n = strlen(name);
+            if (strncmp(models[i].name, name, n) == 0 && strcmp(models[i].name + n, ":latest") == 0) {
+                return (int)i;
+            }
+        }
+    }
+    return -1;
 }
 
 int btn_ai_rest_allows_request(const char *rest, size_t rest_len) {

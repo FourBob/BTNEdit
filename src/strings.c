@@ -81,7 +81,16 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "The server answers, but model %s made no one-line suggestion here. Raw answer: %s",
         "No answer from %s. Is the server running (e.g. \"ollama serve\")? The first request can take a while because the model is loaded.",
         "The server reports an error (HTTP %d): %s",
-        " AI completion is currently switched off (Edit menu)."
+        " AI completion is currently switched off (Edit menu).",
+        "AI Model",
+        "Refresh List",
+        "Not checked yet",
+        "Checking server…",
+        "Not reachable: %s",
+        "Ollama: %d models installed",
+        "Ollama: no models installed",
+        "llama-server: model chosen at server start",
+        "No code model with fill-in-the-middle is installed. Install one, e.g. \"ollama pull qwen2.5-coder:7b\", or pick a model in Edit > AI Model."
     },
     /* BTN_LANG_DE */
     {
@@ -155,7 +164,16 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Der Server antwortet, aber Modell %s liefert hier keinen einzeiligen Vorschlag. Rohantwort: %s",
         "Keine Antwort von %s. Läuft der Server (z.B. „ollama serve“)? Die erste Anfrage kann dauern, weil das Modell geladen wird.",
         "Der Server meldet einen Fehler (HTTP %d): %s",
-        " Die KI-Vervollständigung ist gerade ausgeschaltet (Menü Bearbeiten)."
+        " Die KI-Vervollständigung ist gerade ausgeschaltet (Menü Bearbeiten).",
+        "KI-Modell",
+        "Liste aktualisieren",
+        "Noch nicht geprüft",
+        "Server wird geprüft…",
+        "Nicht erreichbar: %s",
+        "Ollama: %d Modelle installiert",
+        "Ollama: keine Modelle installiert",
+        "llama-server: Modell wird beim Serverstart gewählt",
+        "Es ist kein Code-Modell mit Fill-in-the-Middle installiert. Installiere z.B. eins mit „ollama pull qwen2.5-coder:7b“ oder wähle ein Modell unter Bearbeiten > KI-Modell."
     },
     /* BTN_LANG_FR */
     {
@@ -229,7 +247,16 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Le serveur répond, mais le modèle %s ne propose rien sur une ligne ici. Réponse brute : %s",
         "Pas de réponse de %s. Le serveur est-il lancé (p. ex. « ollama serve ») ? La première requête peut être lente, le modèle doit être chargé.",
         "Le serveur signale une erreur (HTTP %d) : %s",
-        " La complétion IA est actuellement désactivée (menu Édition)."
+        " La complétion IA est actuellement désactivée (menu Édition).",
+        "Modèle IA",
+        "Actualiser la liste",
+        "Pas encore vérifié",
+        "Vérification du serveur…",
+        "Injoignable : %s",
+        "Ollama : %d modèles installés",
+        "Ollama : aucun modèle installé",
+        "llama-server : modèle choisi au démarrage du serveur",
+        "Aucun modèle de code avec fill-in-the-middle n’est installé. Installez-en un, p. ex. « ollama pull qwen2.5-coder:7b », ou choisissez un modèle dans Édition > Modèle IA."
     },
     /* BTN_LANG_ES */
     {
@@ -303,7 +330,16 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "El servidor responde, pero el modelo %s no da una sugerencia de una línea aquí. Respuesta: %s",
         "Sin respuesta de %s. ¿Está en marcha el servidor (p. ej. «ollama serve»)? La primera petición puede tardar porque se carga el modelo.",
         "El servidor informa de un error (HTTP %d): %s",
-        " El autocompletado IA está desactivado (menú Edición)."
+        " El autocompletado IA está desactivado (menú Edición).",
+        "Modelo IA",
+        "Actualizar la lista",
+        "Aún no comprobado",
+        "Comprobando el servidor…",
+        "No accesible: %s",
+        "Ollama: %d modelos instalados",
+        "Ollama: no hay modelos instalados",
+        "llama-server: el modelo se elige al iniciar el servidor",
+        "No hay ningún modelo de código con fill-in-the-middle instalado. Instala uno, p. ej. «ollama pull qwen2.5-coder:7b», o elige un modelo en Edición > Modelo IA."
     },
     /* BTN_LANG_ZH (Simplified) */
     {
@@ -380,7 +416,16 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "服务器已响应，但模型 %s 在此没有单行建议。原始回答：%s",
         "%s 无响应。服务器是否在运行（例如 “ollama serve”）？首次请求需要加载模型，可能较慢。",
         "服务器报告错误（HTTP %d）：%s",
-        "（AI 补全目前已关闭，见“编辑”菜单。）"
+        "（AI 补全目前已关闭，见“编辑”菜单。）",
+        "AI 模型",
+        "刷新列表",
+        "尚未检查",
+        "正在检查服务器…",
+        "无法连接：%s",
+        "Ollama：已安装 %d 个模型",
+        "Ollama：未安装模型",
+        "llama-server：模型在服务器启动时选择",
+        "未安装支持中间填充的代码模型。请安装一个，例如 “ollama pull qwen2.5-coder:7b”，或在“编辑 > AI 模型”中选择模型。"
     }
 };
 

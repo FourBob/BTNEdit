@@ -148,6 +148,17 @@ typedef enum {
     BTN_STR_AI_TEST_UNREACHABLE_FMT,
     BTN_STR_AI_TEST_HTTP_FMT,
     BTN_STR_AI_TEST_OFF_NOTE,
+    /* Bearbeiten > KI-Modell: Untermenue, Statuszeilen ("%s" Adresse, "%d"
+     * Anzahl), Hinweis ohne Code-Modell */
+    BTN_STR_AI_MODEL_MENU,
+    BTN_STR_AI_MODELS_REFRESH,
+    BTN_STR_AI_STATUS_UNKNOWN,
+    BTN_STR_AI_STATUS_CHECKING,
+    BTN_STR_AI_STATUS_UNREACHABLE_FMT,
+    BTN_STR_AI_STATUS_COUNT_FMT,
+    BTN_STR_AI_STATUS_NONE,
+    BTN_STR_AI_STATUS_LLAMA,
+    BTN_STR_AI_NO_CODER,
     BTN_STR_COUNT
 } BtnStringId;
 

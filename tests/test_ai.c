@@ -192,8 +192,39 @@ static void test_clean(void) {
     CHECK(!btn_ai_rest_allows_request(")\0", 2), "NUL is not closing");
 }
 
+static void test_models(void) {
+    const char *tags = "{\"models\":[{\"name\":\"qwen2.5-coder:7b\",\"size\":4683087332,\"details\":{\"families\":[\"a\",\"b\"]}},"
+                       "{\"name\":\"qwen3.6-coder:latest\",\"size\":23000000000},"
+                       "{\"name\":\"qwen3.6:35b-a3b\",\"size\":23000000000},"
+                       "{\"model\":\"no-name\"},{\"name\":\"\"},42,{\"name\":\"codellama:13b\",\"size\":7000000000}]}";
+    BtnAiModel *m;
+    size_t n = btn_ai_parse_models(tags, strlen(tags), &m);
+    CHECK(n == 4 && strcmp(m[0].name, "qwen2.5-coder:7b") == 0 && m[0].size == 4683087332LL &&
+              strcmp(m[3].name, "codellama:13b") == 0,
+          "models parsed, entries without a name skipped (%zu)", n);
+    CHECK(btn_ai_pick_model(m, n) == 0, "smallest code model picked");
+    CHECK(btn_ai_find_model(m, n, "qwen3.6-coder") == 1 && btn_ai_find_model(m, n, "qwen2.5-coder") == -1 &&
+              btn_ai_find_model(m, n, "qwen3.6:35b-a3b") == 2,
+          "find: exact, and name -> name:latest only");
+    CHECK(btn_ai_model_is_coder("codegemma:2b") && btn_ai_model_is_coder("starcoder2:3b") && !btn_ai_model_is_coder("llama3:8b"),
+          "code models recognised by name");
+    btn_ai_models_free(m, n);
+    const char *chat = "{\"models\":[{\"name\":\"llama3:8b\",\"size\":1}]}";
+    n = btn_ai_parse_models(chat, strlen(chat), &m);
+    CHECK(n == 1 && btn_ai_pick_model(m, n) == -1, "no code model: nothing picked");
+    btn_ai_models_free(m, n);
+    CHECK(btn_ai_parse_models("{}", 2, &m) == 0 && m == NULL, "no list");
+    CHECK(btn_ai_parse_models("{\"models\":[{\"name\":\"x\"", 23, &m) == 0, "truncated list");
+    btn_ai_models_free(m, 0);
+
+    char *o = btn_ai_config_set_value("a=1\nmodel = old  # c\nmodelx=2", 30, "model", "new:7b");
+    CHECK(strcmp(o, "a=1\nmodel=new:7b\nmodelx=2") == 0, "set_value replaces only that key (%s)", o);
+    free(o);
+}
+
 int main(void) {
     test_config();
+    test_models();
     test_request();
     test_response();
     test_clean();

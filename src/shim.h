@@ -46,7 +46,8 @@ enum {
     BTN_MENU_MOVE_LINES_DOWN,
     BTN_MENU_SHOW_INVISIBLES,
     BTN_MENU_AI_COMPLETION,
-    BTN_MENU_AI_TEST
+    BTN_MENU_AI_TEST,
+    BTN_MENU_AI_MODELS_REFRESH
 };
 
 /* Tags fuer die dynamischen "Zuletzt geoeffnet"-Menuepunkte liegen ab hier,
@@ -56,6 +57,10 @@ enum {
  * in die eigene Recent-Files-Liste zurueck. */
 #define BTN_MENU_RECENT_BASE 1000
 #define BTN_MAX_RECENT_FILES 10
+/* Bearbeiten > KI-Modell: ein Eintrag je installiertem Modell, Tag =
+ * BTN_MENU_AI_MODEL_BASE + Index (main.c prueft das VOR den Recent-Tags). */
+#define BTN_MENU_AI_MODEL_BASE 2000
+#define BTN_MAX_AI_MODELS 100
 
 /* Rohe NSEvent.ModifierFlags-Bitwerte (von Apple dokumentiert/stabil), damit
  * main.c ohne Cocoa-Header auskommt. */
@@ -186,6 +191,10 @@ void btn_app_set_line_ending_menu(int index, int enabled);
 void btn_app_set_show_invisibles_menu(int on);
 /* Haekchen bei Bearbeiten > KI-Vervollstaendigung. */
 void btn_app_set_ai_menu(int on);
+/* Baut Bearbeiten > KI-Modell neu: status (grau, darf NULL sein), die
+ * Modelle mit Haekchen bei selected (-1 = keins), dann "Liste
+ * aktualisieren" und "Verbindung testen...". */
+void btn_app_set_ai_model_menu(const char *status, const char *const *names, int count, int selected);
 
 /* HTTP-POST mit JSON-Koerper (KI-Vervollstaendigung, NSURLSession) - die
  * Oberflaeche wartet nie: cb kommt spaeter im Haupt-Thread mit dem
@@ -195,6 +204,8 @@ void btn_app_set_ai_menu(int on);
 typedef void (*btn_http_callback)(unsigned long id, int status, const char *body, size_t len);
 unsigned long btn_http_post_json(const char *url, const char *body, size_t len, double timeout_seconds,
                                  btn_http_callback cb);
+/* Wie btn_http_post_json, aber GET ohne Koerper (z.B. Modellliste). */
+unsigned long btn_http_get(const char *url, double timeout_seconds, btn_http_callback cb);
 void btn_http_cancel(unsigned long id);
 
 /* Einmal-Timer fuer "Tipp-Pause": jeder Aufruf startet ihn neu (ein

@@ -15,10 +15,14 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
   rechts vom Cursor höchstens Leerraum oder Schließendes steht. Der
   Geistertext verdeckt (wie der vorläufige Text einer Eingabemethode) was
   rechts vom Cursor steht und läuft bei langen Vorschlägen über den rechten
-  Rand hinaus statt umzubrechen. Kein Schalter pro Sprache, kein Modell-
-  oder Server-Test in der App (Fehler bleiben still: kein Vorschlag).
-  Einstellungen nur über `~/.btnedit_ai` (Menü schaltet nur ein/aus und
-  liest die Datei dabei neu). Nach einer fehlgeschlagenen Antwort wird für
+  Rand hinaus statt umzubrechen. Kein Schalter pro Sprache. Beim Tippen
+  bleiben Fehler still (kein Vorschlag); gemeldet wird nur beim Einschalten,
+  Aktualisieren und Testen. Server, Wartezeit und Länge nur über
+  `~/.btnedit_ai`, das Modell auch im Menü. Ob ein Modell Fill-in-the-Middle
+  kann, rät BTNEdit nur am Namen (`coder`, `codellama`, ...) - im Menü lässt
+  sich trotzdem jedes wählen. Die Modellliste zeigt höchstens 100 Einträge und
+  wird nur beim Start, Einschalten, Aktualisieren und Testen geholt (nicht nach
+  einem `ollama pull` im Hintergrund). Nach einer fehlgeschlagenen Antwort wird für
   denselben Text nicht erneut gefragt (nach einem Abbruch schon). Tabs im
   Vorschlag werden ab Spalte 0 statt ab der Cursor-Spalte ausgerichtet.
   Anfragen und Antworten laufen ohne Größenbegrenzung beim Senden; eine
