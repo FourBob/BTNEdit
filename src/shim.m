@@ -33,6 +33,13 @@ static NSMenuItem *g_eolItems[3];
 static BOOL g_eolMenuEnabled = YES;
 static NSMenuItem *g_invisiblesItem = nil;
 static BOOL g_invisiblesOn = NO; /* auch vor dem Menuebau gesetzt (Einstellung) */
+static NSMenuItem *g_aiItem = nil;
+static BOOL g_aiOn = NO;
+
+/* Laufende HTTP-Anfragen nach Kennung - was hier fehlt, ist abgebrochen. */
+static NSMutableDictionary *g_httpTasks = nil;
+static unsigned long g_httpNextId = 1;
+static NSTimer *g_idleTimer = nil; /* gehalten von der Run Loop */
 
 /* Maustaste gedrueckt und ihre letzte Position (View-Koordinaten) - der
  * Autoscroll-Takt schickt sie erneut, solange die Maus still steht. */
@@ -769,6 +776,9 @@ void btn_app_build_menu(void) {
         [moveUp setKeyEquivalentModifierMask:NSEventModifierFlagOption | NSEventModifierFlagCommand];
         NSMenuItem *moveDown = add_item(editMenu, trs(BTN_STR_MOVE_LINES_DOWN), @"]", BTN_MENU_MOVE_LINES_DOWN);
         [moveDown setKeyEquivalentModifierMask:NSEventModifierFlagOption | NSEventModifierFlagCommand];
+        [editMenu addItem:[NSMenuItem separatorItem]];
+        g_aiItem = add_item(editMenu, trs(BTN_STR_AI_COMPLETION), @"", BTN_MENU_AI_COMPLETION);
+        [g_aiItem setState:g_aiOn ? NSControlStateValueOn : NSControlStateValueOff];
         [editMenuItem setSubmenu:editMenu];
 
         NSMenuItem *viewMenuItem = [NSMenuItem new];
@@ -830,6 +840,75 @@ void btn_app_set_recent_files(const char **paths, int count) {
             [empty setEnabled:NO];
         }
     }
+}
+
+void btn_app_set_ai_menu(int on) {
+    g_aiOn = on ? YES : NO;
+    [g_aiItem setState:on ? NSControlStateValueOn : NSControlStateValueOff];
+}
+
+unsigned long btn_http_post_json(const char *url, const char *body, size_t len, double timeout_seconds,
+                                 btn_http_callback cb) {
+    @autoreleasepool {
+        NSURL *u = url ? [NSURL URLWithString:ns_from_c(url)] : nil;
+        if (!u || !cb || ![[u scheme] length]) {
+            return 0;
+        }
+        NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:u
+                                                           cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                                       timeoutInterval:timeout_seconds];
+        [req setHTTPMethod:@"POST"];
+        [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+        [req setHTTPBody:[NSData dataWithBytes:body length:len]];
+        if (!g_httpTasks) {
+            g_httpTasks = [[NSMutableDictionary alloc] init];
+        }
+        unsigned long rid = g_httpNextId++;
+        NSNumber *key = [NSNumber numberWithUnsignedLong:rid];
+        /* Die Bloecke werden kopiert und halten key/data dabei selbst fest
+         * (auch ohne ARC). */
+        NSURLSessionDataTask *task = [[NSURLSession sharedSession]
+            dataTaskWithRequest:req
+              completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
+                  NSInteger status = 0;
+                  if (!err && [resp isKindOfClass:[NSHTTPURLResponse class]]) {
+                      status = [(NSHTTPURLResponse *)resp statusCode];
+                  }
+                  dispatch_async(dispatch_get_main_queue(), ^{
+                      if (![g_httpTasks objectForKey:key]) {
+                          return; /* abgebrochen */
+                      }
+                      [g_httpTasks removeObjectForKey:key];
+                      cb(rid, (int)status, data ? (const char *)[data bytes] : NULL, data ? [data length] : 0);
+                  });
+              }];
+        [g_httpTasks setObject:task forKey:key];
+        [task resume];
+        return rid;
+    }
+}
+
+void btn_http_cancel(unsigned long id) {
+    NSNumber *key = [NSNumber numberWithUnsignedLong:id];
+    NSURLSessionDataTask *task = [g_httpTasks objectForKey:key];
+    if (task) {
+        [task cancel];
+        [g_httpTasks removeObjectForKey:key];
+    }
+}
+
+void btn_app_restart_idle_timer(double seconds, btn_void_callback cb) {
+    [g_idleTimer invalidate];
+    g_idleTimer = nil;
+    if (seconds < 0 || !cb) {
+        return;
+    }
+    g_idleTimer = [NSTimer timerWithTimeInterval:seconds repeats:NO block:^(NSTimer *t) {
+        (void)t;
+        g_idleTimer = nil; /* feuert einmal, danach gibt die Run Loop ihn frei */
+        cb();
+    }];
+    [[NSRunLoop currentRunLoop] addTimer:g_idleTimer forMode:NSDefaultRunLoopMode];
 }
 
 void btn_app_set_show_invisibles_menu(int on) {

@@ -24,7 +24,7 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "%d replaced",
         "Match %d of %d",
         "Help", "Keyboard Shortcuts...", "Keyboard Shortcuts",
-        "⌘N — New\n⌘O — Open\n⌘S — Save\n⇧⌘S — Save As\n⌘W — Close\n⌘Z — Undo\n⇧⌘Z — Redo\n⌘X — Cut\n⌘C — Copy\n⌘V — Paste\n⌘A — Select All\n⌘F — Find & Replace\n⌘L — Go to Line\n⌘+/⌘- — Zoom In/Out\n⌘0 — Actual Size\n⌥←/→ — Jump by word\n⌘←/→ — Line start/end\nTab / ⇧Tab — Indent / outdent lines (Tab: selection over several lines)\n⌘G / ⇧⌘G — Find next / previous\n⌘E — Use selection for find\n⌃Tab or ⇧⌘] / ⇧⌘[ — Next / previous tab\n⌘M — Minimize, ⌃⌘F — Full screen\nEsc — Close find bar\nReturn (search field) — Next match\n⇧Return (search field) — Previous match\nReturn (replace field) — Replace + Next\n⌘Return (replace field) — Replace All\n\\t (find/replace field, regex mode) — Tab character\n⌘/ — Toggle comment\n⇧⌘D — Duplicate lines\n⌥⌘[ / ⌥⌘] (⌥⌘↑ / ⌥⌘↓) — Move lines up / down\n⌥⌘I — Show invisibles",
+        "⌘N — New\n⌘O — Open\n⌘S — Save\n⇧⌘S — Save As\n⌘W — Close\n⌘Z — Undo\n⇧⌘Z — Redo\n⌘X — Cut\n⌘C — Copy\n⌘V — Paste\n⌘A — Select All\n⌘F — Find & Replace\n⌘L — Go to Line\n⌘+/⌘- — Zoom In/Out\n⌘0 — Actual Size\n⌥←/→ — Jump by word\n⌘←/→ — Line start/end\nTab / ⇧Tab — Indent / outdent lines (Tab: selection over several lines)\n⌘G / ⇧⌘G — Find next / previous\n⌘E — Use selection for find\n⌃Tab or ⇧⌘] / ⇧⌘[ — Next / previous tab\n⌘M — Minimize, ⌃⌘F — Full screen\nEsc — Close find bar\nReturn (search field) — Next match\n⇧Return (search field) — Previous match\nReturn (replace field) — Replace + Next\n⌘Return (replace field) — Replace All\n\\t (find/replace field, regex mode) — Tab character\n⌘/ — Toggle comment\n⇧⌘D — Duplicate lines\n⌥⌘[ / ⌥⌘] (⌥⌘↑ / ⌥⌘↓) — Move lines up / down\n⌥⌘I — Show invisibles\nTab / Esc — Accept / dismiss AI suggestion",
         "Replace All",
         "“%s” may not be a text file.",
         "This file appears to contain binary data. Editing and saving it could corrupt it.",
@@ -73,7 +73,8 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Duplicate Lines",
         "Move Lines Up",
         "Move Lines Down",
-        "Show Invisibles"
+        "Show Invisibles",
+        "AI Completion (Local Server)"
     },
     /* BTN_LANG_DE */
     {
@@ -90,7 +91,7 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "%d ersetzt",
         "Treffer %d von %d",
         "Hilfe", "Tastenkürzel...", "Tastenkürzel",
-        "⌘N — Neu\n⌘O — Öffnen\n⌘S — Sichern\n⇧⌘S — Sichern unter\n⌘W — Schließen\n⌘Z — Widerrufen\n⇧⌘Z — Wiederholen\n⌘X — Ausschneiden\n⌘C — Kopieren\n⌘V — Einfügen\n⌘A — Alles auswählen\n⌘F — Suchen und Ersetzen\n⌘L — Gehe zu Zeile\n⌘+/⌘- — Vergrößern/Verkleinern\n⌘0 — Tatsächliche Größe\n⌥←/→ — Wortsprung\n⌘←/→ — Zeilenanfang/-ende\nTab / ⇧Tab — Zeilen ein-/ausrücken (Tab: Selektion über mehrere Zeilen)\n⌘G / ⇧⌘G — Weitersuchen / rückwärts suchen\n⌘E — Auswahl für Suche verwenden\n⌃Tab oder ⇧⌘] / ⇧⌘[ — Nächster / vorheriger Tab\n⌘M — Im Dock ablegen, ⌃⌘F — Vollbild\nEsc — Suchleiste schließen\nReturn (Suchfeld) — Nächster Treffer\n⇧Return (Suchfeld) — Voriger Treffer\nReturn (Ersetzen-Feld) — Ersetzen + Weiter\n⌘Return (Ersetzen-Feld) — Alle ersetzen\n\\t (Suchen-/Ersetzen-Feld, Regex-Modus) — Tabulator\n⌘/ — Kommentar ein/aus\n⇧⌘D — Zeilen duplizieren\n⌥⌘[ / ⌥⌘] (⌥⌘↑ / ⌥⌘↓) — Zeilen nach oben / unten\n⌥⌘I — Unsichtbare Zeichen",
+        "⌘N — Neu\n⌘O — Öffnen\n⌘S — Sichern\n⇧⌘S — Sichern unter\n⌘W — Schließen\n⌘Z — Widerrufen\n⇧⌘Z — Wiederholen\n⌘X — Ausschneiden\n⌘C — Kopieren\n⌘V — Einfügen\n⌘A — Alles auswählen\n⌘F — Suchen und Ersetzen\n⌘L — Gehe zu Zeile\n⌘+/⌘- — Vergrößern/Verkleinern\n⌘0 — Tatsächliche Größe\n⌥←/→ — Wortsprung\n⌘←/→ — Zeilenanfang/-ende\nTab / ⇧Tab — Zeilen ein-/ausrücken (Tab: Selektion über mehrere Zeilen)\n⌘G / ⇧⌘G — Weitersuchen / rückwärts suchen\n⌘E — Auswahl für Suche verwenden\n⌃Tab oder ⇧⌘] / ⇧⌘[ — Nächster / vorheriger Tab\n⌘M — Im Dock ablegen, ⌃⌘F — Vollbild\nEsc — Suchleiste schließen\nReturn (Suchfeld) — Nächster Treffer\n⇧Return (Suchfeld) — Voriger Treffer\nReturn (Ersetzen-Feld) — Ersetzen + Weiter\n⌘Return (Ersetzen-Feld) — Alle ersetzen\n\\t (Suchen-/Ersetzen-Feld, Regex-Modus) — Tabulator\n⌘/ — Kommentar ein/aus\n⇧⌘D — Zeilen duplizieren\n⌥⌘[ / ⌥⌘] (⌥⌘↑ / ⌥⌘↓) — Zeilen nach oben / unten\n⌥⌘I — Unsichtbare Zeichen\nTab / Esc — KI-Vorschlag übernehmen / verwerfen",
         "Alle ersetzen",
         "„%s“ ist möglicherweise keine Textdatei.",
         "Diese Datei scheint binäre Daten zu enthalten. Bearbeiten und Sichern könnten sie beschädigen.",
@@ -139,7 +140,8 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Zeilen duplizieren",
         "Zeilen nach oben",
         "Zeilen nach unten",
-        "Unsichtbare Zeichen einblenden"
+        "Unsichtbare Zeichen einblenden",
+        "KI-Vervollständigung (lokaler Server)"
     },
     /* BTN_LANG_FR */
     {
@@ -156,7 +158,7 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "%d remplacement(s)",
         "Correspondance %d sur %d",
         "Aide", "Raccourcis clavier...", "Raccourcis clavier",
-        "⌘N — Nouveau\n⌘O — Ouvrir\n⌘S — Enregistrer\n⇧⌘S — Enregistrer sous\n⌘W — Fermer\n⌘Z — Annuler\n⇧⌘Z — Rétablir\n⌘X — Couper\n⌘C — Copier\n⌘V — Coller\n⌘A — Tout sélectionner\n⌘F — Rechercher et remplacer\n⌘L — Aller à la ligne\n⌘+/⌘- — Zoom avant/arrière\n⌘0 — Taille réelle\n⌥←/→ — Saut de mot\n⌘←/→ — Début/fin de ligne\nTab / ⇧Tab — Indenter / désindenter (Tab : sélection sur plusieurs lignes)\n⌘G / ⇧⌘G — Rechercher le suivant / précédent\n⌘E — Utiliser la sélection pour la recherche\n⌃Tab ou ⇧⌘] / ⇧⌘[ — Onglet suivant / précédent\n⌘M — Placer dans le Dock, ⌃⌘F — Plein écran\nÉchap — Fermer la barre de recherche\nRetour (champ de recherche) — Occurrence suivante\n⇧Retour (champ de recherche) — Occurrence précédente\nRetour (champ de remplacement) — Remplacer + suivant\n⌘Retour (champ de remplacement) — Tout remplacer\n\\t (champ de recherche/remplacement, mode regex) — Tabulation\n⌘/ — Commenter/décommenter\n⇧⌘D — Dupliquer les lignes\n⌥⌘[ / ⌥⌘] (⌥⌘↑ / ⌥⌘↓) — Déplacer les lignes vers le haut / bas\n⌥⌘I — Caractères invisibles",
+        "⌘N — Nouveau\n⌘O — Ouvrir\n⌘S — Enregistrer\n⇧⌘S — Enregistrer sous\n⌘W — Fermer\n⌘Z — Annuler\n⇧⌘Z — Rétablir\n⌘X — Couper\n⌘C — Copier\n⌘V — Coller\n⌘A — Tout sélectionner\n⌘F — Rechercher et remplacer\n⌘L — Aller à la ligne\n⌘+/⌘- — Zoom avant/arrière\n⌘0 — Taille réelle\n⌥←/→ — Saut de mot\n⌘←/→ — Début/fin de ligne\nTab / ⇧Tab — Indenter / désindenter (Tab : sélection sur plusieurs lignes)\n⌘G / ⇧⌘G — Rechercher le suivant / précédent\n⌘E — Utiliser la sélection pour la recherche\n⌃Tab ou ⇧⌘] / ⇧⌘[ — Onglet suivant / précédent\n⌘M — Placer dans le Dock, ⌃⌘F — Plein écran\nÉchap — Fermer la barre de recherche\nRetour (champ de recherche) — Occurrence suivante\n⇧Retour (champ de recherche) — Occurrence précédente\nRetour (champ de remplacement) — Remplacer + suivant\n⌘Retour (champ de remplacement) — Tout remplacer\n\\t (champ de recherche/remplacement, mode regex) — Tabulation\n⌘/ — Commenter/décommenter\n⇧⌘D — Dupliquer les lignes\n⌥⌘[ / ⌥⌘] (⌥⌘↑ / ⌥⌘↓) — Déplacer les lignes vers le haut / bas\n⌥⌘I — Caractères invisibles\nTab / Échap — Accepter / ignorer la suggestion IA",
         "Tout remplacer",
         "« %s » n'est peut-être pas un fichier texte.",
         "Ce fichier semble contenir des données binaires. Le modifier et l'enregistrer pourrait l'endommager.",
@@ -205,7 +207,8 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Dupliquer les lignes",
         "Déplacer les lignes vers le haut",
         "Déplacer les lignes vers le bas",
-        "Afficher les caractères invisibles"
+        "Afficher les caractères invisibles",
+        "Complétion IA (serveur local)"
     },
     /* BTN_LANG_ES */
     {
@@ -222,7 +225,7 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "%d reemplazos",
         "Coincidencia %d de %d",
         "Ayuda", "Atajos de teclado...", "Atajos de teclado",
-        "⌘N — Nuevo\n⌘O — Abrir\n⌘S — Guardar\n⇧⌘S — Guardar como\n⌘W — Cerrar\n⌘Z — Deshacer\n⇧⌘Z — Rehacer\n⌘X — Cortar\n⌘C — Copiar\n⌘V — Pegar\n⌘A — Seleccionar todo\n⌘F — Buscar y reemplazar\n⌘L — Ir a la línea\n⌘+/⌘- — Acercar/Alejar\n⌘0 — Tamaño real\n⌥←/→ — Salto de palabra\n⌘←/→ — Inicio/fin de línea\nTab / ⇧Tab — Sangrar / quitar sangría (Tab: selección de varias líneas)\n⌘G / ⇧⌘G — Buscar siguiente / anterior\n⌘E — Usar selección para buscar\n⌃Tab o ⇧⌘] / ⇧⌘[ — Pestaña siguiente / anterior\n⌘M — Minimizar, ⌃⌘F — Pantalla completa\nEsc — Cerrar barra de búsqueda\nIntro (campo de búsqueda) — Siguiente coincidencia\n⇧Intro (campo de búsqueda) — Coincidencia anterior\nIntro (campo de reemplazo) — Reemplazar + siguiente\n⌘Intro (campo de reemplazo) — Reemplazar todo\n\\t (campo de búsqueda/reemplazo, modo regex) — Tabulador\n⌘/ — Comentar/descomentar\n⇧⌘D — Duplicar líneas\n⌥⌘[ / ⌥⌘] (⌥⌘↑ / ⌥⌘↓) — Mover líneas arriba / abajo\n⌥⌘I — Caracteres invisibles",
+        "⌘N — Nuevo\n⌘O — Abrir\n⌘S — Guardar\n⇧⌘S — Guardar como\n⌘W — Cerrar\n⌘Z — Deshacer\n⇧⌘Z — Rehacer\n⌘X — Cortar\n⌘C — Copiar\n⌘V — Pegar\n⌘A — Seleccionar todo\n⌘F — Buscar y reemplazar\n⌘L — Ir a la línea\n⌘+/⌘- — Acercar/Alejar\n⌘0 — Tamaño real\n⌥←/→ — Salto de palabra\n⌘←/→ — Inicio/fin de línea\nTab / ⇧Tab — Sangrar / quitar sangría (Tab: selección de varias líneas)\n⌘G / ⇧⌘G — Buscar siguiente / anterior\n⌘E — Usar selección para buscar\n⌃Tab o ⇧⌘] / ⇧⌘[ — Pestaña siguiente / anterior\n⌘M — Minimizar, ⌃⌘F — Pantalla completa\nEsc — Cerrar barra de búsqueda\nIntro (campo de búsqueda) — Siguiente coincidencia\n⇧Intro (campo de búsqueda) — Coincidencia anterior\nIntro (campo de reemplazo) — Reemplazar + siguiente\n⌘Intro (campo de reemplazo) — Reemplazar todo\n\\t (campo de búsqueda/reemplazo, modo regex) — Tabulador\n⌘/ — Comentar/descomentar\n⇧⌘D — Duplicar líneas\n⌥⌘[ / ⌥⌘] (⌥⌘↑ / ⌥⌘↓) — Mover líneas arriba / abajo\n⌥⌘I — Caracteres invisibles\nTab / Esc — Aceptar / descartar la sugerencia IA",
         "Reemplazar todo",
         "“%s” puede no ser un archivo de texto.",
         "Este archivo parece contener datos binarios. Editarlo y guardarlo podría dañarlo.",
@@ -271,7 +274,8 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Duplicar líneas",
         "Mover líneas arriba",
         "Mover líneas abajo",
-        "Mostrar caracteres invisibles"
+        "Mostrar caracteres invisibles",
+        "Autocompletado IA (servidor local)"
     },
     /* BTN_LANG_ZH (Simplified) */
     {
@@ -291,7 +295,7 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "已替换 %d 处",
         "第 %d/%d 个匹配项",
         "帮助", "键盘快捷键…", "键盘快捷键",
-        "⌘N — 新建\n⌘O — 打开\n⌘S — 存储\n⇧⌘S — 存储为\n⌘W — 关闭\n⌘Z — 撤销\n⇧⌘Z — 重做\n⌘X — 剪切\n⌘C — 拷贝\n⌘V — 粘贴\n⌘A — 全选\n⌘F — 查找和替换\n⌘L — 跳转到行\n⌘+/⌘- — 放大/缩小\n⌘0 — 实际大小\n⌥←/→ — 按词跳转\n⌘←/→ — 行首/行尾\nTab / ⇧Tab — 增加/减少缩进（Tab：选中多行时）\n⌘G / ⇧⌘G — 查找下一个 / 上一个\n⌘E — 用所选内容查找\n⌃Tab 或 ⇧⌘] / ⇧⌘[ — 下一个 / 上一个标签页\n⌘M — 最小化，⌃⌘F — 全屏幕\nEsc — 关闭查找栏\n回车（查找框）— 下一个匹配项\n⇧回车（查找框）— 上一个匹配项\n回车（替换框）— 替换并查找下一个\n⌘回车（替换框）— 全部替换\n\\t（查找/替换框，正则模式）— 制表符\n⌘/ — 切换注释\n⇧⌘D — 复制行\n⌥⌘[ / ⌥⌘] (⌥⌘↑ / ⌥⌘↓) — 上移 / 下移行\n⌥⌘I — 显示不可见字符",
+        "⌘N — 新建\n⌘O — 打开\n⌘S — 存储\n⇧⌘S — 存储为\n⌘W — 关闭\n⌘Z — 撤销\n⇧⌘Z — 重做\n⌘X — 剪切\n⌘C — 拷贝\n⌘V — 粘贴\n⌘A — 全选\n⌘F — 查找和替换\n⌘L — 跳转到行\n⌘+/⌘- — 放大/缩小\n⌘0 — 实际大小\n⌥←/→ — 按词跳转\n⌘←/→ — 行首/行尾\nTab / ⇧Tab — 增加/减少缩进（Tab：选中多行时）\n⌘G / ⇧⌘G — 查找下一个 / 上一个\n⌘E — 用所选内容查找\n⌃Tab 或 ⇧⌘] / ⇧⌘[ — 下一个 / 上一个标签页\n⌘M — 最小化，⌃⌘F — 全屏幕\nEsc — 关闭查找栏\n回车（查找框）— 下一个匹配项\n⇧回车（查找框）— 上一个匹配项\n回车（替换框）— 替换并查找下一个\n⌘回车（替换框）— 全部替换\n\\t（查找/替换框，正则模式）— 制表符\n⌘/ — 切换注释\n⇧⌘D — 复制行\n⌥⌘[ / ⌥⌘] (⌥⌘↑ / ⌥⌘↓) — 上移 / 下移行\n⌥⌘I — 显示不可见字符\nTab / Esc — 接受 / 忽略 AI 建议",
         "全部替换",
         "“%s”可能不是文本文件。",
         "该文件似乎包含二进制数据。编辑并存储可能会损坏它。",
@@ -340,7 +344,8 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "复制行",
         "上移行",
         "下移行",
-        "显示不可见字符"
+        "显示不可见字符",
+        "AI 补全（本地服务器）"
     }
 };
 

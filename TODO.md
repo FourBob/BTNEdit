@@ -8,21 +8,18 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
 1. **Code-Editor-Funktionen.** Wortumbruch an/aus, Kodierung beim
    Öffnen/Sichern wählen (heute: Bytes unverändert, Anzeige als UTF-8 mit
    Latin-1-Fallback), Suche über alle Tabs.
-2. **KI-Vervollständigung mit lokalem LLM (optional, standardmäßig aus).**
-   Kein eingebautes Modell: BTNEdit fragt per HTTP einen lokal laufenden
-   Server an (Ollama oder llama-server), Adresse und Modellname in der
-   Prefs-Datei; ohne Server fehlt die Funktion einfach. Code-Modell mit
-   Fill-in-the-Middle (z.B. Qwen2.5-Coder 1.5B/7B), Kontext vor und nach
-   dem Cursor. Ablauf: Anfrage nach ca. 300 ms Tipppause, jeder Tastendruck
-   bricht sie ab; Vorschlag als grauer Geistertext hinter dem Cursor, Tab
-   übernimmt (ein Undo-Schritt), Escape/Weitertippen verwirft. Umsetzung:
-   `NSURLSession` in shim.m mit Callback (UI blockiert nie), Geistertext in
-   render.c ohne Puffer-Änderung (Umbruch/Cursor beachten), Timer/Abbruch/
-   Tab-Belegung in main.c. Schalter global oder pro Sprache (für Code
-   nützlich, für Fließtext eher störend). Der Geistertext kann das Overlay
-   der Eingabemethoden (render.c, `draw_marked_overlay`) als Vorlage nehmen.
 
 ## Bekannte Einschränkungen (bewusst zurückgestellt, kein akuter Bug)
+
+- KI-Vervollständigung: Vorschläge sind einzeilig und kommen nur, wenn
+  rechts vom Cursor höchstens Leerraum oder Schließendes steht. Der
+  Geistertext verdeckt (wie der vorläufige Text einer Eingabemethode) was
+  rechts vom Cursor steht und läuft bei langen Vorschlägen über den rechten
+  Rand hinaus statt umzubrechen. Kein Schalter pro Sprache, kein Modell-
+  oder Server-Test in der App (Fehler bleiben still: kein Vorschlag).
+  Einstellungen nur über `~/.btnedit_ai` (Menü schaltet nur ein/aus). Nach
+  einer fehlgeschlagenen Anfrage wird für denselben Text nicht erneut
+  gefragt.
 
 - Zeilen-Befehle: "Kommentar ein/aus" kennt nur Zeilenkommentare (`//`,
   `#`, `;`) und die Sprache nur über die Dateiendung - unbenannte Dokumente,

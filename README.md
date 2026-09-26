@@ -40,6 +40,10 @@ Graphics/Core Text gezeichnet.
   nach Sprache, hinter der gemeinsamen Einrückung des Blocks), Zeilen duplizieren (`⇧⌘D`),
   Zeilen nach oben/unten verschieben (`⌥⌘[` / `⌥⌘]` oder `⌥⌘↑` / `⌥⌘↓`) - jeweils für alle
   Zeilen der Auswahl und als ein Undo-Schritt
+- KI-Vervollständigung (optional, standardmäßig aus): nach einer kurzen
+  Tipp-Pause schlägt ein lokal laufendes Code-Modell die Fortsetzung der
+  Zeile vor (grauer Geistertext, `Tab` übernimmt, `Esc` verwirft) - siehe
+  unten
 - Unsichtbare Zeichen einblenden (`⌥⌘I`): Leerzeichen `·`, Tabs `»`,
   Zeilenenden `¬`; wird über Neustarts hinweg gemerkt
 - Dark Mode - folgt automatisch dem System-Erscheinungsbild
@@ -89,6 +93,7 @@ Was noch fehlt bzw. bekannte Einschränkungen: siehe [TODO.md](TODO.md).
 | `src/gapbuffer.c`/`.h` | Der Gap Buffer selbst (Puffer-Grundlage von editor.c). |
 | `src/textinput.c`/`.h` | Eingabemethoden: UTF-16 ↔ Bytes nach der Zeichenregel, vorläufiger Text, Bereiche relativ zum Cursor. `shim.m` übersetzt nur `NSTextInputClient`. |
 | `src/eol.c`/`.h` | Zeilenenden erkennen, im Puffer auf `\n` vereinheitlichen und beim Sichern zurückwandeln. |
+| `src/ai.c`/`.h` | KI-Vervollständigung ohne Netzwerk: Einstellungen, JSON der Anfrage (Ollama/llama-server), Antwort auswerten, Vorschlag aufräumen. Die HTTP-Anfrage stellt `shim.m` (`NSURLSession`). |
 | `src/filestamp.c`/`.h` | Fingerabdruck einer Datei (Inode, Größe, Änderungszeit in ns), um Änderungen durch andere Programme zu erkennen. |
 | `src/recovery.c`/`.h` | Wiederherstellungsdateien schreiben/lesen (binärsicher, atomar) und die eines abgestürzten Laufs finden. |
 | `src/shim.m`/`.h` | Der einzige Objective-C-Code: NSWindow/NSMenu/NSApplication/Event-Weiterleitung/NSPasteboard/NSOpenPanel/NSSavePanel/NSAlert - reine Chrome, keine Content-Widgets. |
@@ -160,6 +165,8 @@ umbenennt, muss sie dort nachziehen.
 | `test_shortcuts` | Weitersuchen, Auswahl für Suche (auch mit NUL-Byte), Tab-Wechsel mit Umlauf |
 | `test_mouse` | Scrollbalken-Geometrie samt Umkehrung, I-Beam-Flächen, Autoscroll-Tempo; `on_mouse()` aus `main.c` mit echtem Layout: Markieren mit Autoscroll-Takt, Knopf ziehen, Seite blättern |
 | `test_lines` | Kommentar ein/aus (Einrückung, Leerzeilen, `#`, Selektion, Undo), Duplizieren, Verschieben (Ränder, letzte Zeile ohne Umbruch), Fuzz-Rückwege; Markierungen für unsichtbare Zeichen gegen die Spaltenregel; Menü-Verdrahtung aus `main.c` |
+| `test_ai` | KI: Einstellungsdatei, JSON-Rundlauf (auch kaputtes UTF-8, Steuerzeichen), Antworten (Escapes, Surrogatpaare, verschachtelte Werte, kaputtes JSON), Vorschlag aufräumen |
+| `test_ai_glue` | KI-Ablauf aus `main.c`: wann gefragt wird, Kontextgrenzen, veraltete/fehlerhafte Antworten, Geistertext, Tab als eigener Undo-Schritt, Weitertippen, Abbrechen |
 | `test_indent` | Auto-Indent bei Return, Tab/⇧Tab über mehrere Zeilen, Tab vs. Leerzeichen, Fuzz: Ausrücken nach Einrücken = Original |
 | `test_save_atomic`, `test_save_links_perms`, `test_file_io` | atomares Sichern, Symlinks, Schreibschutz, Laden, Recent-Liste |
 | `test_close_flow` | Schließen/Beenden verliert nie ungesicherte Änderungen |
@@ -178,6 +185,32 @@ einem macOS-Runner die echte App mit `-Werror`, startet sie kurz und führt die
 Tests mit Apples Regex-Engine aus; ein zweiter Job führt sie unter Linux mit
 gcc aus. Neue Tests: `tests/test_<name>.c` anlegen und in `tests/run_tests.sh`
 in die Liste `TESTS` eintragen.
+
+## KI-Vervollständigung (lokal)
+
+BTNEdit bringt kein Modell mit, sondern fragt einen Server auf dem eigenen
+Rechner - [Ollama](https://ollama.com) oder `llama-server` aus llama.cpp:
+
+```bash
+ollama pull qwen2.5-coder:1.5b   # kleines Code-Modell mit Fill-in-the-Middle
+ollama serve                     # falls Ollama nicht schon als App läuft
+```
+
+Dann in BTNEdit Bearbeiten > KI-Vervollständigung einschalten. Das legt
+`~/.btnedit_ai` an, dort lassen sich Server und Modell ändern:
+
+```
+enabled=1
+api=ollama          # oder llama (llama-server, Endpunkt /infill)
+url=http://127.0.0.1:11434
+model=qwen2.5-coder:1.5b
+delay_ms=300        # Tipp-Pause bis zur Anfrage
+max_tokens=48
+```
+
+Nach der Tipp-Pause gehen bis zu 4 KB Text vor und 1 KB nach dem Cursor an
+`url` - nur einen Server eintragen, dem man den Dokumentinhalt anvertraut.
+Läuft kein Server, passiert nichts (keine Meldungen).
 
 ## Tastenkürzel
 
@@ -202,5 +235,6 @@ in die Liste `TESTS` eintragen.
 | Zeilen duplizieren | `⇧⌘D` |
 | Zeilen nach oben / unten verschieben | `⌥⌘[` / `⌥⌘]` oder `⌥⌘↑` / `⌥⌘↓` |
 | Unsichtbare Zeichen einblenden | `⌥⌘I` |
+| KI-Vorschlag übernehmen / verwerfen | `Tab` / `Esc` |
 | Nächster / vorheriger Tab | `⌃Tab` / `⌃⇧Tab` oder `⇧⌘]` / `⇧⌘[` |
 | Im Dock ablegen / Vollbild | `⌘M` / `⌃⌘F` |

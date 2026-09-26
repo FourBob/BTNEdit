@@ -25,6 +25,7 @@ static int g_live_searches, g_discards, g_redraws;
 static char g_last_on_key[64];
 static void perform_live_search(void) { g_live_searches++; }
 static void sync_window_state(void) {}
+static void ai_note_typing(void) {} /* KI-Vervollstaendigung: eigener Test */
 static void sync_scroll_to_cursor(void) {}
 static void btn_app_request_redraw(void) { g_redraws++; }
 static void btn_text_input_discard(void) { g_discards++; }

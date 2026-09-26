@@ -1074,6 +1074,41 @@ double btn_render_text_width(const char *utf8, size_t len) {
 /* Breite und Cursor aus der tatsaechlich gesetzten Zeile, nicht Zeichen mal
  * Spaltenbreite: chinesische/japanische Glyphen sind breiter als eine
  * Menlo-Spalte, Box, Unterstreichung und Cursor lagen sonst daneben. */
+/* ---- Geistertext der KI-Vervollstaendigung ----
+ * Grau hinter dem Cursor, mit Hintergrund (wie der vorlaeufige Text einer
+ * Eingabemethode) - was rechts vom Cursor steht, ist so lange verdeckt. */
+static char *g_ghost_text = NULL;
+static size_t g_ghost_len = 0;
+
+void btn_render_set_ghost_text(const char *utf8, size_t len) {
+    if (!utf8 || len == 0) {
+        g_ghost_len = 0;
+        return;
+    }
+    if (len != g_ghost_len || !g_ghost_text || memcmp(g_ghost_text, utf8, len) != 0) {
+        free(g_ghost_text);
+        g_ghost_text = btn_xmalloc(len);
+        memcpy(g_ghost_text, utf8, len);
+    }
+    g_ghost_len = len;
+}
+
+static void draw_ghost_text(CGContextRef ctx, double x, double box_y, double box_h, double text_y) {
+    if (g_ghost_len == 0) {
+        return;
+    }
+    CTLineRef line = make_line(g_ghost_text, g_ghost_len, get_dim_attrs(), NULL);
+    if (!line) {
+        return;
+    }
+    double width = CTLineGetTypographicBounds(line, NULL, NULL, NULL);
+    set_fill(ctx, col_bg());
+    CGContextFillRect(ctx, CGRectMake(x, box_y, width + 1.0, box_h));
+    CGContextSetTextPosition(ctx, x, text_y);
+    CTLineDraw(line, ctx);
+    CFRelease(line);
+}
+
 static void draw_marked_overlay(CGContextRef ctx, double x, double box_y, double box_h, double text_y,
                                 CFDictionaryRef attrs, BtnColor bg) {
     size_t *map = NULL;
@@ -1687,6 +1722,7 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
             if (g_marked.target == BTN_MARKED_DOCUMENT) {
                 draw_marked_overlay(ctx, cx, cy, LINE_HEIGHT, cy + 4.0, attrs, col_bg());
             } else {
+                draw_ghost_text(ctx, cx, cy, LINE_HEIGHT, cy + 4.0);
                 set_fill(ctx, col_cursor());
                 CGContextFillRect(ctx, CGRectMake(cx, cy, 1.4, LINE_HEIGHT - 2));
             }

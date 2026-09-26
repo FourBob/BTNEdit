@@ -180,6 +180,10 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
  * unter Beruecksichtigung der aktuellen Scroll-Position. */
 size_t btn_hit_test(Editor *ed, CGRect bounds, double x, double y, long scroll_row);
 
+/* Vorschlag der KI-Vervollstaendigung, grau hinter dem Cursor des
+ * Dokuments (wird kopiert; NULL/0 = keiner). */
+void btn_render_set_ghost_text(const char *utf8, size_t len);
+
 /* Unsichtbare Zeichen einblenden: Leerzeichen als '·', Tabs als '»',
  * Zeilenenden als '¬' (gedimmt, hinter dem Text). */
 void btn_render_set_show_invisibles(int on);

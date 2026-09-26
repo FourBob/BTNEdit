@@ -44,7 +44,8 @@ enum {
     BTN_MENU_DUPLICATE_LINES,
     BTN_MENU_MOVE_LINES_UP,
     BTN_MENU_MOVE_LINES_DOWN,
-    BTN_MENU_SHOW_INVISIBLES
+    BTN_MENU_SHOW_INVISIBLES,
+    BTN_MENU_AI_COMPLETION
 };
 
 /* Tags fuer die dynamischen "Zuletzt geoeffnet"-Menuepunkte liegen ab hier,
@@ -182,6 +183,23 @@ void btn_app_set_line_ending_menu(int index, int enabled);
 
 /* Haekchen bei Darstellung > Unsichtbare Zeichen einblenden. */
 void btn_app_set_show_invisibles_menu(int on);
+/* Haekchen bei Bearbeiten > KI-Vervollstaendigung. */
+void btn_app_set_ai_menu(int on);
+
+/* HTTP-POST mit JSON-Koerper (KI-Vervollstaendigung, NSURLSession) - die
+ * Oberflaeche wartet nie: cb kommt spaeter im Haupt-Thread mit dem
+ * HTTP-Status (0 = Netzwerkfehler/Zeitueberschreitung) und dem
+ * Antwortkoerper. Rueckgabe: Kennung (0 = ungueltige URL, cb kommt nie).
+ * Nach btn_http_cancel() kommt cb fuer diese Kennung nicht mehr. */
+typedef void (*btn_http_callback)(unsigned long id, int status, const char *body, size_t len);
+unsigned long btn_http_post_json(const char *url, const char *body, size_t len, double timeout_seconds,
+                                 btn_http_callback cb);
+void btn_http_cancel(unsigned long id);
+
+/* Einmal-Timer fuer "Tipp-Pause": jeder Aufruf startet ihn neu (ein
+ * laufender wird verworfen), seconds < 0 haelt ihn nur an. cb kommt im
+ * Haupt-Thread, nicht waehrend modaler Dialoge. */
+void btn_app_restart_idle_timer(double seconds, btn_void_callback cb);
 void btn_app_run(void);
 
 /* Systemweite Zwischenablage. btn_pasteboard_set_string nimmt bytes+len

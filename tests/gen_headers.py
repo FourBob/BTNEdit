@@ -66,6 +66,11 @@ HEADERS = {
     "drag_type_extracted.h": ("main.c", ["typedef:BtnDrag"]),
     "invisibles_extracted.h": ("render.c", ["build_invisibles"]),
     "linecmd_extracted.h": ("main.c", ["perform_line_command"]),
+    "ai_glue_extracted.h": ("main.c", [
+        "#BTN_MAX_FILE_MB", "#BTN_MAX_FILE_SIZE", "typedef:BtnReadResult", "read_file_contents",
+        "write_stream_checked", "write_file_atomic", "write_file_contents", "ai_config_path", "load_ai_config",
+        "save_ai_config", "ghost_clear", "ghost_visible", "ai_on_response", "ai_on_idle", "ai_note_typing",
+        "ai_accept", "ai_keep_ghost_after_typing"]),
     "protect_extracted.h": ("main.c", [
         "#BTN_RECOVERY_INTERVAL", "#BTN_RECOVERY_BYTES_PER_SECOND", "#BTN_MAX_FILE_MB", "#BTN_MAX_FILE_SIZE",
         "typedef:BtnReadResult", "monotonic_seconds", "active_doc", "discard_recovery", "basename_of", "doc_display_name", "set_doc_path",

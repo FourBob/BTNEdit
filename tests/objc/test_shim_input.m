@@ -5,8 +5,14 @@
  * Callbacks sind Stubs, die mitschreiben, was bei main.c ankaeme. */
 #import <Cocoa/Cocoa.h>
 #include "shim.h"
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 static int fails = 0, checks = 0;
 #define CHECK(c, ...) do { checks++; if (!(c)) { printf("FAIL: " __VA_ARGS__); printf("\n"); fails++; } else { printf("ok    " __VA_ARGS__); printf("\n"); } } while (0)
@@ -123,6 +129,80 @@ static void mouse_cb(btn_mouse_phase phase, double x, double y, int clicks, unsi
         tick_y = y;
     }
 }
+
+/* ---- Kleiner HTTP-Server fuer btn_http_post_json (KI-Vervollstaendigung) ---- */
+static int g_srv_fd = -1, g_srv_port = 0;
+static char g_srv_request[8192];
+static volatile int g_srv_delay_ms = 0;
+
+static void *server_thread(void *arg) {
+    (void)arg;
+    for (;;) {
+        int c = accept(g_srv_fd, NULL, NULL);
+        if (c < 0) {
+            return NULL;
+        }
+        char buf[8192];
+        size_t n = 0;
+        while (n < sizeof buf - 1) {
+            ssize_t r = read(c, buf + n, sizeof buf - 1 - n);
+            if (r <= 0) {
+                break;
+            }
+            n += (size_t)r;
+            buf[n] = 0;
+            char *end = strstr(buf, "\r\n\r\n");
+            char *cl = strcasestr(buf, "Content-Length:");
+            if (end && (!cl || n >= (size_t)(end + 4 - buf) + strtoul(cl + 15, NULL, 10))) {
+                break;
+            }
+        }
+        buf[n] = 0;
+        memcpy(g_srv_request, buf, n + 1);
+        if (g_srv_delay_ms) {
+            usleep((useconds_t)g_srv_delay_ms * 1000);
+        }
+        const char *body = "{\"response\":\"hi \\u00e4\"}";
+        char resp[512];
+        snprintf(resp, sizeof resp,
+                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
+                 strlen(body), body);
+        ssize_t w = write(c, resp, strlen(resp));
+        (void)w;
+        close(c);
+    }
+}
+
+static int start_server(void) {
+    g_srv_fd = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    a.sin_port = 0;
+    socklen_t l = sizeof a;
+    if (g_srv_fd < 0 || bind(g_srv_fd, (struct sockaddr *)&a, sizeof a) != 0 || listen(g_srv_fd, 4) != 0 ||
+        getsockname(g_srv_fd, (struct sockaddr *)&a, &l) != 0) {
+        return 0;
+    }
+    g_srv_port = ntohs(a.sin_port);
+    pthread_t t;
+    return pthread_create(&t, NULL, server_thread, NULL) == 0;
+}
+
+static int http_calls = 0, http_status = -1, http_main_thread = 0;
+static unsigned long http_id = 0;
+static char http_body[256];
+static void http_cb(unsigned long id, int status, const char *body, size_t len) {
+    http_calls++;
+    http_id = id;
+    http_status = status;
+    http_main_thread = [NSThread isMainThread];
+    snprintf(http_body, sizeof http_body, "%.*s", (int)len, body ? body : "");
+}
+
+static int idle_calls = 0;
+static void idle_cb(void) { idle_calls++; }
 
 static void spin(double seconds) {
     [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:seconds]];
@@ -280,6 +360,16 @@ int main(void) {
         CHECK(it && [it state] == NSControlStateValueOn, "Show Invisibles checkmark on");
         btn_app_set_show_invisibles_menu(0);
         CHECK(it && [it state] == NSControlStateValueOff, "and off again");
+        NSMenuItem *aiItem = nil;
+        for (NSMenuItem *m in [[[menubar itemAtIndex:2] submenu] itemArray]) {
+            if ([m tag] == BTN_MENU_AI_COMPLETION) {
+                aiItem = m;
+            }
+        }
+        CHECK(aiItem && [aiItem state] == NSControlStateValueOff, "Edit menu: AI completion item (off)");
+        btn_app_set_ai_menu(1);
+        CHECK(aiItem && [aiItem state] == NSControlStateValueOn, "AI completion checkmark on");
+        btn_app_set_ai_menu(0);
 
         /* ---- Dateien ins Fenster ziehen ---- */
         btn_app_set_open_file_callback(open_cb);
@@ -361,6 +451,49 @@ int main(void) {
         btn_app_start_repeating_timer(0.1, timer_cb);
         spin(0.55);
         CHECK(timer_calls >= 2, "repeating timer fires (%d)", timer_calls);
+
+        /* ---- HTTP-POST an einen lokalen Server ---- */
+        CHECK(start_server(), "local test server started (port %d)", g_srv_port);
+        char url[128];
+        snprintf(url, sizeof url, "http://127.0.0.1:%d/api/generate", g_srv_port);
+        unsigned long rid = btn_http_post_json(url, "{\"a\":1}", 7, 5.0, http_cb);
+        for (int q = 0; q < 100 && http_calls == 0; q++) {
+            spin(0.05);
+        }
+        CHECK(rid != 0 && http_calls == 1 && http_id == rid && http_status == 200, "POST answered (%d calls, status %d)", http_calls, http_status);
+        CHECK(http_main_thread, "callback on the main thread");
+        CHECK(strstr(http_body, "\"response\"") != NULL, "response body delivered (%s)", http_body);
+        CHECK(strncmp(g_srv_request, "POST /api/generate ", 19) == 0 && strcasestr(g_srv_request, "Content-Type: application/json") &&
+                  strstr(g_srv_request, "{\"a\":1}"),
+              "server saw POST, JSON content type and the body");
+        g_srv_delay_ms = 600;
+        unsigned long rid2 = btn_http_post_json(url, "{}", 2, 5.0, http_cb);
+        spin(0.1);
+        btn_http_cancel(rid2);
+        spin(1.2);
+        CHECK(rid2 != 0 && http_calls == 1, "cancelled request: no callback");
+        g_srv_delay_ms = 0;
+        snprintf(url, sizeof url, "http://127.0.0.1:1/x");
+        unsigned long rid3 = btn_http_post_json(url, "{}", 2, 2.0, http_cb);
+        for (int q = 0; q < 60 && http_calls == 1; q++) {
+            spin(0.05);
+        }
+        CHECK(http_calls == 2 && http_id == rid3 && http_status == 0, "connection refused: callback with status 0");
+        CHECK(btn_http_post_json("", "{}", 2, 1.0, http_cb) == 0, "empty URL rejected");
+
+        /* ---- Tipp-Pause-Timer ---- */
+        btn_app_restart_idle_timer(0.15, idle_cb);
+        spin(0.05);
+        btn_app_restart_idle_timer(0.15, idle_cb); /* neu gestartet */
+        spin(0.1);
+        CHECK(idle_calls == 0, "restarted timer has not fired yet");
+        spin(0.2);
+        CHECK(idle_calls == 1, "fires once after the pause");
+        btn_app_restart_idle_timer(0.1, idle_cb);
+        btn_app_restart_idle_timer(-1, NULL);
+        spin(0.25);
+        CHECK(idle_calls == 1, "stopped timer does not fire");
+
         [[NSProcessInfo processInfo] endActivity:activity];
 
         /* I-Beam-Flaechen: setzen, gleich setzen, leeren - ohne Absturz */

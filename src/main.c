@@ -5,6 +5,7 @@
 #include "shim.h"
 #include "render.h"
 #include "editor.h"
+#include "ai.h"
 #include "eol.h"
 #include "filestamp.h"
 #include "recovery.h"
@@ -2473,6 +2474,192 @@ static void on_launch(void) {
     btn_app_request_redraw();
 }
 
+/* ---- KI-Vervollstaendigung (ai.h) ----
+ * Nach einer Tipp-Pause im Dokument fragt BTNEdit den eingestellten Server
+ * (Ollama/llama-server) nach einer Fortsetzung der Zeile; sie erscheint als
+ * grauer Geistertext hinter dem Cursor. Tab uebernimmt, Escape verwirft,
+ * Weitertippen des vorgeschlagenen Textes behaelt den Rest, jede andere
+ * Aenderung oder Cursorbewegung laesst ihn verschwinden. edit_seq ist ueber
+ * alle Editoren eindeutig - er identifiziert Dokument UND Inhaltsstand. */
+static BtnAiConfig g_ai;
+static unsigned long g_ai_request = 0;   /* laufende Anfrage, 0 = keine */
+static size_t g_ai_request_seq, g_ai_request_cursor;
+static size_t g_ai_last_seq = (size_t)-1; /* Inhaltsstand der letzten Anfrage */
+static struct {
+    char *text; /* NUL-terminiert */
+    size_t len;
+    size_t seq, cursor; /* gilt nur fuer genau diesen Stand */
+} g_ghost;
+
+/* ~/.btnedit_ai - wie ~/.btnedit_prefs eine eigene kleine Datei. */
+static char *ai_config_path(void) {
+    const char *home = getenv("HOME");
+    if (!home) {
+        return NULL;
+    }
+    size_t len = strlen(home) + strlen("/.btnedit_ai") + 1;
+    char *path = malloc(len);
+    if (path) {
+        snprintf(path, len, "%s/.btnedit_ai", home);
+    }
+    return path;
+}
+
+static void load_ai_config(void) {
+    btn_ai_config_defaults(&g_ai);
+    char *path = ai_config_path();
+    size_t len;
+    BtnReadResult result;
+    char *text = path ? read_file_contents(path, &len, &result, NULL) : NULL;
+    if (text) {
+        btn_ai_config_parse(&g_ai, text, len);
+        free(text);
+    }
+    free(path);
+    btn_app_set_ai_menu(g_ai.enabled);
+}
+
+static void save_ai_config(void) {
+    char *path = ai_config_path();
+    char *text = btn_ai_config_format(&g_ai);
+    if (path && text) {
+        write_file_contents(path, text, strlen(text));
+    }
+    free(text);
+    free(path);
+}
+
+static void ghost_clear(void) {
+    free(g_ghost.text);
+    g_ghost.text = NULL;
+    g_ghost.len = 0;
+}
+
+/* Steht der Vorschlag noch? Nur fuer genau den Stand, fuer den er kam. */
+static int ghost_visible(void) {
+    if (!g_ghost.len || g_focus != BTN_FOCUS_DOCUMENT || g_marked.len) {
+        return 0;
+    }
+    Editor *ed = &active_doc()->editor;
+    return ed->edit_seq == g_ghost.seq && ed->cursor == g_ghost.cursor && !editor_has_selection(ed);
+}
+
+static void ai_on_response(unsigned long id, int status, const char *body, size_t len) {
+    if (id != g_ai_request) {
+        return; /* veraltet */
+    }
+    g_ai_request = 0;
+    Editor *ed = &active_doc()->editor;
+    if (status != 200 || !body || ed->edit_seq != g_ai_request_seq || ed->cursor != g_ai_request_cursor ||
+        editor_has_selection(ed) || g_focus != BTN_FOCUS_DOCUMENT || g_marked.len) {
+        return;
+    }
+    char *s;
+    size_t n;
+    if (!btn_ai_parse_response(g_ai.api, body, len, &s, &n)) {
+        return;
+    }
+    size_t rest_len = editor_length(ed) - ed->cursor;
+    rest_len = rest_len < 256 ? rest_len : 256;
+    char *rest = gb_copy_range(&ed->buffer, ed->cursor, rest_len);
+    n = btn_ai_clean_suggestion(s, n, rest, rest_len);
+    free(rest);
+    if (n == 0) {
+        free(s);
+        return;
+    }
+    ghost_clear();
+    g_ghost.text = s;
+    g_ghost.len = n;
+    g_ghost.seq = ed->edit_seq;
+    g_ghost.cursor = ed->cursor;
+    btn_app_request_redraw();
+}
+
+/* Tipp-Pause vorbei: fragen, wenn es hier etwas zu vervollstaendigen gibt
+ * - im Dokument, ohne Selektion/Eingabe, der Text hat sich seit der letzten
+ * Anfrage geaendert, und rechts vom Cursor steht nur Leerraum oder
+ * Schliessendes. Kontext: bis BTN_AI_PREFIX_BYTES davor, BTN_AI_SUFFIX_BYTES
+ * danach, auf Zeichengrenzen. */
+static void ai_on_idle(void) {
+    Document *d = active_doc();
+    Editor *ed = &d->editor;
+    if (!g_ai.enabled || g_ai_request || g_focus != BTN_FOCUS_DOCUMENT || g_marked.len || d->binary ||
+        editor_has_selection(ed) || ed->edit_seq == g_ai_last_seq || ghost_visible()) {
+        return;
+    }
+    size_t cur = ed->cursor, len = editor_length(ed);
+    size_t end = len - cur > BTN_AI_SUFFIX_BYTES ? cur + BTN_AI_SUFFIX_BYTES : len;
+    if (end < len) {
+        end = editor_utf8_seq_start(ed, end);
+    }
+    char *suffix = gb_copy_range(&ed->buffer, cur, end - cur);
+    if (!btn_ai_rest_allows_request(suffix, end - cur)) {
+        free(suffix);
+        return;
+    }
+    size_t start = cur > BTN_AI_PREFIX_BYTES ? cur - BTN_AI_PREFIX_BYTES : 0;
+    while (start < cur && ((unsigned char)gb_char_at(&ed->buffer, start) & 0xC0) == 0x80) {
+        start++;
+    }
+    char *prefix = gb_copy_range(&ed->buffer, start, cur - start);
+    size_t body_len;
+    char *body = btn_ai_request_body(&g_ai, prefix, cur - start, suffix, end - cur, &body_len);
+    char *url = btn_ai_endpoint(&g_ai);
+    g_ai_request = btn_http_post_json(url, body, body_len, 10.0, ai_on_response);
+    g_ai_request_seq = ed->edit_seq;
+    g_ai_request_cursor = cur;
+    g_ai_last_seq = ed->edit_seq;
+    free(url);
+    free(body);
+    free(prefix);
+    free(suffix);
+}
+
+/* Jede Taste im Dokument: laufende Anfrage abbrechen, Pause neu messen. */
+static void ai_note_typing(void) {
+    if (!g_ai.enabled) {
+        return;
+    }
+    if (g_ai_request) {
+        btn_http_cancel(g_ai_request);
+        g_ai_request = 0;
+    }
+    btn_app_restart_idle_timer(g_ai.delay_ms / 1000.0, ai_on_idle);
+}
+
+/* Tab: Vorschlag uebernehmen - als eigener Undo-Schritt (die Gruppe wird
+ * weder mit dem Tippen davor noch danach zusammengefasst). */
+static void ai_accept(Editor *ed) {
+    char *text = g_ghost.text;
+    size_t n = g_ghost.len;
+    g_ghost.text = NULL;
+    g_ghost.len = 0;
+    editor_begin_undo_group(ed);
+    editor_insert_text(ed, text, n);
+    editor_end_undo_group(ed);
+    free(text);
+}
+
+/* Nach getipptem Text: war es genau der Anfang des Vorschlags, bleibt der
+ * Rest stehen; sonst ist er weg. c0/l0: Cursor und Laenge davor. */
+static void ai_keep_ghost_after_typing(Editor *ed, size_t c0, size_t l0) {
+    size_t n = ed->cursor > c0 ? ed->cursor - c0 : 0;
+    if (n > 0 && n < g_ghost.len && editor_length(ed) == l0 + n && !editor_has_selection(ed)) {
+        char *typed = gb_copy_range(&ed->buffer, c0, n);
+        int same = memcmp(typed, g_ghost.text, n) == 0;
+        free(typed);
+        if (same) {
+            memmove(g_ghost.text, g_ghost.text + n, g_ghost.len - n + 1);
+            g_ghost.len -= n;
+            g_ghost.seq = ed->edit_seq;
+            g_ghost.cursor = ed->cursor;
+            return;
+        }
+    }
+    ghost_clear();
+}
+
 static void on_draw(CGContextRef ctx, CGRect bounds) {
     g_bounds = bounds;
 
@@ -2528,6 +2715,7 @@ static void on_draw(CGContextRef ctx, CGRect bounds) {
     }
     btn_render_set_footer_eol(eol_label);
     btn_render_set_scrollbar_active(g_drag == BTN_DRAG_SCROLLBAR);
+    btn_render_set_ghost_text(ghost_visible() ? g_ghost.text : NULL, g_ghost.len);
     /* Hier statt bei jeder Layout-Aenderung (Fenstergroesse, Suchleiste):
      * der Shim setzt die Flaechen nur neu, wenn sie sich geaendert haben. */
     CGRect cursor_rects[3], knob;
@@ -2732,6 +2920,13 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
     int option = (modifierFlags & BTN_MOD_OPTION) != 0;
     int command = (modifierFlags & BTN_MOD_COMMAND) != 0;
 
+    /* Escape verwirft zuerst einen KI-Vorschlag. */
+    if (characters && (unsigned char)characters[0] == 0x1B && ghost_visible()) {
+        ghost_clear();
+        btn_app_request_redraw();
+        return;
+    }
+
     /* Escape schliesst eine sichtbare Suchen-Leiste immer, auch wenn der
      * Fokus (z.B. durch einen Klick ins Dokument) inzwischen wieder auf dem
      * Dokument liegt - sonst gaebe es keinen Weg mehr, sie zu schliessen,
@@ -2754,6 +2949,16 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
     }
 
     Editor *ed = &active_doc()->editor;
+    ai_note_typing();
+
+    /* Tab mit KI-Vorschlag: uebernehmen */
+    if (keycode == KEYCODE_TAB && !shift && !option && !command && ghost_visible()) {
+        ai_accept(ed);
+        sync_window_state();
+        sync_scroll_to_cursor();
+        btn_app_request_redraw();
+        return;
+    }
 
     /* Wahl+Cmd+Pfeil hoch/runter: Zeilen verschieben - zweites Kuerzel
      * neben Wahl+Cmd+[ / ], das auf Tastaturen ohne eigene [-Taste
@@ -2841,6 +3046,8 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
     }
 
     unsigned char c = (unsigned char)characters[0];
+    int had_ghost = ghost_visible();
+    size_t c0 = ed->cursor, l0 = editor_length(ed);
     if (c == '\r') {
         editor_insert_newline(ed); /* mit Einrueckung der aktuellen Zeile */
     } else if (c == 0x7F) {
@@ -2849,6 +3056,9 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
         insert_typed_chars(ed, characters);
     } else {
         return;
+    }
+    if (had_ghost) {
+        ai_keep_ghost_after_typing(ed, c0, l0);
     }
 
     sync_window_state();
@@ -2872,6 +3082,7 @@ static void after_focused_edit(void) {
         g_search_status[0] = '\0';
     } else {
         sync_window_state();
+        ai_note_typing();
     }
     sync_scroll_to_cursor();
     btn_app_request_redraw();
@@ -3380,6 +3591,17 @@ static void on_menu(int tag) {
         case BTN_MENU_MOVE_LINES_DOWN:
             perform_line_command(tag);
             break;
+        case BTN_MENU_AI_COMPLETION:
+            g_ai.enabled = !g_ai.enabled;
+            btn_app_set_ai_menu(g_ai.enabled);
+            save_ai_config(); /* legt ~/.btnedit_ai beim ersten Mal an */
+            if (!g_ai.enabled) {
+                btn_http_cancel(g_ai_request);
+                g_ai_request = 0;
+                btn_app_restart_idle_timer(-1, NULL);
+                ghost_clear();
+            }
+            break;
         case BTN_MENU_SHOW_INVISIBLES:
             apply_show_invisibles(!g_show_invisibles);
             save_prefs();
@@ -3555,6 +3777,7 @@ int main(void) {
      * der zuletzt eingestellten Schriftgroesse zeichnet, statt kurz bei
      * BTN_DEFAULT_FONT_SIZE aufzublitzen. */
     load_prefs();
+    load_ai_config();
     btn_app_run();
 
     for (int i = 0; i < g_doc_count; i++) {
