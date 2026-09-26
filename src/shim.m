@@ -847,6 +847,40 @@ void btn_app_set_ai_menu(int on) {
     [g_aiItem setState:on ? NSControlStateValueOn : NSControlStateValueOff];
 }
 
+/* Keine Umleitungen: ein 307 wuerde den Dokumenttext an eine andere
+ * Adresse weiterschicken. */
+@interface BTNHttpDelegate : NSObject <NSURLSessionTaskDelegate>
+@end
+
+@implementation BTNHttpDelegate
+- (void)URLSession:(NSURLSession *)session
+                          task:(NSURLSessionTask *)task
+    willPerformHTTPRedirection:(NSHTTPURLResponse *)response
+                    newRequest:(NSURLRequest *)request
+             completionHandler:(void (^)(NSURLRequest *))completionHandler {
+    (void)session; (void)task; (void)response; (void)request;
+    completionHandler(nil);
+}
+@end
+
+#define BTN_HTTP_MAX_RESPONSE (1024 * 1024)
+
+/* Eigene Sitzung: kein Cache, keine Cookies, kein System-Proxy (der Text
+ * soll direkt an den eingetragenen Server), hoechstens 15 s pro Anfrage
+ * insgesamt (timeoutInterval allein misst nur Pausen im Datenstrom). */
+static NSURLSession *http_session(void) {
+    static NSURLSession *session = nil;
+    if (!session) {
+        NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+        [cfg setConnectionProxyDictionary:@{}];
+        [cfg setTimeoutIntervalForResource:15.0];
+        [cfg setHTTPShouldSetCookies:NO];
+        BTNHttpDelegate *delegate = [[[BTNHttpDelegate alloc] init] autorelease];
+        session = [[NSURLSession sessionWithConfiguration:cfg delegate:delegate delegateQueue:nil] retain];
+    }
+    return session;
+}
+
 unsigned long btn_http_post_json(const char *url, const char *body, size_t len, double timeout_seconds,
                                  btn_http_callback cb) {
     @autoreleasepool {
@@ -867,20 +901,25 @@ unsigned long btn_http_post_json(const char *url, const char *body, size_t len, 
         NSNumber *key = [NSNumber numberWithUnsignedLong:rid];
         /* Die Bloecke werden kopiert und halten key/data dabei selbst fest
          * (auch ohne ARC). */
-        NSURLSessionDataTask *task = [[NSURLSession sharedSession]
+        NSURLSessionDataTask *task = [http_session()
             dataTaskWithRequest:req
               completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
                   NSInteger status = 0;
-                  if (!err && [resp isKindOfClass:[NSHTTPURLResponse class]]) {
+                  if (!err && [resp isKindOfClass:[NSHTTPURLResponse class]] && [data length] <= BTN_HTTP_MAX_RESPONSE) {
                       status = [(NSHTTPURLResponse *)resp statusCode];
                   }
-                  dispatch_async(dispatch_get_main_queue(), ^{
+                  /* Im Haupt-Thread, aber nur im Standardmodus - nicht hinter
+                   * einem offenen Dialog (dispatch_get_main_queue liefe auch
+                   * dort). */
+                  CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopDefaultMode, ^{
                       if (![g_httpTasks objectForKey:key]) {
                           return; /* abgebrochen */
                       }
                       [g_httpTasks removeObjectForKey:key];
-                      cb(rid, (int)status, data ? (const char *)[data bytes] : NULL, data ? [data length] : 0);
+                      int ok = status != 0;
+                      cb(rid, (int)status, ok && data ? (const char *)[data bytes] : NULL, ok && data ? [data length] : 0);
                   });
+                  CFRunLoopWakeUp(CFRunLoopGetMain());
               }];
         [g_httpTasks setObject:task forKey:key];
         [task resume];

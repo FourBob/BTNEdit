@@ -482,12 +482,45 @@ int btn_ai_parse_response(int api, const char *body, size_t len, char **out, siz
     return btn_ai_json_get_string(body, len, api == BTN_AI_API_LLAMA ? "content" : "response", out, out_len);
 }
 
+/* Codepunkt der gueltigen Sequenz s[0..n). */
+static unsigned long utf8_decode(const unsigned char *s, size_t n) {
+    if (n == 1) {
+        return s[0];
+    }
+    unsigned long cp = s[0] & (n == 2 ? 0x1F : n == 3 ? 0x0F : 0x07);
+    for (size_t i = 1; i < n; i++) {
+        cp = (cp << 6) | (s[i] & 0x3F);
+    }
+    return cp;
+}
+
+/* Nichts, was im Quelltext unsichtbar wirkt oder ihn verfaelscht: Steuer-
+ * zeichen (ausser Tab), DEL/C1, Richtungs-Steuerzeichen (Trojan Source),
+ * Zeichen ohne Breite, BOM. */
+static int suggestion_char_ok(unsigned long cp) {
+    if (cp == '\t') {
+        return 1;
+    }
+    if (cp < 0x20 || (cp >= 0x7F && cp <= 0x9F)) {
+        return 0;
+    }
+    if (cp == 0x061C || (cp >= 0x200B && cp <= 0x200F) || (cp >= 0x202A && cp <= 0x202E) ||
+        (cp >= 0x2060 && cp <= 0x2069) || cp == 0xFEFF) {
+        return 0;
+    }
+    return 1;
+}
+
 size_t btn_ai_clean_suggestion(char *s, size_t len, const char *rest, size_t rest_len) {
-    for (size_t i = 0; i < len; i++) {
-        if (s[i] == '\n' || s[i] == '\r') {
+    /* Bis zum ersten Zeilenende, Steuer-/unsichtbaren Zeichen oder
+     * ungueltigen UTF-8 - der Rest davor bleibt. */
+    for (size_t i = 0; i < len;) {
+        size_t n = utf8_valid_len((const unsigned char *)s + i, len - i);
+        if (n == 0 || !suggestion_char_ok(utf8_decode((const unsigned char *)s + i, n))) {
             len = i;
             break;
         }
+        i += n;
     }
     size_t r = 0;
     while (r < rest_len && rest[r] != '\n' && rest[r] != '\r') {
@@ -524,6 +557,49 @@ size_t btn_ai_clean_suggestion(char *s, size_t len, const char *rest, size_t res
     }
     s[len] = '\0';
     return len;
+}
+
+char *btn_ai_config_set_enabled(const char *text, size_t len, int enabled) {
+    Buf b = { 0 };
+    int done = 0;
+    size_t i = 0;
+    while (i < len) {
+        size_t e = i;
+        while (e < len && text[e] != '\n') {
+            e++;
+        }
+        const char *line = text + i;
+        size_t n = e - i, lead = 0;
+        while (lead < n && isspace((unsigned char)line[lead])) {
+            lead++;
+        }
+        if (!done && n - lead >= 7 && memcmp(line + lead, "enabled", 7) == 0) {
+            size_t k = lead + 7;
+            while (k < n && (line[k] == ' ' || line[k] == '\t')) {
+                k++;
+            }
+            if (k < n && line[k] == '=') {
+                buf_str(&b, enabled ? "enabled=1" : "enabled=0");
+                done = 1;
+                if (e < len) {
+                    buf_add(&b, "\n", 1);
+                }
+                i = e + 1;
+                continue;
+            }
+        }
+        buf_add(&b, line, e < len ? n + 1 : n);
+        i = e + 1;
+    }
+    if (!done) {
+        if (b.len > 0 && b.d[b.len - 1] != '\n') {
+            buf_add(&b, "\n", 1);
+        }
+        buf_str(&b, enabled ? "enabled=1\n" : "enabled=0\n");
+    }
+    buf_reserve(&b, 0);
+    b.d[b.len] = '\0';
+    return b.d;
 }
 
 int btn_ai_rest_allows_request(const char *rest, size_t rest_len) {

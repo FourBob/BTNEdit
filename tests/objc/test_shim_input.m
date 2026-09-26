@@ -8,6 +8,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -174,6 +175,7 @@ static void *server_thread(void *arg) {
 }
 
 static int start_server(void) {
+    signal(SIGPIPE, SIG_IGN); /* Antwort auf eine abgebrochene Verbindung */
     g_srv_fd = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in a;
     memset(&a, 0, sizeof a);
@@ -482,16 +484,19 @@ int main(void) {
         CHECK(btn_http_post_json("", "{}", 2, 1.0, http_cb) == 0, "empty URL rejected");
 
         /* ---- Tipp-Pause-Timer ---- */
-        btn_app_restart_idle_timer(0.15, idle_cb);
-        spin(0.05);
-        btn_app_restart_idle_timer(0.15, idle_cb); /* neu gestartet */
+        btn_app_restart_idle_timer(0.4, idle_cb);
         spin(0.1);
+        btn_app_restart_idle_timer(0.4, idle_cb); /* neu gestartet */
+        spin(0.15);
         CHECK(idle_calls == 0, "restarted timer has not fired yet");
-        spin(0.2);
-        CHECK(idle_calls == 1, "fires once after the pause");
+        for (int q = 0; q < 40 && idle_calls == 0; q++) {
+            spin(0.05);
+        }
+        spin(0.5);
+        CHECK(idle_calls == 1, "fires once after the pause (%d)", idle_calls);
         btn_app_restart_idle_timer(0.1, idle_cb);
         btn_app_restart_idle_timer(-1, NULL);
-        spin(0.25);
+        spin(0.4);
         CHECK(idle_calls == 1, "stopped timer does not fire");
 
         [[NSProcessInfo processInfo] endActivity:activity];

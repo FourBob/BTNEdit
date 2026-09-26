@@ -17,9 +17,12 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
   rechts vom Cursor steht und läuft bei langen Vorschlägen über den rechten
   Rand hinaus statt umzubrechen. Kein Schalter pro Sprache, kein Modell-
   oder Server-Test in der App (Fehler bleiben still: kein Vorschlag).
-  Einstellungen nur über `~/.btnedit_ai` (Menü schaltet nur ein/aus). Nach
-  einer fehlgeschlagenen Anfrage wird für denselben Text nicht erneut
-  gefragt.
+  Einstellungen nur über `~/.btnedit_ai` (Menü schaltet nur ein/aus und
+  liest die Datei dabei neu). Nach einer fehlgeschlagenen Antwort wird für
+  denselben Text nicht erneut gefragt (nach einem Abbruch schon). Tabs im
+  Vorschlag werden ab Spalte 0 statt ab der Cursor-Spalte ausgerichtet.
+  Anfragen und Antworten laufen ohne Größenbegrenzung beim Senden; eine
+  Antwort über 1 MB gilt als Fehler.
 
 - Zeilen-Befehle: "Kommentar ein/aus" kennt nur Zeilenkommentare (`//`,
   `#`, `;`) und die Sprache nur über die Dateiendung - unbenannte Dokumente,

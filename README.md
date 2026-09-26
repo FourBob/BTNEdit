@@ -197,7 +197,9 @@ ollama serve                     # falls Ollama nicht schon als App läuft
 ```
 
 Dann in BTNEdit Bearbeiten > KI-Vervollständigung einschalten. Das legt
-`~/.btnedit_ai` an, dort lassen sich Server und Modell ändern:
+`~/.btnedit_ai` an, dort lassen sich Server und Modell ändern (gelesen beim
+Start und bei jedem Umschalten im Menü, das nur die Zeile `enabled=`
+ändert):
 
 ```
 enabled=1
@@ -210,7 +212,12 @@ max_tokens=48
 
 Nach der Tipp-Pause gehen bis zu 4 KB Text vor und 1 KB nach dem Cursor an
 `url` - nur einen Server eintragen, dem man den Dokumentinhalt anvertraut.
-Läuft kein Server, passiert nichts (keine Meldungen).
+BTNEdit geht dabei direkt dorthin (kein System-Proxy, keine Umleitungen,
+höchstens 15 s pro Anfrage). Unverschlüsseltes `http://` klappt nur zum
+eigenen Rechner, zu IP-Adressen und `.local`-Namen im lokalen Netz, sonst
+`https://`. Läuft kein Server, passiert nichts (keine Meldungen). Vorschläge
+werden vor der Anzeige bereinigt: Steuer- und unsichtbare Zeichen
+(Richtungs-Steuerzeichen, Nullbreite) schneiden sie ab.
 
 ## Tastenkürzel
 

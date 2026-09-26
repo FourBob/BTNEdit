@@ -29,6 +29,10 @@ void btn_ai_config_defaults(BtnAiConfig *c);
  * Unbekanntes wird ignoriert, Zahlen werden auf sinnvolle Bereiche geklemmt. */
 void btn_ai_config_parse(BtnAiConfig *c, const char *text, size_t len);
 
+/* Die Datei text mit enabled=0/1 - nur diese Zeile geaendert (bzw.
+ * angehaengt), Kommentare und andere Schluessel bleiben (malloc). */
+char *btn_ai_config_set_enabled(const char *text, size_t len, int enabled);
+
 /* Schreibt die Konfiguration im selben Format (malloc, NUL-terminiert). */
 char *btn_ai_config_format(const BtnAiConfig *c);
 
@@ -50,7 +54,8 @@ int btn_ai_parse_response(int api, const char *body, size_t len, char **out, siz
 int btn_ai_json_get_string(const char *json, size_t len, const char *key, char **out, size_t *out_len);
 
 /* Macht aus der Rohantwort einen einzeiligen Vorschlag: bis zum ersten
- * Zeilenende; was der Rest der aktuellen Zeile (rest, bis zum '\n') schon
+ * Zeilenende, Steuer- oder unsichtbaren Zeichen (Richtungs-Steuerzeichen,
+ * Nullbreite, BOM) oder ungueltigem UTF-8; was der Rest der aktuellen Zeile (rest, bis zum '\n') schon
  * enthaelt, wird am Ende abgeschnitten (") " + Vorschlag "x)" -> "x"). Nur
  * Leerraum zaehlt als kein Vorschlag. Rueckgabe: neue Laenge (s wird
  * gekuerzt), 0 = nichts anzubieten. */

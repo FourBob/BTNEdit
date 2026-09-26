@@ -1071,9 +1071,6 @@ double btn_render_text_width(const char *utf8, size_t len) {
     return w;
 }
 
-/* Breite und Cursor aus der tatsaechlich gesetzten Zeile, nicht Zeichen mal
- * Spaltenbreite: chinesische/japanische Glyphen sind breiter als eine
- * Menlo-Spalte, Box, Unterstreichung und Cursor lagen sonst daneben. */
 /* ---- Geistertext der KI-Vervollstaendigung ----
  * Grau hinter dem Cursor, mit Hintergrund (wie der vorlaeufige Text einer
  * Eingabemethode) - was rechts vom Cursor steht, ist so lange verdeckt. */
@@ -1109,6 +1106,9 @@ static void draw_ghost_text(CGContextRef ctx, double x, double box_y, double box
     CFRelease(line);
 }
 
+/* Breite und Cursor aus der tatsaechlich gesetzten Zeile, nicht Zeichen mal
+ * Spaltenbreite: chinesische/japanische Glyphen sind breiter als eine
+ * Menlo-Spalte, Box, Unterstreichung und Cursor lagen sonst daneben. */
 static void draw_marked_overlay(CGContextRef ctx, double x, double box_y, double box_h, double text_y,
                                 CFDictionaryRef attrs, BtnColor bg) {
     size_t *map = NULL;

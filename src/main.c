@@ -138,6 +138,8 @@ typedef enum {
 static BtnDrag g_drag = BTN_DRAG_NONE;
 static double g_drag_knob_offset; /* Knopf-Oberkante minus Klickpunkt */
 
+static void ai_cancel(void); /* KI-Vervollstaendigung, weiter unten */
+
 static void stop_mouse_drag(void) {
     g_drag = BTN_DRAG_NONE;
     btn_app_set_autoscroll(0);
@@ -599,6 +601,7 @@ static void open_find_bar(void) {
 static void switch_to_tab(int idx) {
     commit_marked();
     stop_mouse_drag(); /* ein Ziehen gehoerte zum bisherigen Dokument */
+    ai_cancel();       /* eine Tipp-Pause auch */
     close_find_bar();
     g_active_doc = idx;
     btn_set_window_title(doc_display_name(active_doc()));
@@ -1971,6 +1974,7 @@ static int find_tab_for_path(const char *path) {
  * weiteres Tab aufmacht. Ist die Datei schon in einem anderen Tab offen,
  * wird dorthin gewechselt statt sie ein zweites Mal zu laden. */
 static void open_path_in_tab(const char *path) {
+    ai_cancel(); /* nicht den frisch geladenen Text fragen */
     int existing = find_tab_for_path(path);
     if (existing >= 0) {
         switch_to_tab(existing);
@@ -2478,8 +2482,9 @@ static void on_launch(void) {
  * Nach einer Tipp-Pause im Dokument fragt BTNEdit den eingestellten Server
  * (Ollama/llama-server) nach einer Fortsetzung der Zeile; sie erscheint als
  * grauer Geistertext hinter dem Cursor. Tab uebernimmt, Escape verwirft,
- * Weitertippen des vorgeschlagenen Textes behaelt den Rest, jede andere
- * Aenderung oder Cursorbewegung laesst ihn verschwinden. edit_seq ist ueber
+ * Weitertippen des vorgeschlagenen Textes behaelt den Rest; er gilt nur fuer
+ * genau den Text- und Cursorstand, fuer den er kam (Cursor weg und wieder
+ * zurueck zeigt ihn wieder, jede Aenderung verwirft ihn). edit_seq ist ueber
  * alle Editoren eindeutig - er identifiziert Dokument UND Inhaltsstand. */
 static BtnAiConfig g_ai;
 static unsigned long g_ai_request = 0;   /* laufende Anfrage, 0 = keine */
@@ -2505,28 +2510,42 @@ static char *ai_config_path(void) {
     return path;
 }
 
-static void load_ai_config(void) {
+/* Liest ~/.btnedit_ai (Rueckgabe: Dateiinhalt fuer den Aufrufer oder NULL). */
+static char *load_ai_config_text(size_t *len) {
     btn_ai_config_defaults(&g_ai);
     char *path = ai_config_path();
-    size_t len;
     BtnReadResult result;
-    char *text = path ? read_file_contents(path, &len, &result, NULL) : NULL;
+    char *text = path ? read_file_contents(path, len, &result, NULL) : NULL;
     if (text) {
-        btn_ai_config_parse(&g_ai, text, len);
-        free(text);
+        btn_ai_config_parse(&g_ai, text, *len);
     }
     free(path);
     btn_app_set_ai_menu(g_ai.enabled);
+    return text;
 }
 
-static void save_ai_config(void) {
+static void load_ai_config(void) {
+    size_t len;
+    free(load_ai_config_text(&len));
+}
+
+/* Menue: ein-/ausschalten. Die Datei wird dabei neu gelesen (Aenderungen
+ * an Server/Modell gelten ab jetzt) und nur die enabled-Zeile geaendert -
+ * Kommentare und eigene Eintraege bleiben; ohne Datei wird sie mit allen
+ * Standardwerten angelegt. */
+static void toggle_ai_config(void) {
+    size_t len;
+    char *old = load_ai_config_text(&len);
+    g_ai.enabled = !g_ai.enabled;
+    char *text = old ? btn_ai_config_set_enabled(old, len, g_ai.enabled) : btn_ai_config_format(&g_ai);
     char *path = ai_config_path();
-    char *text = btn_ai_config_format(&g_ai);
     if (path && text) {
         write_file_contents(path, text, strlen(text));
     }
-    free(text);
     free(path);
+    free(text);
+    free(old);
+    btn_app_set_ai_menu(g_ai.enabled);
 }
 
 static void ghost_clear(void) {
@@ -2616,15 +2635,28 @@ static void ai_on_idle(void) {
     free(suffix);
 }
 
+/* Laufende Anfrage abbrechen - ohne Antwort gilt der Text nicht als
+ * "schon gefragt", die naechste Pause fragt erneut. */
+static void ai_cancel_request(void) {
+    if (g_ai_request) {
+        btn_http_cancel(g_ai_request);
+        g_ai_request = 0;
+        g_ai_last_seq = (size_t)-1;
+    }
+}
+
+/* Tab-Wechsel, Oeffnen, Ausschalten: keine Pause mehr messen, nichts fragen. */
+static void ai_cancel(void) {
+    ai_cancel_request();
+    btn_app_restart_idle_timer(-1, NULL);
+}
+
 /* Jede Taste im Dokument: laufende Anfrage abbrechen, Pause neu messen. */
 static void ai_note_typing(void) {
     if (!g_ai.enabled) {
         return;
     }
-    if (g_ai_request) {
-        btn_http_cancel(g_ai_request);
-        g_ai_request = 0;
-    }
+    ai_cancel_request();
     btn_app_restart_idle_timer(g_ai.delay_ms / 1000.0, ai_on_idle);
 }
 
@@ -3592,13 +3624,9 @@ static void on_menu(int tag) {
             perform_line_command(tag);
             break;
         case BTN_MENU_AI_COMPLETION:
-            g_ai.enabled = !g_ai.enabled;
-            btn_app_set_ai_menu(g_ai.enabled);
-            save_ai_config(); /* legt ~/.btnedit_ai beim ersten Mal an */
+            toggle_ai_config(); /* legt ~/.btnedit_ai beim ersten Mal an */
             if (!g_ai.enabled) {
-                btn_http_cancel(g_ai_request);
-                g_ai_request = 0;
-                btn_app_restart_idle_timer(-1, NULL);
+                ai_cancel();
                 ghost_clear();
             }
             break;

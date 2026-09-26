@@ -218,12 +218,26 @@ static void test_flow(void) {
     respond(200, "{\"response\":\"  \\n\"}");
     CHECK(g_ghost.len == 0, "empty suggestion: nothing");
 
-    /* Tippen waehrend einer Anfrage bricht sie ab */
+    /* Tippen waehrend einer Anfrage bricht sie ab - ohne Antwort wird
+     * derselbe Text danach erneut gefragt (z.B. nach einer Pfeiltaste) */
     editor_insert_text(ed, "u", 1);
     ai_on_idle();
     id = g_ai_request;
+    int posts_before = g_posts;
     ai_note_typing();
     CHECK(g_cancelled == id && g_ai_request == 0, "typing cancels the pending request");
+    ai_on_idle();
+    CHECK(g_posts == posts_before + 1, "cancelled without answer: asked again for the same text");
+    respond(0, NULL);
+
+    /* Tab-Wechsel/Oeffnen: Pause und Anfrage verworfen */
+    editor_insert_text(ed, "v", 1);
+    ai_note_typing();
+    ai_on_idle();
+    id = g_ai_request;
+    int stops = g_timer_stops;
+    ai_cancel();
+    CHECK(g_cancelled == id && g_ai_request == 0 && g_timer_stops == stops + 1, "ai_cancel: request cancelled, timer stopped");
 
     /* Wann nicht gefragt wird */
     int before = g_posts;
@@ -306,11 +320,25 @@ static void test_config_file(void) {
     load_ai_config();
     CHECK(g_ai.enabled && g_ai.api == BTN_AI_API_LLAMA && strcmp(g_ai.url, "http://10.0.0.2:8080") == 0 && g_menu_state == 1,
           "file read, menu checked");
-    g_ai.enabled = 0;
-    save_ai_config();
-    BtnAiConfig saved = g_ai;
+    /* Umschalten liest die Datei neu und aendert nur enabled */
+    f = fopen(path, "w");
+    fputs("# meine Notiz\nenabled = 1\nmodel=custom:7b\nfuture_key=42\n", f);
+    fclose(f);
+    toggle_ai_config();
+    CHECK(!g_ai.enabled && strcmp(g_ai.model, "custom:7b") == 0 && g_menu_state == 0, "toggle off: file re-read (model from the file)");
+    f = fopen(path, "r");
+    char buf[256];
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = 0;
+    CHECK(strcmp(buf, "# meine Notiz\nenabled=0\nmodel=custom:7b\nfuture_key=42\n") == 0, "only the enabled line changed (%s)", buf);
+    toggle_ai_config();
+    CHECK(g_ai.enabled && g_menu_state == 1, "toggle on again");
+    unlink(path);
+    toggle_ai_config();
+    CHECK(g_ai.enabled && g_menu_state == 1, "no file: toggled from defaults (on)");
     load_ai_config();
-    CHECK(memcmp(&saved, &g_ai, sizeof saved) == 0, "save -> load round trip");
+    CHECK(g_ai.enabled && strcmp(g_ai.model, "qwen2.5-coder:1.5b") == 0, "and a complete file was written");
     unlink(path);
     rmdir(home);
 }

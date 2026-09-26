@@ -158,6 +158,26 @@ static void test_clean(void) {
     CHECK(clean("\xE2\x82\xAC", "\xAC", b) == 0 || strcmp(b, "\xE2\x82\xAC") == 0 || b[0] == 0,
           "byte overlap never leaves half a character");
     CHECK(clean("ab\rcd", "", b) == 2, "CR ends the line too");
+    CHECK(clean("a\x1b[31mb", "", b) == 1, "escape sequence cut");
+    CHECK(clean("ab\x7f", "", b) == 2 && clean("x\xC2\x85y", "", b) == 1, "DEL and C1 cut");
+    CHECK(clean("if (a\xE2\x80\xAE) b", "", b) == 5, "bidi override cut (Trojan Source)");
+    CHECK(clean("x\xE2\x80\x8By", "", b) == 1 && clean("\xEF\xBB\xBFx", "", b) == 0, "zero width space, BOM cut");
+    CHECK(clean("x\x80\x80\x80", "", b) == 1 && clean("\xFFabc", "", b) == 0, "invalid UTF-8 cut");
+    CHECK(clean("a\tb\xC3\xA4\xE2\x82\xAC", "", b) == 8, "tab and normal non-ASCII kept");
+    char z[8] = { 'a', 0, 'b' };
+    CHECK(btn_ai_clean_suggestion(z, 3, "", 0) == 1, "NUL cut");
+
+    /* enabled umschalten, Rest der Datei bleibt */
+    const char *cfg = "# x\n  enabled =  1  \nmodel=m\nenabledx=5";
+    char *o = btn_ai_config_set_enabled(cfg, strlen(cfg), 0);
+    CHECK(strcmp(o, "# x\nenabled=0\nmodel=m\nenabledx=5") == 0, "set_enabled: only that line (%s)", o);
+    free(o);
+    o = btn_ai_config_set_enabled("model=m", 7, 1);
+    CHECK(strcmp(o, "model=m\nenabled=1\n") == 0, "set_enabled: appended when missing");
+    free(o);
+    o = btn_ai_config_set_enabled("", 0, 0);
+    CHECK(strcmp(o, "enabled=0\n") == 0, "set_enabled: empty file");
+    free(o);
 
     CHECK(btn_ai_rest_allows_request("", 0), "end of line");
     CHECK(btn_ai_rest_allows_request("  );\n more", 10), "closing characters, then the next line");
