@@ -218,8 +218,40 @@ static void test_models(void) {
     btn_ai_models_free(m, 0);
 
     char *o = btn_ai_config_set_value("a=1\nmodel = old  # c\nmodelx=2", 30, "model", "new:7b");
-    CHECK(strcmp(o, "a=1\nmodel=new:7b\nmodelx=2") == 0, "set_value replaces only that key (%s)", o);
+    CHECK(strcmp(o, "a=1\nmodel=new:7b  # c\nmodelx=2") == 0, "set_value replaces only that key, keeps the comment (%s)", o);
     free(o);
+    /* doppelter Schluessel: die letzte Zeile gilt beim Lesen - die wird ersetzt */
+    static const char dup[] = "model=a\r\nurl=x\r\nmodel=b # zweite\r\n";
+    o = btn_ai_config_set_value(dup, sizeof dup - 1, "model", "d");
+    CHECK(strcmp(o, "model=a\r\nurl=x\r\nmodel=d # zweite\n") == 0, "duplicate key: last line replaced (%s)", o);
+    BtnAiConfig c;
+    btn_ai_config_defaults(&c);
+    btn_ai_config_parse(&c, o, strlen(o));
+    CHECK(strcmp(c.model, "d") == 0, "and read back as the new value (%s)", c.model);
+    free(o);
+    CHECK(btn_ai_config_set_value("a=1\n", 4, "model", "x\nurl=http://evil") == NULL, "value with a line end refused");
+
+    /* Namen, die nicht sauber in die Datei passen, fehlen; Cloud-Modelle */
+    static const char odd[] = "{\"models\":[{\"name\":\"x\\nurl=http://evil:1\"},{\"name\":\"a #b\"},"
+                              "{\"name\":\" lead\"},{\"name\":\"qwen3-coder:480b-cloud\",\"size\":384},"
+                              "{\"name\":\"deepseek-coder:6.7b\",\"size\":3000,\"remote_host\":\"https://ollama.com:443\"},"
+                              "{\"name\":\"hf.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF:Q8_0\",\"size\":1600},"
+                              "{\"name\":\"Cloud:latest\",\"size\":1}]}";
+    size_t k = btn_ai_parse_models(odd, sizeof odd - 1, &m);
+    CHECK(k == 4 && strcmp(m[0].name, "qwen3-coder:480b-cloud") == 0, "control chars, '#', edge spaces dropped (%zu)", k);
+    if (k == 4) {
+        CHECK(m[0].remote && m[1].remote && !m[2].remote && !m[3].remote, "cloud: tag or remote_host");
+        CHECK(btn_ai_model_is_coder(m[2].name), "Coder in capitals is a code model");
+        CHECK(btn_ai_pick_model(m, k) == 2, "never auto-picks a cloud model");
+        CHECK(btn_ai_find_model(m, k, "HF.CO/qwen/qwen2.5-coder-1.5b-instruct-gguf:q8_0") == 2, "find ignores case");
+        CHECK(btn_ai_find_model(m, k, "cloud") == 3, "case-insensitive with :latest");
+        CHECK(btn_ai_find_model(m, k, "clou") == -1 && btn_ai_find_model(m, k, "Cloud:lates") == -1, "no prefix matches");
+    }
+    btn_ai_models_free(m, k);
+    char longname[200];
+    int ln = snprintf(longname, sizeof longname, "{\"models\":[{\"name\":\"%0130d\"}]}", 0);
+    CHECK(btn_ai_parse_models(longname, (size_t)ln, &m) == 0, "name too long for model= dropped");
+    btn_ai_models_free(m, 0);
 }
 
 int main(void) {

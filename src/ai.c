@@ -580,42 +580,68 @@ size_t btn_ai_clean_suggestion(char *s, size_t len, const char *rest, size_t res
     return len;
 }
 
+/* Laenge von "key =" am Zeilenanfang (nach Leerraum), 0 = andere Zeile. */
+static size_t config_key_prefix(const char *line, size_t n, const char *key) {
+    size_t kl = strlen(key), lead = 0;
+    while (lead < n && isspace((unsigned char)line[lead])) {
+        lead++;
+    }
+    if (n - lead < kl || memcmp(line + lead, key, kl) != 0) {
+        return 0;
+    }
+    size_t k = lead + kl;
+    while (k < n && (line[k] == ' ' || line[k] == '\t')) {
+        k++;
+    }
+    return k < n && line[k] == '=' ? k + 1 : 0;
+}
+
 char *btn_ai_config_set_value(const char *text, size_t len, const char *key, const char *value) {
-    Buf b = { 0 };
-    size_t kl = strlen(key);
-    int done = 0;
-    size_t i = 0;
-    while (i < len) {
-        size_t e = i;
-        while (e < len && text[e] != '\n') {
-            e++;
+    if (strpbrk(value, "\r\n")) {
+        return NULL;
+    }
+    /* Die letzte passende Zeile gilt beim Lesen - genau die ersetzen. */
+    size_t target = (size_t)-1;
+    for (size_t i = 0; i < len;) {
+        const char *nl = memchr(text + i, '\n', len - i);
+        size_t e = nl ? (size_t)(nl - text) : len;
+        if (config_key_prefix(text + i, e - i, key)) {
+            target = i;
         }
-        const char *line = text + i;
-        size_t n = e - i, lead = 0;
-        while (lead < n && isspace((unsigned char)line[lead])) {
-            lead++;
-        }
-        if (!done && n - lead >= kl && memcmp(line + lead, key, kl) == 0) {
-            size_t k = lead + kl;
-            while (k < n && (line[k] == ' ' || line[k] == '\t')) {
-                k++;
-            }
-            if (k < n && line[k] == '=') {
-                buf_str(&b, key);
-                buf_add(&b, "=", 1);
-                buf_str(&b, value);
-                done = 1;
-                if (e < len) {
-                    buf_add(&b, "\n", 1);
-                }
-                i = e + 1;
-                continue;
-            }
-        }
-        buf_add(&b, line, e < len ? n + 1 : n);
         i = e + 1;
     }
-    if (!done) {
+    Buf b = { 0 };
+    for (size_t i = 0; i < len;) {
+        const char *nl = memchr(text + i, '\n', len - i);
+        size_t e = nl ? (size_t)(nl - text) : len;
+        const char *line = text + i;
+        size_t n = e - i;
+        if (i == target) {
+            buf_str(&b, key);
+            buf_add(&b, "=", 1);
+            buf_str(&b, value);
+            /* " # Kommentar" hinter dem alten Wert behalten (wie beim Lesen) */
+            size_t v = config_key_prefix(line, n, key);
+            for (size_t k = v + 1; k < n; k++) {
+                if (line[k] == '#' && isspace((unsigned char)line[k - 1])) {
+                    size_t c = k;
+                    while (c > v && (line[c - 1] == ' ' || line[c - 1] == '\t')) {
+                        c--;
+                    }
+                    size_t end = n > 0 && line[n - 1] == '\r' ? n - 1 : n;
+                    buf_add(&b, line + c, end - c);
+                    break;
+                }
+            }
+            if (e < len) {
+                buf_add(&b, "\n", 1);
+            }
+        } else {
+            buf_add(&b, line, e < len ? n + 1 : n);
+        }
+        i = e + 1;
+    }
+    if (target == (size_t)-1) {
         if (b.len > 0 && b.d[b.len - 1] != '\n') {
             buf_add(&b, "\n", 1);
         }
@@ -642,6 +668,34 @@ void btn_ai_models_free(BtnAiModel *models, size_t count) {
     free(models);
 }
 
+/* Passt als model= in die Einstellungsdatei und wird so wieder gelesen. */
+static int model_name_ok(const char *name, size_t n) {
+    if (n == 0 || n >= sizeof(((BtnAiConfig *)0)->model) || isspace((unsigned char)name[0]) ||
+        isspace((unsigned char)name[n - 1])) {
+        return 0;
+    }
+    for (size_t i = 0; i < n; i++) {
+        if ((unsigned char)name[i] < 0x20 || name[i] == 0x7F || name[i] == '#') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int ascii_lower(int c) {
+    return c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c;
+}
+
+/* n Bytes gleich bis auf ASCII-Gross/klein */
+static int mem_ieq(const char *a, const char *b, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        if (ascii_lower((unsigned char)a[i]) != ascii_lower((unsigned char)b[i])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 size_t btn_ai_parse_models(const char *json, size_t len, BtnAiModel **out) {
     *out = NULL;
     size_t i;
@@ -662,8 +716,8 @@ size_t btn_ai_parse_models(const char *json, size_t len, BtnAiModel **out) {
         }
         char *name = NULL;
         size_t nl;
-        if (json[start] == '{' && btn_ai_json_get_string(json + start, i - start, "name", &name, &nl) && nl > 0 &&
-            !memchr(name, '\0', nl)) {
+        if (json[start] == '{' && btn_ai_json_get_string(json + start, i - start, "name", &name, &nl) &&
+            model_name_ok(name, nl)) {
             size_t vp;
             long long size = 0;
             if (json_find_key(json + start, i - start, "size", &vp)) {
@@ -675,6 +729,10 @@ size_t btn_ai_parse_models(const char *json, size_t len, BtnAiModel **out) {
             }
             list[count].name = name;
             list[count].size = size;
+            /* Cloud-Modelle: "remote_host" im Eintrag, Tag "...cloud" */
+            const char *tag = strrchr(name, ':');
+            list[count].remote = json_find_key(json + start, i - start, "remote_host", &vp) ||
+                                 (tag && nl - (size_t)(tag - name) >= 6 && memcmp(name + nl - 5, "cloud", 5) == 0);
             count++;
         } else {
             free(name);
@@ -691,8 +749,15 @@ size_t btn_ai_parse_models(const char *json, size_t len, BtnAiModel **out) {
 /* Modelle, die Code mit Fill-in-the-Middle koennen - am Namen erkannt. */
 int btn_ai_model_is_coder(const char *name) {
     static const char *const marks[] = { "coder", "codellama", "codegemma", "codestral", "starcoder" };
+    /* Gross/klein egal: "hf.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF" */
+    char lower[256];
+    size_t n = 0;
+    for (; name[n] && n < sizeof(lower) - 1; n++) {
+        lower[n] = (char)ascii_lower((unsigned char)name[n]);
+    }
+    lower[n] = '\0';
     for (size_t i = 0; i < sizeof(marks) / sizeof(marks[0]); i++) {
-        if (strstr(name, marks[i])) {
+        if (strstr(lower, marks[i])) {
             return 1;
         }
     }
@@ -702,7 +767,8 @@ int btn_ai_model_is_coder(const char *name) {
 int btn_ai_pick_model(const BtnAiModel *models, size_t count) {
     int best = -1;
     for (size_t i = 0; i < count; i++) {
-        if (btn_ai_model_is_coder(models[i].name) && (best < 0 || models[i].size < models[best].size)) {
+        if (!models[i].remote && btn_ai_model_is_coder(models[i].name) &&
+            (best < 0 || models[i].size < models[best].size)) {
             best = (int)i;
         }
     }
@@ -710,16 +776,22 @@ int btn_ai_pick_model(const BtnAiModel *models, size_t count) {
 }
 
 int btn_ai_find_model(const BtnAiModel *models, size_t count, const char *name) {
-    for (size_t i = 0; i < count; i++) {
-        if (strcmp(models[i].name, name) == 0) {
-            return (int)i;
+    /* Exakt vor gross/klein egal (Ollama unterscheidet nicht, die Liste
+     * koennte trotzdem beide Schreibweisen enthalten) */
+    size_t n = strlen(name);
+    for (int exact = 1; exact >= 0; exact--) {
+        for (size_t i = 0; i < count; i++) {
+            if (exact ? strcmp(models[i].name, name) == 0
+                      : strlen(models[i].name) == n && mem_ieq(models[i].name, name, n)) {
+                return (int)i;
+            }
         }
     }
     /* "qwen2.5-coder" meint bei Ollama "qwen2.5-coder:latest" */
     if (!strchr(name, ':')) {
         for (size_t i = 0; i < count; i++) {
-            size_t n = strlen(name);
-            if (strncmp(models[i].name, name, n) == 0 && strcmp(models[i].name + n, ":latest") == 0) {
+            const char *m = models[i].name;
+            if (strlen(m) == n + 7 && mem_ieq(m, name, n) && mem_ieq(m + n, ":latest", 7)) {
                 return (int)i;
             }
         }

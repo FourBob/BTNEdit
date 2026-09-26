@@ -90,6 +90,7 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Ollama: %d models installed",
         "Ollama: no models installed",
         "llama-server: model chosen at server start",
+        "llama-server answers HTTP %d (still loading the model?)",
         "No code model with fill-in-the-middle is installed. Install one, e.g. \"ollama pull qwen2.5-coder:7b\", or pick a model in Edit > AI Model."
     },
     /* BTN_LANG_DE */
@@ -173,6 +174,7 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Ollama: %d Modelle installiert",
         "Ollama: keine Modelle installiert",
         "llama-server: Modell wird beim Serverstart gewählt",
+        "llama-server antwortet mit HTTP %d (lädt noch das Modell?)",
         "Es ist kein Code-Modell mit Fill-in-the-Middle installiert. Installiere z.B. eins mit „ollama pull qwen2.5-coder:7b“ oder wähle ein Modell unter Bearbeiten > KI-Modell."
     },
     /* BTN_LANG_FR */
@@ -256,6 +258,7 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Ollama : %d modèles installés",
         "Ollama : aucun modèle installé",
         "llama-server : modèle choisi au démarrage du serveur",
+        "llama-server répond HTTP %d (modèle encore en chargement ?)",
         "Aucun modèle de code avec fill-in-the-middle n’est installé. Installez-en un, p. ex. « ollama pull qwen2.5-coder:7b », ou choisissez un modèle dans Édition > Modèle IA."
     },
     /* BTN_LANG_ES */
@@ -339,6 +342,7 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Ollama: %d modelos instalados",
         "Ollama: no hay modelos instalados",
         "llama-server: el modelo se elige al iniciar el servidor",
+        "llama-server responde HTTP %d (¿aún cargando el modelo?)",
         "No hay ningún modelo de código con fill-in-the-middle instalado. Instala uno, p. ej. «ollama pull qwen2.5-coder:7b», o elige un modelo en Edición > Modelo IA."
     },
     /* BTN_LANG_ZH (Simplified) */
@@ -425,6 +429,7 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Ollama：已安装 %d 个模型",
         "Ollama：未安装模型",
         "llama-server：模型在服务器启动时选择",
+        "llama-server 返回 HTTP %d（模型仍在加载？）",
         "未安装支持中间填充的代码模型。请安装一个，例如 “ollama pull qwen2.5-coder:7b”，或在“编辑 > AI 模型”中选择模型。"
     }
 };

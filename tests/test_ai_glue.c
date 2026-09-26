@@ -420,8 +420,9 @@ static void test_models(void) {
 
     /* Auswahl im Menue */
     g_ai_last_seq = 5;
+    int redraws = g_redraws;
     ai_set_model(g_ai_models[1].name);
-    CHECK(g_ai_last_seq == (size_t)-1, "new model: the same text is asked again");
+    CHECK(g_ai_last_seq == (size_t)-1 && g_redraws > redraws, "new model: the same text is asked again, old ghost repainted away");
     ai_update_model_menu();
     CHECK(strcmp(g_ai.model, "qwen3.6-coder:latest") == 0 && g_menu_selected == 1, "picking another model");
     ai_refresh_models(0);
@@ -493,7 +494,31 @@ static void test_models(void) {
     answer_get(200, "{\"status\":\"ok\"}");
     CHECK(strcmp(g_menu_status, btn_tr(BTN_STR_AI_STATUS_LLAMA)) == 0 && g_menu_count == 0 && g_menu_selected == -1,
           "llama-server: status line, no model list");
+    /* 503 waehrend llama-server das Modell laedt: erreichbar, Test laeuft */
+    posts = g_posts;
+    alerts = g_alerts;
+    g_ai_test_after = 1;
+    ai_refresh_models(0);
+    answer_get(503, "{\"error\":{\"message\":\"Loading model\"}}");
+    snprintf(want, sizeof want, btn_tr(BTN_STR_AI_STATUS_LLAMA_HTTP_FMT), 503);
+    CHECK(strcmp(g_menu_status, want) == 0 && g_alerts == alerts && g_posts == posts + 1,
+          "llama-server loading: status shows HTTP 503, test request still sent");
+    g_ai_test_request = 0; /* deren Antwort braucht der Test nicht */
     g_ai.api = BTN_AI_API_OLLAMA;
+
+    /* Ausschalten, waehrend die Pruefung vom Einschalten noch laeuft: die
+     * spaete Antwort stellt nichts mehr um und meldet nichts */
+    f = fopen(path, "w");
+    fputs("enabled=0\nmodel=gone:1b\n", f);
+    fclose(f);
+    ai_toggle_from_menu();
+    CHECK(g_ai.enabled && g_ai_models_request != 0, "switched on: model check running");
+    unsigned long pending = g_ai_models_request;
+    alerts = g_alerts;
+    ai_toggle_from_menu();
+    CHECK(!g_ai.enabled && g_cancelled == pending && g_ai_models_request == 0, "switched off: check cancelled");
+    g_get_cb(pending, 200, "{\"models\":[]}", 13);
+    CHECK(g_alerts == alerts && strcmp(g_ai.model, "gone:1b") == 0, "late answer ignored");
 
     btn_ai_models_free(g_ai_models, g_ai_model_count);
     g_ai_models = NULL;

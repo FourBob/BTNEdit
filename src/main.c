@@ -2796,6 +2796,7 @@ static void ai_set_model(const char *name) {
     ai_cancel();
     ghost_clear();
     g_ai_last_seq = (size_t)-1; /* mit dem neuen Modell neu fragen */
+    btn_app_request_redraw();   /* ein alter Vorschlag verschwindet */
 }
 
 static void ai_on_models(unsigned long id, int status, const char *body, size_t len) {
@@ -2809,7 +2810,12 @@ static void ai_on_models(unsigned long id, int status, const char *body, size_t 
     btn_ai_models_free(g_ai_models, g_ai_model_count);
     g_ai_models = NULL;
     g_ai_model_count = 0;
-    if (status != 200) {
+    int llama = g_ai.api == BTN_AI_API_LLAMA;
+    /* llama-server antwortet auf /health mit 503, solange es das Modell laedt:
+     * erreichbar, die Testanfrage zeigt dann seine eigene Meldung. */
+    if (llama && status != 0 && status != 200) {
+        snprintf(g_ai_status, sizeof(g_ai_status), btn_tr(BTN_STR_AI_STATUS_LLAMA_HTTP_FMT), status);
+    } else if (status != 200) {
         snprintf(g_ai_status, sizeof(g_ai_status), btn_tr(BTN_STR_AI_STATUS_UNREACHABLE_FMT), g_ai.url);
         ai_update_model_menu();
         if (notify || test) {
@@ -2819,8 +2825,7 @@ static void ai_on_models(unsigned long id, int status, const char *body, size_t 
             btn_show_error_alert(btn_tr(BTN_STR_AI_TEST_TITLE), info);
         }
         return;
-    }
-    if (g_ai.api == BTN_AI_API_LLAMA) {
+    } else if (llama) {
         snprintf(g_ai_status, sizeof(g_ai_status), "%s", btn_tr(BTN_STR_AI_STATUS_LLAMA));
     } else {
         g_ai_model_count = btn_ai_parse_models(body, len, &g_ai_models);
@@ -2871,6 +2876,23 @@ static void ai_test_connection(void) {
     load_ai_config(); /* Aenderungen an der Datei gelten */
     g_ai_test_after = 1;
     ai_refresh_models(0);
+}
+
+/* Bearbeiten > KI-Vervollstaendigung */
+static void ai_toggle_from_menu(void) {
+    toggle_ai_config(); /* legt ~/.btnedit_ai beim ersten Mal an */
+    if (g_ai.enabled) {
+        ai_refresh_models(1); /* Server da? Modell vorhanden? */
+        return;
+    }
+    ai_cancel();
+    ghost_clear();
+    btn_app_request_redraw();
+    /* Eine noch offene Pruefung gehoerte zur alten Einstellung: sie soll kein
+     * Modell mehr umstellen und nichts melden. */
+    btn_http_cancel(g_ai_models_request);
+    g_ai_models_request = 0;
+    g_ai_models_notify = g_ai_test_after = 0;
 }
 
 /* Tab: Vorschlag uebernehmen - als eigener Undo-Schritt (die Gruppe wird
@@ -3845,13 +3867,7 @@ static void on_menu(int tag) {
             perform_line_command(tag);
             break;
         case BTN_MENU_AI_COMPLETION:
-            toggle_ai_config(); /* legt ~/.btnedit_ai beim ersten Mal an */
-            if (!g_ai.enabled) {
-                ai_cancel();
-                ghost_clear();
-            } else {
-                ai_refresh_models(1); /* Server da? Modell vorhanden? */
-            }
+            ai_toggle_from_menu();
             break;
         case BTN_MENU_AI_TEST:
             ai_test_connection();

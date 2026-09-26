@@ -110,7 +110,10 @@ prüft dabei (und bei jedem Start), ob der Server erreichbar ist und welche
 Modelle installiert sind - ohne Dokumenttext, nur `GET /api/tags`. Ist das
 eingestellte Modell nicht installiert, nimmt es das kleinste installierte
 Code-Modell (Name enthält `coder`, `codellama`, `codegemma`, `codestral`
-oder `starcoder`); gibt es keins, kommt ein Hinweis. Im Untermenü
+oder `starcoder`, Groß-/Kleinschreibung egal); gibt es keins, kommt ein
+Hinweis. Cloud-Modelle von Ollama (`…-cloud`) wählt BTNEdit nie selbst -
+sie schicken den Text an ollama.com und stehen nur zur bewussten Auswahl im
+Menü. Im Untermenü
 **Bearbeiten > KI-Modell** stehen:
 
 - eine Statuszeile ("Ollama: 3 Modelle installiert", "Nicht erreichbar:
@@ -149,7 +152,8 @@ So läuft es ab:
 
 Datenschutz: Nach der Tipp-Pause gehen bis zu 4 KB Text vor und 1 KB nach
 dem Cursor an `url` - nur einen Server eintragen, dem man den
-Dokumentinhalt anvertraut. BTNEdit geht dabei direkt dorthin (kein
+Dokumentinhalt anvertraut. Ein Ollama-Cloud-Modell reicht den Text von dort
+an ollama.com weiter. BTNEdit geht dabei direkt dorthin (kein
 System-Proxy, keine Umleitungen, höchstens 90 s pro Anfrage - die erste
 lädt das Modell erst in den Speicher, danach bleibt es 30 min geladen). Unverschlüsseltes
 `http://` klappt nur zum eigenen Rechner, zu IP-Adressen und `.local`-Namen

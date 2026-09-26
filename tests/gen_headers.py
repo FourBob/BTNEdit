@@ -72,7 +72,7 @@ HEADERS = {
         "load_ai_config", "toggle_ai_config", "ghost_clear", "ghost_visible", "ai_on_response", "ai_on_idle",
         "ai_cancel_request", "ai_cancel", "ai_note_typing", "ai_on_test_response", "ai_send_test",
         "ai_update_model_menu", "ai_write_config_value", "ai_set_model", "ai_on_models", "ai_refresh_models",
-        "ai_test_connection",
+        "ai_test_connection", "ai_toggle_from_menu",
         "ai_accept", "ai_keep_ghost_after_typing"]),
     "protect_extracted.h": ("main.c", [
         "#BTN_RECOVERY_INTERVAL", "#BTN_RECOVERY_BYTES_PER_SECOND", "#BTN_MAX_FILE_MB", "#BTN_MAX_FILE_SIZE",

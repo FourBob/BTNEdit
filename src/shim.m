@@ -851,23 +851,26 @@ void btn_app_set_ai_model_menu(const char *status, const char *const *names, int
     if (!g_aiModelMenu) {
         return;
     }
-    [g_aiModelMenu removeAllItems];
-    if (status) {
-        [g_aiModelMenu addItemWithTitle:ns_from_c(status) action:nil keyEquivalent:@""]; /* grau: nur Anzeige */
-        [g_aiModelMenu addItem:[NSMenuItem separatorItem]];
+    /* Auch vor btn_app_run() aufgerufen (Start), da gibt es noch keinen Pool */
+    @autoreleasepool {
+        [g_aiModelMenu removeAllItems];
+        if (status) {
+            [g_aiModelMenu addItemWithTitle:ns_from_c(status) action:nil keyEquivalent:@""]; /* grau: nur Anzeige */
+            [g_aiModelMenu addItem:[NSMenuItem separatorItem]];
+        }
+        if (count > BTN_MAX_AI_MODELS) {
+            count = BTN_MAX_AI_MODELS;
+        }
+        for (int i = 0; i < count; i++) {
+            NSMenuItem *item = add_item(g_aiModelMenu, ns_from_c(names[i]), @"", BTN_MENU_AI_MODEL_BASE + i);
+            [item setState:i == selected ? NSControlStateValueOn : NSControlStateValueOff];
+        }
+        if (count > 0) {
+            [g_aiModelMenu addItem:[NSMenuItem separatorItem]];
+        }
+        add_item(g_aiModelMenu, trs(BTN_STR_AI_MODELS_REFRESH), @"", BTN_MENU_AI_MODELS_REFRESH);
+        add_item(g_aiModelMenu, trs(BTN_STR_AI_TEST), @"", BTN_MENU_AI_TEST);
     }
-    if (count > BTN_MAX_AI_MODELS) {
-        count = BTN_MAX_AI_MODELS;
-    }
-    for (int i = 0; i < count; i++) {
-        NSMenuItem *item = add_item(g_aiModelMenu, ns_from_c(names[i]), @"", BTN_MENU_AI_MODEL_BASE + i);
-        [item setState:i == selected ? NSControlStateValueOn : NSControlStateValueOff];
-    }
-    if (count > 0) {
-        [g_aiModelMenu addItem:[NSMenuItem separatorItem]];
-    }
-    add_item(g_aiModelMenu, trs(BTN_STR_AI_MODELS_REFRESH), @"", BTN_MENU_AI_MODELS_REFRESH);
-    add_item(g_aiModelMenu, trs(BTN_STR_AI_TEST), @"", BTN_MENU_AI_TEST);
 }
 
 void btn_app_set_ai_menu(int on) {
