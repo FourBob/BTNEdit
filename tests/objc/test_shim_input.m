@@ -394,7 +394,8 @@ int main(void) {
               "the chosen model checked (%ld %ld %ld)", (long)[mi0 state], (long)[mi1 state], (long)[mi2 state]);
         CHECK([[mi0 title] isEqualToString:@"qwen2.5-coder:7b"] && [[mi2 title] isEqualToString:@"qwen3.6:35b-a3b"],
               "model titles (%s, %s)", [[mi0 title] UTF8String], [[mi2 title] UTF8String]);
-        CHECK([mi1 target] != nil && [mi1 action] == NSSelectorFromString(@"menuAction:"), "model items reach the menu handler");
+        /* ohne btn_app_init() ist das gemeinsame Ziel hier nil - wie beim KI-Schalter */
+        CHECK([mi1 action] == [aiItem action] && [mi1 target] == [aiItem target], "model items go to the same handler as the AI switch");
         btn_app_set_ai_model_menu(NULL, NULL, 0, -1);
         CHECK([modelMenu numberOfItems] == 2, "no status, no models: only refresh and test");
 
