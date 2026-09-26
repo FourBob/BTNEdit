@@ -162,7 +162,7 @@ static void test_clean(void) {
     CHECK(clean("ab\x7f", "", b) == 2 && clean("x\xC2\x85y", "", b) == 1, "DEL and C1 cut");
     CHECK(clean("if (a\xE2\x80\xAE) b", "", b) == 5, "bidi override cut (Trojan Source)");
     CHECK(clean("x\xE2\x80\x8By", "", b) == 1 && clean("\xEF\xBB\xBFx", "", b) == 0, "zero width space, BOM cut");
-    CHECK(clean("x\x80\x80\x80", "", b) == 1 && clean("\xFFabc", "", b) == 0, "invalid UTF-8 cut");
+    CHECK(clean("x\x80\x80\x80", "", b) == 1 && clean("\xFF" "abc", "", b) == 0, "invalid UTF-8 cut");
     CHECK(clean("a\tb\xC3\xA4\xE2\x82\xAC", "", b) == 8, "tab and normal non-ASCII kept");
     char z[8] = { 'a', 0, 'b' };
     CHECK(btn_ai_clean_suggestion(z, 3, "", 0) == 1, "NUL cut");
