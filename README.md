@@ -155,9 +155,8 @@ Nullbreite) schneiden sie ab.
    kommt eher etwas.
 4. Die erste Anfrage nach dem Start von Ollama dauert, bis das Modell
    geladen ist.
-5. Details im Terminal: `BTNEDIT_AI_DEBUG=1 open -W build/BTNEdit.app` bzw.
-   `BTNEDIT_AI_DEBUG=1 build/BTNEdit.app/Contents/MacOS/BTNEdit` gibt jede
-   Anfrage und Antwort aus. Der Server selbst lässt sich prüfen mit:
+5. Details im Terminal: `BTNEDIT_AI_DEBUG=1 build/BTNEdit.app/Contents/MacOS/BTNEdit`
+   (direkt starten, nicht über `open`) gibt jede Anfrage und Antwort aus. Der Server selbst lässt sich prüfen mit:
 
    ```bash
    curl -s http://127.0.0.1:11434/api/generate -d '{"model":"qwen2.5-coder:1.5b",
