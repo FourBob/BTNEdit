@@ -387,10 +387,14 @@ int main(void) {
         CHECK([modelMenu numberOfItems] == 8 && [[[modelMenu itemAtIndex:0] title] isEqualToString:@"3 Modelle"] &&
                   ![[modelMenu itemAtIndex:0] isEnabled],
               "status line shown, not clickable");
-        CHECK([[modelMenu itemAtIndex:3] tag] == BTN_MENU_AI_MODEL_BASE + 1 && [[modelMenu itemAtIndex:3] state] == NSControlStateValueOn &&
-                  [[modelMenu itemAtIndex:2] state] == NSControlStateValueOff && [[modelMenu itemAtIndex:2] isEnabled] &&
-                  [[[modelMenu itemAtIndex:4] title] isEqualToString:@"qwen3.6:35b-a3b"],
-              "models listed, the chosen one checked");
+        NSMenuItem *m0 = [modelMenu itemAtIndex:2], *m1 = [modelMenu itemAtIndex:3], *m2 = [modelMenu itemAtIndex:4];
+        CHECK([m0 tag] == BTN_MENU_AI_MODEL_BASE && [m1 tag] == BTN_MENU_AI_MODEL_BASE + 1 && [m2 tag] == BTN_MENU_AI_MODEL_BASE + 2,
+              "model items tagged by index (%ld %ld %ld)", (long)[m0 tag], (long)[m1 tag], (long)[m2 tag]);
+        CHECK([m1 state] == NSControlStateValueOn && [m0 state] == NSControlStateValueOff && [m2 state] == NSControlStateValueOff,
+              "the chosen model checked (%ld %ld %ld)", (long)[m0 state], (long)[m1 state], (long)[m2 state]);
+        CHECK([[m0 title] isEqualToString:@"qwen2.5-coder:7b"] && [[m2 title] isEqualToString:@"qwen3.6:35b-a3b"],
+              "model titles (%s, %s)", [[m0 title] UTF8String], [[m2 title] UTF8String]);
+        CHECK([m1 target] != nil && [m1 action] == NSSelectorFromString(@"menuAction:"), "model items reach the menu handler");
         btn_app_set_ai_model_menu(NULL, NULL, 0, -1);
         CHECK([modelMenu numberOfItems] == 2, "no status, no models: only refresh and test");
 
