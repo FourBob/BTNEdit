@@ -100,7 +100,12 @@ static void test_text(void) {
         { "3.5 Meter weit", "3.5 Meter weit" }, { "Ende.", "Ende." },    { "kein Satzende", "kein Satzende" },
         { "你好。再见", "你好。" },                 { "对！好", "对！" },       { "吗？是", "吗？" },
         { "Nun\xE2\x80\xA6 gut", "Nun\xE2\x80\xA6" }, { "Nun\xE2\x80\xA6", "Nun\xE2\x80\xA6" },
-        { "a.b. c", "a.b." },                     { "a\xE2\x80\xA6" "b", "a\xE2\x80\xA6" "b" },
+        { "a.b. c", "a.b. c" },                   { "z. B. ein Apfel. Dann", "z. B. ein Apfel." },
+        { "am 3. Oktober war es. Ja", "am 3. Oktober war es." }, { "Dr. Smith kam. Er", "Dr. Smith kam." },
+        { "e.g. apples. More", "e.g. apples." },  { "Ja. Nein", "Ja." },   { "usw. und so fort. Gut", "usw. und so fort." },
+        { "Ende. danach klein", "Ende. danach klein" }, { "Er kam (Nr. 5). Gut", "Er kam (Nr. 5)." },
+        { "\xC3\x84. Weiter. X", "\xC3\x84." },     { "am 12. Mai war es. Ja", "am 12. Mai war es." },
+        { "z.B. \xC3\x84pfel sind rot. Ja", "z.B. \xC3\x84pfel sind rot." }, { "gut . Dann", "gut ." },                     { "a\xE2\x80\xA6" "b", "a\xE2\x80\xA6" "b" },
     };
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
         char buf[64];

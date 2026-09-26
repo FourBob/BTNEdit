@@ -577,11 +577,50 @@ int btn_ai_is_no_insert_error(const char *body, size_t len) {
     return 0;
 }
 
+/* Endet bei s[dot] ('.', gefolgt von einem Leerzeichen) ein Satz - oder
+ * nur eine Abkuerzung/Ordnungszahl ("z. B.", "3. Oktober", "Dr.", "e.g.")?
+ * Blick auf das Wort davor und was danach kommt. */
+static int dot_ends_sentence(const char *s, size_t n, size_t dot) {
+    size_t w = dot;
+    while (w > 0 && s[w - 1] != ' ' && s[w - 1] != '\t' && s[w - 1] != '(') {
+        w--;
+    }
+    size_t wl = dot - w;
+    if (wl == 0) {
+        return 1;
+    }
+    int digits = 1, has_dot = 0;
+    for (size_t k = w; k < dot; k++) {
+        digits &= s[k] >= '0' && s[k] <= '9';
+        has_dot |= s[k] == '.';
+    }
+    /* ein Buchstabe ("z", "B"), Ordnungszahl, "e.g", "z.B", "u.a" */
+    if (digits || has_dot || wl == 1) {
+        return 0;
+    }
+    static const char *const abbr[] = { "dr",  "nr",   "bzw", "usw",  "ca",  "vgl", "etc", "mr",  "mrs", "ms",
+                                        "prof", "st",  "jr",  "sr",   "vs",  "inkl", "ggf", "evtl", "zzgl", "hr",
+                                        "fr",  "abs",  "bspw", "sog", "mio", "mrd", "tel", "no" };
+    for (size_t k = 0; k < sizeof(abbr) / sizeof(abbr[0]); k++) {
+        if (strlen(abbr[k]) == wl && mem_ieq(s + w, abbr[k], wl)) {
+            return 0;
+        }
+    }
+    /* klein weiter ("etc. und"): kein Satzende */
+    size_t next = dot + 1;
+    while (next < n && s[next] == ' ') {
+        next++;
+    }
+    return next >= n || !(s[next] >= 'a' && s[next] <= 'z');
+}
+
 size_t btn_ai_cut_sentence(char *s, size_t n) {
     for (size_t i = 0; i < n; i++) {
         unsigned char c = (unsigned char)s[i];
         size_t end = 0;
-        if ((c == '.' || c == '!' || c == '?') && i + 1 < n && s[i + 1] == ' ') {
+        if ((c == '!' || c == '?') && i + 1 < n && s[i + 1] == ' ') {
+            end = i + 1;
+        } else if (c == '.' && i + 1 < n && s[i + 1] == ' ' && dot_ends_sentence(s, n, i)) {
             end = i + 1;
         } else if (c == 0xE3 && i + 2 < n && (unsigned char)s[i + 1] == 0x80 && (unsigned char)s[i + 2] == 0x82) {
             end = i + 3; /* 。 */

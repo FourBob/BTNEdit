@@ -137,7 +137,8 @@ allen anderen Dateien bleibt es beim Code: Text vor **und** nach dem Cursor
 
 Ein eigenes Modell für Fließtext wählt man unter Bearbeiten > KI-Modell >
 Für Fließtext (oder `text_model=` in der Datei); "Wie Code" nimmt das
-Code-Modell. Meldet Ollama für ein Modell "does not support insert" (kein
+Code-Modell. Cloud-Modelle stehen mit "(Cloud)" in der Liste. Meldet
+Ollama für ein Modell "does not support insert" (kein
 Fill-in-the-Middle), fragt BTNEdit sofort noch einmal als Fortsetzung und
 bleibt für dieses Modell dabei. Der Verbindungstest prüft beide Modelle.
 

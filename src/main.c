@@ -2493,7 +2493,8 @@ static BtnAiConfig g_ai;
 static unsigned long g_ai_request = 0;   /* laufende Anfrage, 0 = keine */
 static size_t g_ai_request_seq, g_ai_request_cursor;
 static size_t g_ai_last_seq = (size_t)-1; /* Inhaltsstand der letzten Anfrage */
-static int g_ai_request_text = 0;          /* als Fliesstext (nur Text davor) */
+static int g_ai_request_text = 0;          /* als Fortsetzung (nur Text davor) */
+static int g_ai_request_prose = 0;         /* Fliesstext-Datei: ein Satz reicht */
 static char g_ai_request_model[128];
 static struct {
     char *text; /* NUL-terminiert */
@@ -2599,11 +2600,13 @@ static void ai_note_no_fim(const char *model) {
     }
 }
 
-/* Fliesstext oder Code, und welches Modell - fuer das aktive Dokument. */
-static int ai_mode_for(const Document *d, const char **model) {
-    int text = btn_ai_path_is_text(d->path);
-    *model = text ? btn_ai_text_model(&g_ai) : g_ai.model;
-    return text || (g_ai.api == BTN_AI_API_OLLAMA && ai_model_lacks_fim(*model));
+/* Fuer das aktive Dokument: Fliesstext oder Code (*prose), welches Modell,
+ * und Rueckgabe 1 = als reine Fortsetzung fragen (Fliesstext oder ein
+ * Modell ohne Fill-in-the-Middle). */
+static int ai_mode_for(const Document *d, const char **model, int *prose) {
+    *prose = btn_ai_path_is_text(d->path);
+    *model = *prose ? btn_ai_text_model(&g_ai) : g_ai.model;
+    return *prose || (g_ai.api == BTN_AI_API_OLLAMA && ai_model_lacks_fim(*model));
 }
 
 static void ai_on_idle(void);
@@ -2637,7 +2640,7 @@ static void ai_on_response(unsigned long id, int status, const char *body, size_
     char *rest = gb_copy_range(&ed->buffer, ed->cursor, rest_len);
     n = btn_ai_clean_suggestion(s, n, rest, rest_len);
     free(rest);
-    if (g_ai_request_text) {
+    if (g_ai_request_prose) {
         n = btn_ai_cut_sentence(s, n); /* ein Satz auf einmal reicht */
     }
     if (n == 0) {
@@ -2680,7 +2683,8 @@ static void ai_on_idle(void) {
     }
     char *prefix = gb_copy_range(&ed->buffer, start, cur - start);
     const char *model;
-    int text = ai_mode_for(d, &model);
+    int prose;
+    int text = ai_mode_for(d, &model, &prose);
     size_t body_len;
     char *body = text ? btn_ai_request_body_text(&g_ai, model, prefix, cur - start, &body_len)
                       : btn_ai_request_body(&g_ai, prefix, cur - start, suffix, end - cur, &body_len);
@@ -2689,6 +2693,7 @@ static void ai_on_idle(void) {
     ai_debug(url, body, body_len);
     g_ai_request = btn_http_post_json(url, body, body_len, 60.0, ai_on_response);
     g_ai_request_text = text;
+    g_ai_request_prose = prose;
     snprintf(g_ai_request_model, sizeof(g_ai_request_model), "%s", model);
     g_ai_request_seq = ed->edit_seq;
     g_ai_request_cursor = cur;
@@ -2732,16 +2737,19 @@ static void ai_note_typing(void) {
  * an dieses; die Meldung nennt dann beide. */
 static unsigned long g_ai_test_request = 0;
 static int g_ai_test_stage = 0; /* 0 = Code-Modell, 1 = Fliesstext-Modell */
-static int g_ai_test_text = 0;  /* laufende Testanfrage als Fliesstext */
-static char g_ai_test_info[2048];
+static int g_ai_test_text = 0;  /* laufende Testanfrage als Fortsetzung */
+/* Beim Start des Tests festgehalten - ein Modellwechsel waehrenddessen
+ * aendert weder, wen der Test fragt, noch wem ein Fehler zugeschrieben wird. */
+static char g_ai_test_models[2][128];
+static int g_ai_test_two = 0;   /* eigenes Fliesstext-Modell: zweite Stufe */
+static char g_ai_test_info[4096];
 
 static const char *ai_test_model(void) {
-    return g_ai_test_stage ? btn_ai_text_model(&g_ai) : g_ai.model;
+    return g_ai_test_models[g_ai_test_stage];
 }
 
-/* Eigenes Modell fuer Fliesstext, das einen zweiten Test lohnt? */
 static int ai_test_has_text_stage(void) {
-    return g_ai.api == BTN_AI_API_OLLAMA && g_ai.text_model[0] && strcmp(g_ai.text_model, g_ai.model) != 0;
+    return g_ai_test_two;
 }
 
 /* Ergebnis einer Stufe anhaengen (bei zwei Stufen mit Abschnittsnamen). */
@@ -2851,6 +2859,9 @@ static void ai_send_test_request(void) {
 static void ai_send_test(void) {
     g_ai_test_stage = 0;
     g_ai_test_info[0] = '\0';
+    snprintf(g_ai_test_models[0], sizeof(g_ai_test_models[0]), "%s", g_ai.model);
+    snprintf(g_ai_test_models[1], sizeof(g_ai_test_models[1]), "%s", btn_ai_text_model(&g_ai));
+    g_ai_test_two = g_ai.api == BTN_AI_API_OLLAMA && g_ai.text_model[0] && strcmp(g_ai.text_model, g_ai.model) != 0;
     ai_send_test_request();
 }
 
@@ -2870,8 +2881,13 @@ static char g_ai_status[300] = "";
 static void ai_update_model_menu(void) {
     const char *names[BTN_MAX_AI_MODELS];
     int n = g_ai_model_count < BTN_MAX_AI_MODELS ? (int)g_ai_model_count : BTN_MAX_AI_MODELS;
+    static char labels[BTN_MAX_AI_MODELS][160];
     for (int i = 0; i < n; i++) {
         names[i] = g_ai_models[i].name;
+        if (g_ai_models[i].remote) { /* Text ginge an ollama.com: sichtbar machen */
+            snprintf(labels[i], sizeof(labels[i]), "%s (Cloud)", g_ai_models[i].name);
+            names[i] = labels[i];
+        }
     }
     int sel = -1, text_sel = -1; /* text_sel: -1 = "wie Code", -2 = keins */
     if (g_ai.api == BTN_AI_API_OLLAMA) {

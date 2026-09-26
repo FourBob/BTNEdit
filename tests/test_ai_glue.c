@@ -31,6 +31,7 @@ static unsigned long g_ai_request = 0;
 static size_t g_ai_request_seq, g_ai_request_cursor;
 static size_t g_ai_last_seq = (size_t)-1;
 static int g_ai_request_text = 0;
+static int g_ai_request_prose = 0;
 static char g_ai_request_model[128];
 static struct {
     char *text;
@@ -110,7 +111,9 @@ static void btn_app_request_redraw(void) { g_redraws++; }
 static unsigned long g_ai_test_request = 0;
 static int g_ai_test_stage = 0;
 static int g_ai_test_text = 0;
-static char g_ai_test_info[2048];
+static char g_ai_test_models[2][128];
+static int g_ai_test_two = 0;
+static char g_ai_test_info[4096];
 static char g_ai_no_fim[8][128];
 static int g_ai_no_fim_count = 0;
 static void ai_on_idle(void);
@@ -597,8 +600,8 @@ static void test_text_mode(void) {
     CHECK(g_posts == posts + 1 && strstr(g_post_body, "\"raw\":true") && prompt_is("model", "llama3:8b", 9) &&
               ai_model_lacks_fim("llama3:8b"),
           "'does not support insert': model noted, asked again as a continuation");
-    respond(200, "{\"response\":\"42;\"}");
-    CHECK(ghost_visible() && strcmp(g_ghost.text, "42;") == 0, "and its answer is shown");
+    respond(200, "{\"response\":\"x > 0 ? 1 : 2;\"}");
+    CHECK(ghost_visible() && strcmp(g_ghost.text, "x > 0 ? 1 : 2;") == 0, "and its answer is shown - code is not cut at '? '");
     ghost_clear();
     set_doc("int z = ", 8);
     ai_on_idle();
@@ -623,12 +626,14 @@ static void test_text_mode(void) {
     answer_get(200, USER_TAGS);
     CHECK(g_posts == posts + 1 && prompt_is("model", "qwen2.5-coder:7b", 16) && strstr(g_post_body, "\"suffix\""),
           "test stage 1: code model, fill-in-the-middle");
+    ai_choose_model(1, ""); /* waehrend des Tests umgestellt: der Test bleibt bei seinen Modellen */
+    ai_choose_model(0, "qwen3.6-coder:latest");
     g_post_cb(g_next_id - 1, 200, "{\"response\":\"a + b\"}", 20);
     CHECK(g_alerts == alerts && g_posts == posts + 2 && prompt_is("model", "qwen3.6:35b-a3b", 15) &&
               strstr(g_post_body, "\"raw\":true"),
           "test stage 2: text model as a continuation, no alert yet");
     g_post_cb(g_next_id - 1, 200, "{\"response\":\" sunny.\"}", 22);
-    CHECK(g_alerts == alerts + 1 && strstr(g_alert_info, btn_tr(BTN_STR_AI_MODEL_FOR_CODE)) &&
+    CHECK(g_alerts == alerts + 1 && strstr(g_alert_info, "qwen2.5-coder:7b") && strstr(g_alert_info, btn_tr(BTN_STR_AI_MODEL_FOR_CODE)) &&
               strstr(g_alert_info, btn_tr(BTN_STR_AI_MODEL_FOR_TEXT)) && strstr(g_alert_info, "a + b") &&
               strstr(g_alert_info, "sunny"),
           "one alert naming both results (%s)", g_alert_info);
@@ -639,7 +644,10 @@ static void test_text_mode(void) {
     posts = g_posts;
     ai_test_connection();
     answer_get(200, USER_TAGS);
+    ai_choose_model(0, "qwen2.5-coder:7b"); /* Wechsel waehrend der Anfrage */
     g_post_cb(g_next_id - 1, 400, "{\"error\":\"qwen3.6:35b-a3b does not support insert\"}", 50);
+    CHECK(ai_model_lacks_fim("qwen3.6:35b-a3b") && !ai_model_lacks_fim("qwen2.5-coder:7b"),
+          "no-FIM noted for the model the test asked, not the one chosen meanwhile");
     CHECK(g_posts == posts + 2 && strstr(g_post_body, "\"raw\":true"), "test: retried as a continuation");
     g_post_cb(g_next_id - 1, 200, "{\"response\":\"a + b\"}", 20);
     CHECK(g_alerts == alerts + 2 && strstr(g_alert_info, btn_tr(BTN_STR_AI_TEST_NO_FIM)) &&
@@ -651,7 +659,7 @@ static void test_text_mode(void) {
     answer_get(200, USER_TAGS);
     CHECK(g_menu_text_selected == -1, "no text model: 'same as code' checked");
     CHECK(ai_on_model_menu(BTN_MENU_AI_TEXT_MODEL_BASE + 2) && strcmp(g_ai.text_model, "qwen3.6:35b-a3b") == 0 &&
-              g_menu_text_selected == 2 && strcmp(g_ai.model, "qwen3.6:35b-a3b") == 0,
+              g_menu_text_selected == 2 && strcmp(g_ai.model, "qwen2.5-coder:7b") == 0,
           "text model picked from the menu, code model unchanged");
     f = fopen(path, "r");
     char buf[256];
@@ -659,7 +667,7 @@ static void test_text_mode(void) {
     fclose(f);
     buf[n] = 0;
     CHECK(strstr(buf, "text_model=qwen3.6:35b-a3b\n") != NULL, "and saved (%s)", buf);
-    CHECK(ai_on_model_menu(BTN_MENU_AI_MODEL_BASE) && strcmp(g_ai.model, "qwen2.5-coder:7b") == 0 &&
+    CHECK(ai_on_model_menu(BTN_MENU_AI_MODEL_BASE + 1) && strcmp(g_ai.model, "qwen3.6-coder:latest") == 0 &&
               strcmp(g_ai.text_model, "qwen3.6:35b-a3b") == 0,
           "code model picked, text model unchanged");
     CHECK(ai_on_model_menu(BTN_MENU_AI_TEXT_SAME) && g_ai.text_model[0] == 0 && g_menu_text_selected == -1,
@@ -671,6 +679,11 @@ static void test_text_mode(void) {
     ai_refresh_models(0);
     answer_get(200, USER_TAGS);
     CHECK(g_ai.text_model[0] == 0 && g_menu_text_selected == -1, "text model no longer installed: back to 'same as code'");
+    ai_refresh_models(0);
+    answer_get(200, "{\"models\":[{\"name\":\"gpt-oss:120b-cloud\",\"size\":384}]}");
+    CHECK(strcmp(g_menu_first, "gpt-oss:120b-cloud (Cloud)") == 0, "cloud models marked in the menu (%s)", g_menu_first);
+    ai_refresh_models(0);
+    answer_get(200, USER_TAGS);
     snprintf(g_ai.text_model, sizeof g_ai.text_model, "%s", "weg:1b");
     ai_update_model_menu();
     CHECK(g_menu_text_selected == -2, "unknown text model (before the check): nothing checked in the prose section");

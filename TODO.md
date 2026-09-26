@@ -28,8 +28,10 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
   Anfragen und Antworten laufen ohne Größenbegrenzung beim Senden; eine
   Antwort über 1 MB gilt als Fehler. Fließtext oder Code entscheidet nur die
   Dateiendung (kein Schalter pro Dokument); Fließtext kennt nur den Text vor
-  dem Cursor, das Satzende erkennt BTNEdit an ". ", "! ", "? ", "…" und 。！？
-  (Abkürzungen wie "z. B." beenden den Vorschlag also auch). Welche Modelle
+  dem Cursor, das Satzende erkennt BTNEdit an ". ", "! ", "? ", "…" und 。！？;
+  Abkürzungen erkennt es nur an einer festen Liste, einzelnen Buchstaben,
+  Zahlen und Punkten im Wort ("z. B.", "3.", "Dr.", "e.g.") - andere
+  Abkürzungen gefolgt von einem Großbuchstaben beenden den Vorschlag. Welche Modelle
   kein Fill-in-the-Middle können, merkt sich BTNEdit nur bis zum Beenden.
 
 - Zeilen-Befehle: "Kommentar ein/aus" kennt nur Zeilenkommentare (`//`,
