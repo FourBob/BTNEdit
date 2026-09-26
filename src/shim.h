@@ -45,7 +45,8 @@ enum {
     BTN_MENU_MOVE_LINES_UP,
     BTN_MENU_MOVE_LINES_DOWN,
     BTN_MENU_SHOW_INVISIBLES,
-    BTN_MENU_AI_COMPLETION
+    BTN_MENU_AI_COMPLETION,
+    BTN_MENU_AI_TEST
 };
 
 /* Tags fuer die dynamischen "Zuletzt geoeffnet"-Menuepunkte liegen ab hier,

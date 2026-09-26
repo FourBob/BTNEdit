@@ -139,6 +139,15 @@ typedef enum {
     BTN_STR_MOVE_LINES_DOWN,
     BTN_STR_SHOW_INVISIBLES,
     BTN_STR_AI_COMPLETION,
+    /* KI-Verbindung testen: Menue, Titel, Ergebnisse ("%s" Modell/Vorschlag
+     * bzw. Adresse, "%d" HTTP-Status), Hinweis wenn ausgeschaltet */
+    BTN_STR_AI_TEST,
+    BTN_STR_AI_TEST_TITLE,
+    BTN_STR_AI_TEST_OK_FMT,
+    BTN_STR_AI_TEST_EMPTY_FMT,
+    BTN_STR_AI_TEST_UNREACHABLE_FMT,
+    BTN_STR_AI_TEST_HTTP_FMT,
+    BTN_STR_AI_TEST_OFF_NOTE,
     BTN_STR_COUNT
 } BtnStringId;
 

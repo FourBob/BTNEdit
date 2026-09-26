@@ -74,7 +74,14 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Move Lines Up",
         "Move Lines Down",
         "Show Invisibles",
-        "AI Completion (Local Server)"
+        "AI Completion (Local Server)",
+        "Test AI Connection…",
+        "AI Completion",
+        "The server answers. Model %s suggests: %s",
+        "The server answers, but model %s made no one-line suggestion here. Raw answer: %s",
+        "No answer from %s. Is the server running (e.g. \"ollama serve\")? The first request can take a while because the model is loaded.",
+        "The server reports an error (HTTP %d): %s",
+        " AI completion is currently switched off (Edit menu)."
     },
     /* BTN_LANG_DE */
     {
@@ -141,7 +148,14 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Zeilen nach oben",
         "Zeilen nach unten",
         "Unsichtbare Zeichen einblenden",
-        "KI-Vervollständigung (lokaler Server)"
+        "KI-Vervollständigung (lokaler Server)",
+        "KI-Verbindung testen…",
+        "KI-Vervollständigung",
+        "Der Server antwortet. Modell %s schlägt vor: %s",
+        "Der Server antwortet, aber Modell %s liefert hier keinen einzeiligen Vorschlag. Rohantwort: %s",
+        "Keine Antwort von %s. Läuft der Server (z.B. „ollama serve“)? Die erste Anfrage kann dauern, weil das Modell geladen wird.",
+        "Der Server meldet einen Fehler (HTTP %d): %s",
+        " Die KI-Vervollständigung ist gerade ausgeschaltet (Menü Bearbeiten)."
     },
     /* BTN_LANG_FR */
     {
@@ -208,7 +222,14 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Déplacer les lignes vers le haut",
         "Déplacer les lignes vers le bas",
         "Afficher les caractères invisibles",
-        "Complétion IA (serveur local)"
+        "Complétion IA (serveur local)",
+        "Tester la connexion IA…",
+        "Complétion IA",
+        "Le serveur répond. Le modèle %s propose : %s",
+        "Le serveur répond, mais le modèle %s ne propose rien sur une ligne ici. Réponse brute : %s",
+        "Pas de réponse de %s. Le serveur est-il lancé (p. ex. « ollama serve ») ? La première requête peut être lente, le modèle doit être chargé.",
+        "Le serveur signale une erreur (HTTP %d) : %s",
+        " La complétion IA est actuellement désactivée (menu Édition)."
     },
     /* BTN_LANG_ES */
     {
@@ -275,7 +296,14 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Mover líneas arriba",
         "Mover líneas abajo",
         "Mostrar caracteres invisibles",
-        "Autocompletado IA (servidor local)"
+        "Autocompletado IA (servidor local)",
+        "Probar la conexión IA…",
+        "Autocompletado IA",
+        "El servidor responde. El modelo %s sugiere: %s",
+        "El servidor responde, pero el modelo %s no da una sugerencia de una línea aquí. Respuesta: %s",
+        "Sin respuesta de %s. ¿Está en marcha el servidor (p. ej. «ollama serve»)? La primera petición puede tardar porque se carga el modelo.",
+        "El servidor informa de un error (HTTP %d): %s",
+        " El autocompletado IA está desactivado (menú Edición)."
     },
     /* BTN_LANG_ZH (Simplified) */
     {
@@ -345,7 +373,14 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "上移行",
         "下移行",
         "显示不可见字符",
-        "AI 补全（本地服务器）"
+        "AI 补全（本地服务器）",
+        "测试 AI 连接…",
+        "AI 补全",
+        "服务器已响应。模型 %s 建议：%s",
+        "服务器已响应，但模型 %s 在此没有单行建议。原始回答：%s",
+        "%s 无响应。服务器是否在运行（例如 “ollama serve”）？首次请求需要加载模型，可能较慢。",
+        "服务器报告错误（HTTP %d）：%s",
+        "（AI 补全目前已关闭，见“编辑”菜单。）"
     }
 };
 

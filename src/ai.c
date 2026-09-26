@@ -468,9 +468,20 @@ char *btn_ai_request_body(const BtnAiConfig *c, const char *prefix, size_t prefi
         json_add_string(&b, c->model, strlen(c->model));
         buf_str(&b, ",\"prompt\":");
         json_add_string(&b, prefix, prefix_len);
+        /* Ollama nimmt die Fill-in-the-Middle-Vorlage nur mit nicht leerem
+         * suffix - leer faellt es auf die Chat-Vorlage zurueck, und ein
+         * Instruct-Modell antwortet mit Prosa statt mit Code (z.B. am
+         * Dateiende). Ein Zeilenende steht dort ohnehin. */
+        if (suffix_len == 0) {
+            suffix = "\n";
+            suffix_len = 1;
+        }
         buf_str(&b, ",\"suffix\":");
         json_add_string(&b, suffix, suffix_len);
-        snprintf(num, sizeof(num), ",\"stream\":false,\"options\":{\"num_predict\":%d", c->max_tokens);
+        /* keep_alive: das Modell bleibt 30 min geladen (Standard 5 min) -
+         * sonst dauert die erste Anfrage nach einer Pause sekundenlang. */
+        snprintf(num, sizeof(num), ",\"stream\":false,\"keep_alive\":\"30m\",\"options\":{\"num_predict\":%d",
+                 c->max_tokens);
         buf_str(&b, num);
         buf_str(&b, ",\"temperature\":0.2,\"stop\":[\"\\n\"]}}");
     }

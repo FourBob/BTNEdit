@@ -120,7 +120,8 @@ static void test_flow(void) {
     CHECK(g_timer_starts == 1 && g_timer_seconds == 0.3 && g_timer_cb == ai_on_idle, "typing starts the 300 ms pause timer");
     ai_on_idle();
     CHECK(g_posts == 1 && strcmp(g_post_url, "http://127.0.0.1:11434/api/generate") == 0, "pause over: request to Ollama");
-    CHECK(prompt_is("prompt", "int f() {\n    retu", 18) && prompt_is("suffix", "", 0), "context: text before the cursor, empty suffix");
+    CHECK(prompt_is("prompt", "int f() {\n    retu", 18) && prompt_is("suffix", "\n", 1),
+          "context: text before the cursor; at the end of the file the suffix is a newline (Ollama needs one for FIM)");
     ai_on_idle();
     CHECK(g_posts == 1, "request pending: no second one");
 

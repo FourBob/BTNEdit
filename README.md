@@ -134,11 +134,35 @@ So läuft es ab:
 Datenschutz: Nach der Tipp-Pause gehen bis zu 4 KB Text vor und 1 KB nach
 dem Cursor an `url` - nur einen Server eintragen, dem man den
 Dokumentinhalt anvertraut. BTNEdit geht dabei direkt dorthin (kein
-System-Proxy, keine Umleitungen, höchstens 15 s pro Anfrage). Unverschlüsseltes
+System-Proxy, keine Umleitungen, höchstens 90 s pro Anfrage - die erste
+lädt das Modell erst in den Speicher, danach bleibt es 30 min geladen). Unverschlüsseltes
 `http://` klappt nur zum eigenen Rechner, zu IP-Adressen und `.local`-Namen
 im lokalen Netz, sonst `https://`. Vorschläge werden vor der Anzeige
 bereinigt: Steuer- und unsichtbare Zeichen (Richtungs-Steuerzeichen,
 Nullbreite) schneiden sie ab.
+
+### Wenn keine Vorschläge kommen
+
+1. **Bearbeiten > KI-Verbindung testen…** schickt eine kleine Anfrage an
+   den eingetragenen Server und meldet, ob er erreichbar ist, ob das
+   Modell fehlt (z.B. `model "…" not found` - dann `ollama pull …`) und was
+   es vorschlägt.
+2. Ist der Haken bei Bearbeiten > KI-Vervollständigung gesetzt?
+3. Gefragt wird nur, wenn rechts vom Cursor höchstens Leerraum oder
+   Schließendes steht, und der Vorschlag ist eine Zeile: am Ende von
+   `int main() {` will das Modell meist eine neue Zeile beginnen - dann gibt
+   es nichts anzuzeigen. Mitten in einer Zeile wie `for (int i = 0; `
+   kommt eher etwas.
+4. Die erste Anfrage nach dem Start von Ollama dauert, bis das Modell
+   geladen ist.
+5. Details im Terminal: `BTNEDIT_AI_DEBUG=1 open -W build/BTNEdit.app` bzw.
+   `BTNEDIT_AI_DEBUG=1 build/BTNEdit.app/Contents/MacOS/BTNEdit` gibt jede
+   Anfrage und Antwort aus. Der Server selbst lässt sich prüfen mit:
+
+   ```bash
+   curl -s http://127.0.0.1:11434/api/generate -d '{"model":"qwen2.5-coder:1.5b",
+     "prompt":"def add(a, b):\n    return ","suffix":"\n","stream":false}'
+   ```
 
 ## Tastenkürzel
 

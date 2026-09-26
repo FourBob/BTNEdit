@@ -779,6 +779,7 @@ void btn_app_build_menu(void) {
         [editMenu addItem:[NSMenuItem separatorItem]];
         g_aiItem = add_item(editMenu, trs(BTN_STR_AI_COMPLETION), @"", BTN_MENU_AI_COMPLETION);
         [g_aiItem setState:g_aiOn ? NSControlStateValueOn : NSControlStateValueOff];
+        add_item(editMenu, trs(BTN_STR_AI_TEST), @"", BTN_MENU_AI_TEST);
         [editMenuItem setSubmenu:editMenu];
 
         NSMenuItem *viewMenuItem = [NSMenuItem new];
@@ -866,14 +867,14 @@ void btn_app_set_ai_menu(int on) {
 #define BTN_HTTP_MAX_RESPONSE (1024 * 1024)
 
 /* Eigene Sitzung: kein Cache, keine Cookies, kein System-Proxy (der Text
- * soll direkt an den eingetragenen Server), hoechstens 15 s pro Anfrage
+ * soll direkt an den eingetragenen Server), hoechstens 90 s pro Anfrage
  * insgesamt (timeoutInterval allein misst nur Pausen im Datenstrom). */
 static NSURLSession *http_session(void) {
     static NSURLSession *session = nil;
     if (!session) {
         NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration ephemeralSessionConfiguration];
         [cfg setConnectionProxyDictionary:@{}];
-        [cfg setTimeoutIntervalForResource:15.0];
+        [cfg setTimeoutIntervalForResource:90.0]; /* erste Anfrage laedt das Modell */
         [cfg setHTTPShouldSetCookies:NO];
         BTNHttpDelegate *delegate = [[[BTNHttpDelegate alloc] init] autorelease];
         session = [[NSURLSession sessionWithConfiguration:cfg delegate:delegate delegateQueue:nil] retain];

@@ -2566,7 +2566,18 @@ static int ghost_visible(void) {
     return ed->edit_seq == g_ghost.seq && ed->cursor == g_ghost.cursor && !editor_has_selection(ed);
 }
 
+/* BTNEDIT_AI_DEBUG=1 beim Start aus dem Terminal: Anfragen und Antworten
+ * nach stderr (Fehlersuche ohne Dialoge). */
+static void ai_debug(const char *what, const char *data, size_t len) {
+    if (getenv("BTNEDIT_AI_DEBUG")) {
+        fprintf(stderr, "BTNEdit KI: %s %.*s\n", what, (int)(len > 300 ? 300 : len), data ? data : "");
+    }
+}
+
 static void ai_on_response(unsigned long id, int status, const char *body, size_t len) {
+    char st[32];
+    snprintf(st, sizeof(st), "Antwort HTTP %d:", status);
+    ai_debug(st, body, len);
     if (id != g_ai_request) {
         return; /* veraltet */
     }
@@ -2628,7 +2639,9 @@ static void ai_on_idle(void) {
     size_t body_len;
     char *body = btn_ai_request_body(&g_ai, prefix, cur - start, suffix, end - cur, &body_len);
     char *url = btn_ai_endpoint(&g_ai);
-    g_ai_request = btn_http_post_json(url, body, body_len, 10.0, ai_on_response);
+    /* 60 s: die erste Anfrage laedt das Modell erst in den Speicher */
+    ai_debug(url, body, body_len);
+    g_ai_request = btn_http_post_json(url, body, body_len, 60.0, ai_on_response);
     g_ai_request_seq = ed->edit_seq;
     g_ai_request_cursor = cur;
     g_ai_last_seq = ed->edit_seq;
@@ -2661,6 +2674,76 @@ static void ai_note_typing(void) {
     }
     ai_cancel_request();
     btn_app_restart_idle_timer(g_ai.delay_ms / 1000.0, ai_on_idle);
+}
+
+/* ---- Bearbeiten > KI-Verbindung testen ----
+ * Eine feste kleine Anfrage an den eingetragenen Server (Datei frisch
+ * gelesen), das Ergebnis als Meldung: erreichbar, Modell vorhanden, was es
+ * vorschlaegt - sonst meldet die Vervollstaendigung Fehler bewusst nie. */
+static unsigned long g_ai_test_request = 0;
+
+static void ai_on_test_response(unsigned long id, int status, const char *body, size_t len) {
+    if (id != g_ai_test_request) {
+        return;
+    }
+    g_ai_test_request = 0;
+    char info[1024];
+    char *s = NULL, *err = NULL;
+    size_t n = 0, en = 0;
+    if (status == 200 && btn_ai_parse_response(g_ai.api, body, len, &s, &n)) {
+        char raw[160];
+        snprintf(raw, sizeof(raw), "%.*s", (int)(n < 150 ? n : 150), s);
+        for (char *p = raw; *p; p++) {
+            if ((unsigned char)*p < 0x20) {
+                *p = ' '; /* Zeilenenden der Rohantwort lesbar */
+            }
+        }
+        n = btn_ai_clean_suggestion(s, n, "", 0);
+        const char *model = g_ai.api == BTN_AI_API_LLAMA ? "llama-server" : g_ai.model;
+        if (n > 0) {
+            snprintf(info, sizeof(info), btn_tr(BTN_STR_AI_TEST_OK_FMT), model, s);
+        } else {
+            snprintf(info, sizeof(info), btn_tr(BTN_STR_AI_TEST_EMPTY_FMT), model, raw);
+        }
+    } else if (status == 0) {
+        char *url = btn_ai_endpoint(&g_ai);
+        snprintf(info, sizeof(info), btn_tr(BTN_STR_AI_TEST_UNREACHABLE_FMT), url);
+        free(url);
+    } else {
+        if (body && btn_ai_json_get_string(body, len, "error", &err, &en)) {
+            snprintf(info, sizeof(info), btn_tr(BTN_STR_AI_TEST_HTTP_FMT), status, err);
+        } else {
+            char excerpt[200];
+            snprintf(excerpt, sizeof(excerpt), "%.*s", body ? (int)(len < 180 ? len : 180) : 0, body ? body : "");
+            snprintf(info, sizeof(info), btn_tr(BTN_STR_AI_TEST_HTTP_FMT), status, excerpt);
+        }
+    }
+    if (!g_ai.enabled) {
+        size_t l = strlen(info);
+        snprintf(info + l, sizeof(info) - l, "%s", btn_tr(BTN_STR_AI_TEST_OFF_NOTE));
+    }
+    free(s);
+    free(err);
+    btn_show_error_alert(btn_tr(BTN_STR_AI_TEST_TITLE), info);
+}
+
+static void ai_test_connection(void) {
+    size_t len;
+    free(load_ai_config_text(&len)); /* Aenderungen an der Datei gelten */
+    static const char prefix[] = "def add(a, b):\n    return ";
+    size_t body_len;
+    char *body = btn_ai_request_body(&g_ai, prefix, sizeof(prefix) - 1, "\n", 1, &body_len);
+    char *url = btn_ai_endpoint(&g_ai);
+    btn_http_cancel(g_ai_test_request);
+    ai_debug(url, body, body_len);
+    g_ai_test_request = btn_http_post_json(url, body, body_len, 90.0, ai_on_test_response);
+    if (!g_ai_test_request) {
+        char info[512];
+        snprintf(info, sizeof(info), btn_tr(BTN_STR_AI_TEST_UNREACHABLE_FMT), url);
+        btn_show_error_alert(btn_tr(BTN_STR_AI_TEST_TITLE), info);
+    }
+    free(url);
+    free(body);
 }
 
 /* Tab: Vorschlag uebernehmen - als eigener Undo-Schritt (die Gruppe wird
@@ -3632,6 +3715,9 @@ static void on_menu(int tag) {
                 ai_cancel();
                 ghost_clear();
             }
+            break;
+        case BTN_MENU_AI_TEST:
+            ai_test_connection();
             break;
         case BTN_MENU_SHOW_INVISIBLES:
             apply_show_invisibles(!g_show_invisibles);

@@ -61,8 +61,12 @@ static void test_request(void) {
     CHECK(get(body, "model", "qwen2.5-coder:1.5b", 18), "Ollama: model");
     CHECK(get(body, "prompt", "int x = \"a\\b\";\n\tfoo(", 20), "Ollama: prompt round trip with quotes, backslash, newline, tab");
     CHECK(get(body, "suffix", ");\n}", 4), "Ollama: suffix");
-    CHECK(strstr(body, "\"stream\":false") && strstr(body, "\"num_predict\":48") && strstr(body, "\"stop\":[\"\\n\"]"),
-          "Ollama: no streaming, token limit, one line");
+    CHECK(strstr(body, "\"stream\":false") && strstr(body, "\"num_predict\":48") && strstr(body, "\"stop\":[\"\\n\"]") &&
+              strstr(body, "\"keep_alive\":\"30m\""),
+          "Ollama: no streaming, token limit, one line, model stays loaded");
+    free(body);
+    body = btn_ai_request_body(&c, "x", 1, "", 0, &n);
+    CHECK(get(body, "suffix", "\n", 1), "Ollama: empty suffix sent as newline (else Ollama uses the chat template)");
     free(body);
     c.api = BTN_AI_API_LLAMA;
     body = btn_ai_request_body(&c, "a", 1, "", 0, &n);
@@ -104,7 +108,9 @@ static void test_request(void) {
         }
         c.api = rand() % 2;
         body = btn_ai_request_body(&c, p, pl, s, sl, &n);
-        if (!get(body, c.api ? "input_prefix" : "prompt", p, pl) || !get(body, c.api ? "input_suffix" : "suffix", s, sl)) {
+        int nl = !c.api && sl == 0; /* Ollama: leerer suffix wird "\n" */
+        if (!get(body, c.api ? "input_prefix" : "prompt", p, pl) ||
+            !get(body, c.api ? "input_suffix" : "suffix", nl ? "\n" : s, nl ? 1 : sl)) {
             bad_rt++;
         }
         free(body);

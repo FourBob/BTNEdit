@@ -68,7 +68,7 @@ HEADERS = {
     "linecmd_extracted.h": ("main.c", ["perform_line_command"]),
     "ai_glue_extracted.h": ("main.c", [
         "#BTN_MAX_FILE_MB", "#BTN_MAX_FILE_SIZE", "typedef:BtnReadResult", "read_file_contents",
-        "write_stream_checked", "write_file_atomic", "write_file_contents", "ai_config_path", "load_ai_config_text",
+        "write_stream_checked", "write_file_atomic", "write_file_contents", "ai_config_path", "ai_debug", "load_ai_config_text",
         "load_ai_config", "toggle_ai_config", "ghost_clear", "ghost_visible", "ai_on_response", "ai_on_idle",
         "ai_cancel_request", "ai_cancel", "ai_note_typing",
         "ai_accept", "ai_keep_ghost_after_typing"]),
