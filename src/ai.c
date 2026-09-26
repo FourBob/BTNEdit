@@ -351,6 +351,20 @@ int btn_ai_json_get_string(const char *json, size_t len, const char *key, char *
 }
 
 /* ---- Konfiguration ---- */
+static int ascii_lower(int c) {
+    return c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c;
+}
+
+/* n Bytes gleich bis auf ASCII-Gross/klein */
+static int mem_ieq(const char *a, const char *b, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        if (ascii_lower((unsigned char)a[i]) != ascii_lower((unsigned char)b[i])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 
 void btn_ai_config_defaults(BtnAiConfig *c) {
     memset(c, 0, sizeof(*c));
@@ -427,6 +441,8 @@ void btn_ai_config_parse(BtnAiConfig *c, const char *text, size_t len) {
             memcpy(c->url, v, vl + 1);
         } else if (KEY_IS("model") && vl > 0 && vl < sizeof(c->model)) {
             memcpy(c->model, v, vl + 1);
+        } else if (KEY_IS("text_model") && vl < sizeof(c->text_model)) {
+            memcpy(c->text_model, v, vl + 1); /* leer: wie model */
         } else if (KEY_IS("delay_ms")) {
             c->delay_ms = clamp_int(strtol(v, NULL, 10), 50, 5000);
         } else if (KEY_IS("max_tokens")) {
@@ -447,16 +463,41 @@ char *btn_ai_config_format(const BtnAiConfig *c) {
     buf_str(&b, c->url);
     buf_str(&b, "\nmodel=");
     buf_str(&b, c->model);
+    buf_str(&b, "\n# Fliesstext (.txt, .md, unbenannt), leer = wie model\ntext_model=");
+    buf_str(&b, c->text_model);
     snprintf(num, sizeof(num), "\ndelay_ms=%d\nmax_tokens=%d\n", c->delay_ms, c->max_tokens);
     buf_str(&b, num);
     return b.d;
 }
 
-char *btn_ai_endpoint(const BtnAiConfig *c) {
+char *btn_ai_endpoint(const BtnAiConfig *c, int text) {
     Buf b = { 0 };
     buf_str(&b, c->url);
-    buf_str(&b, c->api == BTN_AI_API_LLAMA ? "/infill" : "/api/generate");
+    buf_str(&b, c->api != BTN_AI_API_LLAMA ? "/api/generate" : text ? "/completion" : "/infill");
     return b.d;
+}
+
+const char *btn_ai_text_model(const BtnAiConfig *c) {
+    return c->text_model[0] ? c->text_model : c->model;
+}
+
+int btn_ai_path_is_text(const char *path) {
+    if (!path) {
+        return 1;
+    }
+    const char *slash = strrchr(path, '/');
+    const char *dot = strrchr(slash ? slash + 1 : path, '.');
+    if (!dot || dot == (slash ? slash + 1 : path)) {
+        return 0; /* ohne Endung (Makefile, .bashrc): eher Code/Konfiguration */
+    }
+    static const char *const exts[] = { "txt", "text", "md", "markdown", "rst" };
+    for (size_t i = 0; i < sizeof(exts) / sizeof(exts[0]); i++) {
+        size_t n = strlen(exts[i]);
+        if (strlen(dot + 1) == n && mem_ieq(dot + 1, exts[i], n)) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /* ---- Anfrage und Antwort ---- */
@@ -497,6 +538,66 @@ char *btn_ai_request_body(const BtnAiConfig *c, const char *prefix, size_t prefi
     }
     *out_len = b.len;
     return b.d;
+}
+
+char *btn_ai_request_body_text(const BtnAiConfig *c, const char *model, const char *prefix, size_t prefix_len,
+                               size_t *out_len) {
+    Buf b = { 0 };
+    char num[96];
+    if (c->api == BTN_AI_API_LLAMA) {
+        buf_str(&b, "{\"prompt\":");
+        json_add_string(&b, prefix, prefix_len);
+        snprintf(num, sizeof(num), ",\"n_predict\":%d", c->max_tokens);
+        buf_str(&b, num);
+        buf_str(&b, ",\"temperature\":0.2,\"stop\":[\"\\n\"],\"cache_prompt\":true,\"stream\":false}");
+    } else {
+        buf_str(&b, "{\"model\":");
+        json_add_string(&b, model, strlen(model));
+        buf_str(&b, ",\"prompt\":");
+        json_add_string(&b, prefix, prefix_len);
+        /* raw: keine Chat-Vorlage - das Modell schreibt den Text einfach
+         * weiter, statt ihn zu beantworten */
+        snprintf(num, sizeof(num), ",\"raw\":true,\"stream\":false,\"keep_alive\":\"30m\",\"options\":{\"num_predict\":%d",
+                 c->max_tokens);
+        buf_str(&b, num);
+        buf_str(&b, ",\"temperature\":0.2,\"stop\":[\"\\n\"]}}");
+    }
+    *out_len = b.len;
+    return b.d;
+}
+
+int btn_ai_is_no_insert_error(const char *body, size_t len) {
+    static const char needle[] = "does not support insert";
+    size_t n = sizeof(needle) - 1;
+    for (size_t i = 0; body && i + n <= len; i++) {
+        if (memcmp(body + i, needle, n) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+size_t btn_ai_cut_sentence(char *s, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        size_t end = 0;
+        if ((c == '.' || c == '!' || c == '?') && i + 1 < n && s[i + 1] == ' ') {
+            end = i + 1;
+        } else if (c == 0xE3 && i + 2 < n && (unsigned char)s[i + 1] == 0x80 && (unsigned char)s[i + 2] == 0x82) {
+            end = i + 3; /* 。 */
+        } else if (c == 0xEF && i + 2 < n && (unsigned char)s[i + 1] == 0xBC &&
+                   ((unsigned char)s[i + 2] == 0x81 || (unsigned char)s[i + 2] == 0x9F)) {
+            end = i + 3; /* ！ ？ */
+        } else if (c == 0xE2 && i + 3 < n && (unsigned char)s[i + 1] == 0x80 && (unsigned char)s[i + 2] == 0xA6 &&
+                   s[i + 3] == ' ') {
+            end = i + 3; /* … */
+        }
+        if (end) {
+            s[end] = '\0';
+            return end;
+        }
+    }
+    return n;
 }
 
 int btn_ai_parse_response(int api, const char *body, size_t len, char **out, size_t *out_len) {
@@ -676,20 +777,6 @@ static int model_name_ok(const char *name, size_t n) {
     }
     for (size_t i = 0; i < n; i++) {
         if ((unsigned char)name[i] < 0x20 || name[i] == 0x7F || name[i] == '#') {
-            return 0;
-        }
-    }
-    return 1;
-}
-
-static int ascii_lower(int c) {
-    return c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c;
-}
-
-/* n Bytes gleich bis auf ASCII-Gross/klein */
-static int mem_ieq(const char *a, const char *b, size_t n) {
-    for (size_t i = 0; i < n; i++) {
-        if (ascii_lower((unsigned char)a[i]) != ascii_lower((unsigned char)b[i])) {
             return 0;
         }
     }

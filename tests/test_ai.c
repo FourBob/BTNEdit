@@ -37,19 +37,77 @@ static void test_config(void) {
     btn_ai_config_parse(&c, more, strlen(more));
     CHECK(!c.enabled && c.api == BTN_AI_API_LLAMA && c.delay_ms == 50 && c.max_tokens == 1 && strcmp(c.url, "http://box:8080") == 0,
           "unknown api and empty url keep the old value, numbers clamp");
+    const char *tm = "text_model = qwen3.6:35b-a3b # prose\n";
+    btn_ai_config_parse(&c, tm, strlen(tm));
+    CHECK(strcmp(c.text_model, "qwen3.6:35b-a3b") == 0 && strcmp(btn_ai_text_model(&c), "qwen3.6:35b-a3b") == 0,
+          "text_model parsed (%s)", c.text_model);
     char *fmt = btn_ai_config_format(&c);
     BtnAiConfig d;
     btn_ai_config_defaults(&d);
     btn_ai_config_parse(&d, fmt, strlen(fmt));
     CHECK(memcmp(&c, &d, sizeof c) == 0, "format -> parse round trip");
     free(fmt);
-    char *ep = btn_ai_endpoint(&c);
+    char *ep = btn_ai_endpoint(&c, 0);
     CHECK(strcmp(ep, "http://box:8080/infill") == 0, "llama-server endpoint (%s)", ep);
     free(ep);
+    ep = btn_ai_endpoint(&c, 1);
+    CHECK(strcmp(ep, "http://box:8080/completion") == 0, "llama-server prose endpoint (%s)", ep);
+    free(ep);
+    btn_ai_config_parse(&c, "text_model=\n", 12);
+    CHECK(c.text_model[0] == 0 && strcmp(btn_ai_text_model(&c), "my model") == 0, "empty text_model: same as model");
     btn_ai_config_defaults(&c);
-    ep = btn_ai_endpoint(&c);
+    CHECK(c.text_model[0] == 0, "default: no text model");
+    ep = btn_ai_endpoint(&c, 0);
     CHECK(strcmp(ep, "http://127.0.0.1:11434/api/generate") == 0, "Ollama endpoint");
     free(ep);
+    ep = btn_ai_endpoint(&c, 1);
+    CHECK(strcmp(ep, "http://127.0.0.1:11434/api/generate") == 0, "Ollama prose endpoint is the same");
+    free(ep);
+}
+
+static void test_text(void) {
+    CHECK(btn_ai_path_is_text(NULL) && btn_ai_path_is_text("/a/b.txt") && btn_ai_path_is_text("README.MD") &&
+              btn_ai_path_is_text("x.markdown") && btn_ai_path_is_text("n.rst") && btn_ai_path_is_text("a.text"),
+          "prose: untitled, .txt, .md (any case), .markdown, .rst, .text");
+    CHECK(!btn_ai_path_is_text("/d.txt/main.c") && !btn_ai_path_is_text("Makefile") && !btn_ai_path_is_text("/x/.md") &&
+              !btn_ai_path_is_text("a.txt.c") && !btn_ai_path_is_text("a.mdx") && !btn_ai_path_is_text("a.tx"),
+          "code: other extensions, no extension, dot files, extension of the directory");
+
+    BtnAiConfig c;
+    btn_ai_config_defaults(&c);
+    size_t n;
+    char *body = btn_ai_request_body_text(&c, "qwen3.6:35b-a3b", "Es war \"einmal\"\n", 16, &n);
+    CHECK(n == strlen(body) && get(body, "model", "qwen3.6:35b-a3b", 15) && get(body, "prompt", "Es war \"einmal\"\n", 16) &&
+              strstr(body, "\"raw\":true") && !strstr(body, "suffix") && strstr(body, "\"num_predict\":48") &&
+              strstr(body, "\"stop\":[\"\\n\"]"),
+          "Ollama prose body: raw, no suffix (%s)", body);
+    free(body);
+    c.api = BTN_AI_API_LLAMA;
+    body = btn_ai_request_body_text(&c, "ignored", "abc", 3, &n);
+    CHECK(get(body, "prompt", "abc", 3) && !strstr(body, "input_") && !strstr(body, "ignored") &&
+              strstr(body, "\"n_predict\":48"),
+          "llama-server prose body: prompt only (%s)", body);
+    free(body);
+
+    static const char e1[] = "{\"error\":\"registry.ollama.ai/library/qwen3:8b does not support insert\"}";
+    CHECK(btn_ai_is_no_insert_error(e1, sizeof e1 - 1), "no-insert error recognised");
+    CHECK(!btn_ai_is_no_insert_error(e1, sizeof e1 - 4) && !btn_ai_is_no_insert_error(e1, 40) && !btn_ai_is_no_insert_error("{\"error\":\"not found\"}", 21) &&
+              !btn_ai_is_no_insert_error(NULL, 0),
+          "other errors / cut body / NULL are not");
+
+    static const char *const cases[][2] = {
+        { "öner Tag. Morgen", "öner Tag." }, { "Ja! Nein", "Ja!" },       { "Wie? So", "Wie?" },
+        { "3.5 Meter weit", "3.5 Meter weit" }, { "Ende.", "Ende." },    { "kein Satzende", "kein Satzende" },
+        { "你好。再见", "你好。" },                 { "对！好", "对！" },       { "吗？是", "吗？" },
+        { "Nun\xE2\x80\xA6 gut", "Nun\xE2\x80\xA6" }, { "Nun\xE2\x80\xA6", "Nun\xE2\x80\xA6" },
+        { "a.b. c", "a.b." },                     { "a\xE2\x80\xA6" "b", "a\xE2\x80\xA6" "b" },
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        char buf[64];
+        snprintf(buf, sizeof buf, "%s", cases[i][0]);
+        size_t k = btn_ai_cut_sentence(buf, strlen(buf));
+        CHECK(k == strlen(cases[i][1]) && strcmp(buf, cases[i][1]) == 0, "cut_sentence(%s) = %s", cases[i][0], buf);
+    }
 }
 
 static void test_request(void) {
@@ -258,6 +316,7 @@ int main(void) {
     test_config();
     test_models();
     test_request();
+    test_text();
     test_response();
     test_clean();
     printf("%s: %ld checks, %ld failures\n", fails ? "FAILED" : "ALL PASSED", checks, fails);

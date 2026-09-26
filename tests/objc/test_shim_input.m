@@ -382,21 +382,31 @@ int main(void) {
                   [[modelMenu itemAtIndex:3] tag] == BTN_MENU_AI_TEST,
               "AI model submenu: status, separator, refresh, test (%ld items)", (long)[modelMenu numberOfItems]);
         const char *models[] = {"qwen2.5-coder:7b", "qwen3.6-coder:latest", "qwen3.6:35b-a3b"};
-        btn_app_set_ai_model_menu("3 Modelle", models, 3, 1);
+        btn_app_set_ai_model_menu("3 Modelle", models, 3, 1, 2);
         [modelMenu update];
-        CHECK([modelMenu numberOfItems] == 8 && [[[modelMenu itemAtIndex:0] title] isEqualToString:@"3 Modelle"] &&
-                  ![[modelMenu itemAtIndex:0] isEnabled],
-              "status line shown, not clickable");
-        NSMenuItem *mi0 = [modelMenu itemAtIndex:2], *mi1 = [modelMenu itemAtIndex:3], *mi2 = [modelMenu itemAtIndex:4];
+        /* Status, -, "Fuer Code", 3 Modelle, -, "Fuer Fliesstext", "Wie Code", 3 Modelle, -, Aktualisieren, Testen */
+        CHECK([modelMenu numberOfItems] == 15 && [[[modelMenu itemAtIndex:0] title] isEqualToString:@"3 Modelle"] &&
+                  ![[modelMenu itemAtIndex:0] isEnabled] && ![[modelMenu itemAtIndex:2] isEnabled] && ![[modelMenu itemAtIndex:7] isEnabled],
+              "status line and section titles shown, not clickable (%ld items)", (long)[modelMenu numberOfItems]);
+        NSMenuItem *mi0 = [modelMenu itemAtIndex:3], *mi1 = [modelMenu itemAtIndex:4], *mi2 = [modelMenu itemAtIndex:5];
         CHECK([mi0 tag] == BTN_MENU_AI_MODEL_BASE && [mi1 tag] == BTN_MENU_AI_MODEL_BASE + 1 && [mi2 tag] == BTN_MENU_AI_MODEL_BASE + 2,
-              "model items tagged by index (%ld %ld %ld)", (long)[mi0 tag], (long)[mi1 tag], (long)[mi2 tag]);
+              "code models tagged by index (%ld %ld %ld)", (long)[mi0 tag], (long)[mi1 tag], (long)[mi2 tag]);
         CHECK([mi1 state] == NSControlStateValueOn && [mi0 state] == NSControlStateValueOff && [mi2 state] == NSControlStateValueOff,
-              "the chosen model checked (%ld %ld %ld)", (long)[mi0 state], (long)[mi1 state], (long)[mi2 state]);
+              "the chosen code model checked (%ld %ld %ld)", (long)[mi0 state], (long)[mi1 state], (long)[mi2 state]);
         CHECK([[mi0 title] isEqualToString:@"qwen2.5-coder:7b"] && [[mi2 title] isEqualToString:@"qwen3.6:35b-a3b"],
               "model titles (%s, %s)", [[mi0 title] UTF8String], [[mi2 title] UTF8String]);
         /* ohne btn_app_init() ist das gemeinsame Ziel hier nil - wie beim KI-Schalter */
         CHECK([mi1 action] == [aiItem action] && [mi1 target] == [aiItem target], "model items go to the same handler as the AI switch");
-        btn_app_set_ai_model_menu(NULL, NULL, 0, -1);
+        NSMenuItem *same = [modelMenu itemAtIndex:8], *ti2 = [modelMenu itemAtIndex:11];
+        CHECK([same tag] == BTN_MENU_AI_TEXT_SAME && [same state] == NSControlStateValueOff && [ti2 tag] == BTN_MENU_AI_TEXT_MODEL_BASE + 2 &&
+                  [ti2 state] == NSControlStateValueOn && [[ti2 title] isEqualToString:@"qwen3.6:35b-a3b"],
+              "prose section: 'same as code' off, chosen prose model checked");
+        CHECK([[modelMenu itemAtIndex:13] tag] == BTN_MENU_AI_MODELS_REFRESH && [[modelMenu itemAtIndex:14] tag] == BTN_MENU_AI_TEST,
+              "refresh and test at the end");
+        btn_app_set_ai_model_menu("3 Modelle", models, 3, 0, -1);
+        CHECK([[modelMenu itemAtIndex:8] state] == NSControlStateValueOn && [[modelMenu itemAtIndex:11] state] == NSControlStateValueOff,
+              "'same as code' checked when no prose model is set");
+        btn_app_set_ai_model_menu(NULL, NULL, 0, -1, -1);
         CHECK([modelMenu numberOfItems] == 2, "no status, no models: only refresh and test");
 
         /* ---- Dateien ins Fenster ziehen ---- */

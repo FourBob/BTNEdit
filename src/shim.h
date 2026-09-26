@@ -47,7 +47,8 @@ enum {
     BTN_MENU_SHOW_INVISIBLES,
     BTN_MENU_AI_COMPLETION,
     BTN_MENU_AI_TEST,
-    BTN_MENU_AI_MODELS_REFRESH
+    BTN_MENU_AI_MODELS_REFRESH,
+    BTN_MENU_AI_TEXT_SAME
 };
 
 /* Tags fuer die dynamischen "Zuletzt geoeffnet"-Menuepunkte liegen ab hier,
@@ -58,9 +59,11 @@ enum {
 #define BTN_MENU_RECENT_BASE 1000
 #define BTN_MAX_RECENT_FILES 10
 /* Bearbeiten > KI-Modell: ein Eintrag je installiertem Modell, Tag =
- * BTN_MENU_AI_MODEL_BASE + Index (main.c prueft das VOR den Recent-Tags). */
+ * BTN_MENU_AI_MODEL_BASE + Index fuer Code, BTN_MENU_AI_TEXT_MODEL_BASE +
+ * Index fuer Fliesstext (main.c prueft das VOR den Recent-Tags). */
 #define BTN_MENU_AI_MODEL_BASE 2000
 #define BTN_MAX_AI_MODELS 100
+#define BTN_MENU_AI_TEXT_MODEL_BASE (BTN_MENU_AI_MODEL_BASE + BTN_MAX_AI_MODELS)
 
 /* Rohe NSEvent.ModifierFlags-Bitwerte (von Apple dokumentiert/stabil), damit
  * main.c ohne Cocoa-Header auskommt. */
@@ -191,10 +194,13 @@ void btn_app_set_line_ending_menu(int index, int enabled);
 void btn_app_set_show_invisibles_menu(int on);
 /* Haekchen bei Bearbeiten > KI-Vervollstaendigung. */
 void btn_app_set_ai_menu(int on);
-/* Baut Bearbeiten > KI-Modell neu: status (grau, darf NULL sein), die
- * Modelle mit Haekchen bei selected (-1 = keins), dann "Liste
- * aktualisieren" und "Verbindung testen...". */
-void btn_app_set_ai_model_menu(const char *status, const char *const *names, int count, int selected);
+/* Baut Bearbeiten > KI-Modell neu: status (grau, darf NULL sein); gibt es
+ * Modelle, je ein Abschnitt "Fuer Code" (Haekchen bei selected, -1 = keins)
+ * und "Fuer Fliesstext" ("Wie Code" angehakt bei text_selected == -1, sonst
+ * das Modell mit diesem Index, < -1 = keins); dann "Liste aktualisieren" und
+ * "Verbindung testen...". */
+void btn_app_set_ai_model_menu(const char *status, const char *const *names, int count, int selected,
+                               int text_selected);
 
 /* HTTP-POST mit JSON-Koerper (KI-Vervollstaendigung, NSURLSession) - die
  * Oberflaeche wartet nie: cb kommt spaeter im Haupt-Thread mit dem

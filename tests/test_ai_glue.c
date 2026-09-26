@@ -30,6 +30,8 @@ static BtnAiConfig g_ai;
 static unsigned long g_ai_request = 0;
 static size_t g_ai_request_seq, g_ai_request_cursor;
 static size_t g_ai_last_seq = (size_t)-1;
+static int g_ai_request_text = 0;
+static char g_ai_request_model[128];
 static struct {
     char *text;
     size_t len;
@@ -72,7 +74,11 @@ static void btn_app_restart_idle_timer(double seconds, btn_void_callback cb) {
     g_timer_starts++;
 }
 static void btn_app_set_ai_menu(int on) { g_menu_state = on; }
+/* wie in shim.h (das hier nicht eingebunden wird: die Stubs sind static) */
 #define BTN_MAX_AI_MODELS 100
+#define BTN_MENU_AI_MODEL_BASE 2000
+#define BTN_MENU_AI_TEXT_MODEL_BASE (BTN_MENU_AI_MODEL_BASE + BTN_MAX_AI_MODELS)
+#define BTN_MENU_AI_TEXT_SAME 77
 static char g_get_url[256];
 static int g_gets = 0, g_alerts = 0, g_menu_count = -1, g_menu_selected = -2;
 static char g_alert_info[1024], g_menu_status[300], g_menu_first[64];
@@ -89,7 +95,10 @@ static void btn_show_error_alert(const char *title, const char *info) {
     snprintf(g_alert_info, sizeof g_alert_info, "%s", info);
     g_alerts++;
 }
-static void btn_app_set_ai_model_menu(const char *status, const char *const *names, int count, int selected) {
+static int g_menu_text_selected = -3;
+static void btn_app_set_ai_model_menu(const char *status, const char *const *names, int count, int selected,
+                                      int text_selected) {
+    g_menu_text_selected = text_selected;
     snprintf(g_menu_status, sizeof g_menu_status, "%s", status ? status : "");
     snprintf(g_menu_first, sizeof g_menu_first, "%s", count > 0 ? names[0] : "");
     g_menu_count = count;
@@ -99,6 +108,13 @@ static void btn_app_request_redraw(void) { g_redraws++; }
 
 /* ---- Zustand der Verbindungspruefung/Modellliste aus main.c ---- */
 static unsigned long g_ai_test_request = 0;
+static int g_ai_test_stage = 0;
+static int g_ai_test_text = 0;
+static char g_ai_test_info[2048];
+static char g_ai_no_fim[8][128];
+static int g_ai_no_fim_count = 0;
+static void ai_on_idle(void);
+static void ai_send_test_request(void);
 static BtnAiModel *g_ai_models = NULL;
 static size_t g_ai_model_count = 0;
 static unsigned long g_ai_models_request = 0;
@@ -422,7 +438,7 @@ static void test_models(void) {
     /* Auswahl im Menue */
     g_ai_last_seq = 5;
     int redraws = g_redraws;
-    ai_set_model(g_ai_models[1].name);
+    ai_choose_model(0, g_ai_models[1].name);
     CHECK(g_ai_last_seq == (size_t)-1 && g_redraws > redraws, "new model: the same text is asked again, old ghost repainted away");
     ai_update_model_menu();
     CHECK(strcmp(g_ai.model, "qwen3.6-coder:latest") == 0 && g_menu_selected == 1, "picking another model");
@@ -528,10 +544,157 @@ static void test_models(void) {
     rmdir(home);
 }
 
+/* Fliesstext: Dateityp -> nur Text davor (raw), eigenes Modell, ein Satz;
+ * Modelle ohne Fill-in-the-Middle; Verbindungstest mit zwei Stufen; Menue. */
+static void test_text_mode(void) {
+    char home[] = "/tmp/btn_ait_XXXXXX";
+    if (!mkdtemp(home)) {
+        return;
+    }
+    setenv("HOME", home, 1);
+    char path[300];
+    snprintf(path, sizeof path, "%s/.btnedit_ai", home);
+    btn_ai_config_defaults(&g_ai);
+    g_ai.enabled = 1;
+    static char md_path[] = "/tmp/btn_ai/notes.md", c_path[] = "/tmp/btn_ai/x.c";
+    g_doc.path = md_path;
+
+    /* .md, kein eigenes Textmodell: Code-Modell, nur Text davor, raw */
+    set_doc("Heute ist ein sch", 17);
+    int posts = g_posts;
+    ai_on_idle();
+    CHECK(g_posts == posts + 1 && strcmp(g_post_url, "http://127.0.0.1:11434/api/generate") == 0 &&
+              prompt_is("model", g_ai.model, strlen(g_ai.model)) && prompt_is("prompt", "Heute ist ein sch", 17) &&
+              strstr(g_post_body, "\"raw\":true") && !strstr(g_post_body, "\"suffix\""),
+          "prose file: raw continuation without suffix, code model when no text model is set (%s)", g_post_body);
+    respond(200, "{\"response\":\"öner Tag. Morgen regnet es\"}");
+    CHECK(ghost_visible() && strcmp(g_ghost.text, "öner Tag.") == 0, "prose: suggestion ends after the first sentence (%s)",
+          g_ghost.text ? g_ghost.text : "");
+    ghost_clear();
+
+    /* eigenes Textmodell */
+    snprintf(g_ai.text_model, sizeof g_ai.text_model, "%s", "qwen3.6:35b-a3b");
+    set_doc("Es war einmal", 13);
+    ai_on_idle();
+    CHECK(prompt_is("model", "qwen3.6:35b-a3b", 15) && strstr(g_post_body, "\"raw\":true"), "prose uses text_model");
+    respond(0, NULL);
+    /* Code-Datei: weiter Fill-in-the-Middle mit dem Code-Modell, kein Satzschnitt */
+    g_doc.path = c_path;
+    set_doc("x = a", 5);
+    ai_on_idle();
+    CHECK(prompt_is("model", g_ai.model, strlen(g_ai.model)) && prompt_is("suffix", "\n", 1) && !strstr(g_post_body, "\"raw\""),
+          "code file: fill-in-the-middle with the code model");
+    respond(200, "{\"response\":\". b + c. d\"}");
+    CHECK(ghost_visible() && strcmp(g_ghost.text, ". b + c. d") == 0, "code: no sentence cut");
+    ghost_clear();
+
+    /* Code-Modell ohne Fill-in-the-Middle: gleich noch einmal als Fortsetzung */
+    snprintf(g_ai.model, sizeof g_ai.model, "%s", "llama3:8b");
+    set_doc("int y = ", 8);
+    ai_on_idle();
+    posts = g_posts;
+    respond(400, "{\"error\":\"registry.ollama.ai/library/llama3:8b does not support insert\"}");
+    CHECK(g_posts == posts + 1 && strstr(g_post_body, "\"raw\":true") && prompt_is("model", "llama3:8b", 9) &&
+              ai_model_lacks_fim("llama3:8b"),
+          "'does not support insert': model noted, asked again as a continuation");
+    respond(200, "{\"response\":\"42;\"}");
+    CHECK(ghost_visible() && strcmp(g_ghost.text, "42;") == 0, "and its answer is shown");
+    ghost_clear();
+    set_doc("int z = ", 8);
+    ai_on_idle();
+    CHECK(strstr(g_post_body, "\"raw\":true") != NULL, "later requests for that model skip fill-in-the-middle");
+    int noted = g_ai_no_fim_count;
+    ai_note_no_fim("llama3:8b");
+    CHECK(g_ai_no_fim_count == noted, "noted only once");
+    respond(0, NULL);
+    posts = g_posts;
+    set_doc("int w = ", 8);
+    ai_on_idle();
+    respond(400, "{\"error\":\"model not found\"}");
+    CHECK(g_posts == posts + 1, "other errors: no retry");
+
+    /* Verbindungstest: Code-Modell, dann das eigene Textmodell */
+    FILE *f = fopen(path, "w");
+    fputs("enabled=1\nmodel=qwen2.5-coder:7b\ntext_model=qwen3.6:35b-a3b\n", f);
+    fclose(f);
+    int alerts = g_alerts;
+    posts = g_posts;
+    ai_test_connection();
+    answer_get(200, USER_TAGS);
+    CHECK(g_posts == posts + 1 && prompt_is("model", "qwen2.5-coder:7b", 16) && strstr(g_post_body, "\"suffix\""),
+          "test stage 1: code model, fill-in-the-middle");
+    g_post_cb(g_next_id - 1, 200, "{\"response\":\"a + b\"}", 20);
+    CHECK(g_alerts == alerts && g_posts == posts + 2 && prompt_is("model", "qwen3.6:35b-a3b", 15) &&
+              strstr(g_post_body, "\"raw\":true"),
+          "test stage 2: text model as a continuation, no alert yet");
+    g_post_cb(g_next_id - 1, 200, "{\"response\":\" sunny.\"}", 22);
+    CHECK(g_alerts == alerts + 1 && strstr(g_alert_info, btn_tr(BTN_STR_AI_MODEL_FOR_CODE)) &&
+              strstr(g_alert_info, btn_tr(BTN_STR_AI_MODEL_FOR_TEXT)) && strstr(g_alert_info, "a + b") &&
+              strstr(g_alert_info, "sunny"),
+          "one alert naming both results (%s)", g_alert_info);
+    /* Code-Modell ohne FIM im Test: zweiter Versuch, Hinweis in der Meldung */
+    f = fopen(path, "w");
+    fputs("enabled=1\nmodel=qwen3.6:35b-a3b\n", f);
+    fclose(f);
+    posts = g_posts;
+    ai_test_connection();
+    answer_get(200, USER_TAGS);
+    g_post_cb(g_next_id - 1, 400, "{\"error\":\"qwen3.6:35b-a3b does not support insert\"}", 50);
+    CHECK(g_posts == posts + 2 && strstr(g_post_body, "\"raw\":true"), "test: retried as a continuation");
+    g_post_cb(g_next_id - 1, 200, "{\"response\":\"a + b\"}", 20);
+    CHECK(g_alerts == alerts + 2 && strstr(g_alert_info, btn_tr(BTN_STR_AI_TEST_NO_FIM)) &&
+              !strstr(g_alert_info, btn_tr(BTN_STR_AI_MODEL_FOR_TEXT)),
+          "single result with the no-FIM note (%s)", g_alert_info);
+
+    /* Menue: Textmodell waehlen, "wie Code", fehlendes Textmodell */
+    ai_refresh_models(0);
+    answer_get(200, USER_TAGS);
+    CHECK(g_menu_text_selected == -1, "no text model: 'same as code' checked");
+    CHECK(ai_on_model_menu(BTN_MENU_AI_TEXT_MODEL_BASE + 2) && strcmp(g_ai.text_model, "qwen3.6:35b-a3b") == 0 &&
+              g_menu_text_selected == 2 && strcmp(g_ai.model, "qwen3.6:35b-a3b") == 0,
+          "text model picked from the menu, code model unchanged");
+    f = fopen(path, "r");
+    char buf[256];
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = 0;
+    CHECK(strstr(buf, "text_model=qwen3.6:35b-a3b\n") != NULL, "and saved (%s)", buf);
+    CHECK(ai_on_model_menu(BTN_MENU_AI_MODEL_BASE) && strcmp(g_ai.model, "qwen2.5-coder:7b") == 0 &&
+              strcmp(g_ai.text_model, "qwen3.6:35b-a3b") == 0,
+          "code model picked, text model unchanged");
+    CHECK(ai_on_model_menu(BTN_MENU_AI_TEXT_SAME) && g_ai.text_model[0] == 0 && g_menu_text_selected == -1,
+          "'same as code' clears it");
+    CHECK(!ai_on_model_menu(BTN_MENU_AI_TEXT_MODEL_BASE + BTN_MAX_AI_MODELS) && !ai_on_model_menu(BTN_MENU_AI_MODEL_BASE - 1),
+          "other tags are not model entries");
+    CHECK(ai_on_model_menu(BTN_MENU_AI_TEXT_MODEL_BASE + 50) && g_ai.text_model[0] == 0, "stale index ignored");
+    snprintf(g_ai.text_model, sizeof g_ai.text_model, "%s", "weg:1b");
+    ai_refresh_models(0);
+    answer_get(200, USER_TAGS);
+    CHECK(g_ai.text_model[0] == 0 && g_menu_text_selected == -1, "text model no longer installed: back to 'same as code'");
+    snprintf(g_ai.text_model, sizeof g_ai.text_model, "%s", "weg:1b");
+    ai_update_model_menu();
+    CHECK(g_menu_text_selected == -2, "unknown text model (before the check): nothing checked in the prose section");
+    snprintf(g_ai.text_model, sizeof g_ai.text_model, "%s", "weg:1b");
+    ai_refresh_models(0);
+    answer_get(200, "{\"models\":[]}");
+    CHECK(strcmp(g_ai.text_model, "weg:1b") == 0, "empty list: text model kept");
+
+    g_ai.text_model[0] = 0;
+    btn_ai_models_free(g_ai_models, g_ai_model_count);
+    g_ai_models = NULL;
+    g_ai_model_count = 0;
+    g_doc.path = c_path;
+    unlink(path);
+    rmdir(home);
+}
+
 int main(void) {
     editor_init(ed);
+    static char code_path[] = "/tmp/btn_ai/x.c";
+    g_doc.path = code_path; /* Code: Fill-in-the-Middle (Fliesstext siehe test_text_mode) */
     test_flow();
     test_models();
+    test_text_mode();
     test_config_file();
     ghost_clear();
     editor_free(ed);

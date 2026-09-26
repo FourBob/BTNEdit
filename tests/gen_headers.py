@@ -69,10 +69,12 @@ HEADERS = {
     "ai_glue_extracted.h": ("main.c", [
         "#BTN_MAX_FILE_MB", "#BTN_MAX_FILE_SIZE", "typedef:BtnReadResult", "read_file_contents",
         "write_stream_checked", "write_file_atomic", "write_file_contents", "ai_config_path", "ai_debug", "load_ai_config_text",
-        "load_ai_config", "toggle_ai_config", "ghost_clear", "ghost_visible", "ai_on_response", "ai_on_idle",
-        "ai_cancel_request", "ai_cancel", "ai_note_typing", "ai_on_test_response", "ai_send_test",
-        "ai_update_model_menu", "ai_write_config_value", "ai_set_model", "ai_on_models", "ai_refresh_models",
-        "ai_test_connection", "ai_toggle_from_menu",
+        "load_ai_config", "toggle_ai_config", "ghost_clear", "ghost_visible", "#AI_NO_FIM_MAX", "ai_model_lacks_fim",
+        "ai_note_no_fim", "ai_mode_for", "ai_on_response", "ai_on_idle",
+        "ai_cancel_request", "ai_cancel", "ai_note_typing", "ai_test_model", "ai_test_has_text_stage",
+        "ai_test_add_line", "ai_test_finish", "ai_on_test_response", "ai_send_test_request", "ai_send_test",
+        "ai_update_model_menu", "ai_write_config_value", "ai_choose_model", "ai_on_models", "ai_refresh_models",
+        "ai_test_connection", "ai_on_model_menu", "ai_toggle_from_menu",
         "ai_accept", "ai_keep_ghost_after_typing"]),
     "protect_extracted.h": ("main.c", [
         "#BTN_RECOVERY_INTERVAL", "#BTN_RECOVERY_BYTES_PER_SECOND", "#BTN_MAX_FILE_MB", "#BTN_MAX_FILE_SIZE",

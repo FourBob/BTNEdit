@@ -160,6 +160,11 @@ typedef enum {
     BTN_STR_AI_STATUS_LLAMA,
     BTN_STR_AI_STATUS_LLAMA_HTTP_FMT,
     BTN_STR_AI_NO_CODER,
+    /* Abschnitte im Untermenue, "wie Code", Hinweis im Verbindungstest */
+    BTN_STR_AI_MODEL_FOR_CODE,
+    BTN_STR_AI_MODEL_FOR_TEXT,
+    BTN_STR_AI_TEXT_SAME,
+    BTN_STR_AI_TEST_NO_FIM,
     BTN_STR_COUNT
 } BtnStringId;
 

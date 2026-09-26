@@ -63,8 +63,9 @@ Klammern, Suchen/Ersetzen, Zeilen-Befehle) ist reine C-Logik und wird selbst
   Gedrückthalten einer Taste, chinesische/japanische Eingabe, Emoji-Palette
   (`⌃⌘Leertaste`) - im Dokument und in den Suchfeldern
 - KI-Vervollständigung (optional, standardmäßig aus): nach einer kurzen
-  Tipp-Pause schlägt ein lokal laufendes Code-Modell die Fortsetzung der
-  Zeile vor - [siehe unten](#ki-vervollständigung-lokal)
+  Tipp-Pause schlägt ein lokal laufendes Modell die Fortsetzung der Zeile
+  vor - im Code und im Fließtext (eigenes Modell möglich) -
+  [siehe unten](#ki-vervollständigung-lokal)
 
 ### Suchen
 
@@ -118,19 +119,39 @@ Menü. Im Untermenü
 
 - eine Statuszeile ("Ollama: 3 Modelle installiert", "Nicht erreichbar:
   http://…"),
-- alle installierten Modelle, das gewählte mit Haken - ein Klick wechselt,
-- "Liste aktualisieren" (nach `ollama pull`) und "KI-Verbindung testen…".
+- **Für Code**: alle installierten Modelle, das gewählte mit Haken - ein
+  Klick wechselt,
+- **Für Fließtext**: "Wie Code" oder ein eigenes Modell (siehe unten),
+- "Liste aktualisieren" (nach `ollama pull …`) und "KI-Verbindung testen…".
+
+### Code und Fließtext
+
+In `.txt`-, `.md`-, `.markdown`-, `.rst`-Dateien und unbenannten
+Dokumenten schreibt das Modell Fließtext weiter: BTNEdit schickt dann nur
+den Text vor dem Cursor als reine Fortsetzung (Ollama `raw`, llama-server
+`/completion`) und schneidet den Vorschlag nach dem ersten Satz ab. Dafür
+taugt jedes Modell, auch ein allgemeines Chat-Modell ohne
+Fill-in-the-Middle - besser als ein Code-Modell schreibt es meist auch. In
+allen anderen Dateien bleibt es beim Code: Text vor **und** nach dem Cursor
+(Fill-in-the-Middle) an das Code-Modell.
+
+Ein eigenes Modell für Fließtext wählt man unter Bearbeiten > KI-Modell >
+Für Fließtext (oder `text_model=` in der Datei); "Wie Code" nimmt das
+Code-Modell. Meldet Ollama für ein Modell "does not support insert" (kein
+Fill-in-the-Middle), fragt BTNEdit sofort noch einmal als Fortsetzung und
+bleibt für dieses Modell dabei. Der Verbindungstest prüft beide Modelle.
 
 Die Einstellungen stehen in `~/.btnedit_ai` (wird beim ersten Einschalten
 angelegt). Die Datei wird beim Start, bei jedem Umschalten, Aktualisieren und
-Testen gelesen; das Menü ändert nur die Zeilen `enabled=` und `model=`,
-Kommentare und eigene Einträge bleiben:
+Testen gelesen; das Menü ändert nur die Zeilen `enabled=`, `model=` und
+`text_model=`, Kommentare und eigene Einträge bleiben:
 
 ```
 enabled=1
 api=ollama          # oder llama (llama-server, Endpunkt /infill)
 url=http://127.0.0.1:11434
 model=qwen2.5-coder:1.5b
+text_model=         # Fließtext; leer = wie model
 delay_ms=300        # Tipp-Pause bis zur Anfrage
 max_tokens=48
 ```
@@ -141,7 +162,7 @@ So läuft es ab:
   Leerraum oder Schließendes (`)`, `;`, ...) steht - nicht bei einer
   Auswahl, während einer Eingabemethode oder im Suchfeld. Jeder weitere
   Tastendruck bricht eine laufende Anfrage ab; die Oberfläche wartet nie.
-- Der Vorschlag (eine Zeile) erscheint grau hinter dem Cursor: `Tab`
+- Der Vorschlag (eine Zeile, bei Fließtext höchstens ein Satz) erscheint grau hinter dem Cursor: `Tab`
   übernimmt ihn als eigenen Undo-Schritt, `Esc` verwirft ihn, wer seinen
   Anfang tippt, behält den Rest; jede andere Änderung lässt ihn
   verschwinden.
@@ -150,8 +171,8 @@ So läuft es ab:
   Modellliste (dort läuft genau das beim Start geladene Modell), geprüft
   wird nur `/health`.
 
-Datenschutz: Nach der Tipp-Pause gehen bis zu 4 KB Text vor und 1 KB nach
-dem Cursor an `url` - nur einen Server eintragen, dem man den
+Datenschutz: Nach der Tipp-Pause gehen bis zu 4 KB Text vor und (bei Code)
+1 KB nach dem Cursor an `url` - nur einen Server eintragen, dem man den
 Dokumentinhalt anvertraut. Ein Ollama-Cloud-Modell reicht den Text von dort
 an ollama.com weiter. BTNEdit geht dabei direkt dorthin (kein
 System-Proxy, keine Umleitungen, höchstens 90 s pro Anfrage - die erste
@@ -313,8 +334,8 @@ diesen Tests Stubs.
 | `test_close_flow` | Schließen/Beenden verliert nie ungesicherte Änderungen |
 | `test_recovery` | Datei-Fingerabdruck (gleiche Größe, 1 ns, `rename`, ctime), Wiederherstellungsdateien: Round-Trip, beschädigte Dateien, Sperren und verwaiste Dateien abgestürzter Läufe |
 | `test_protect` | Schutz der Arbeit aus `main.c` mit echten Dateien: still neu laden, Nachfrage, Behalten, Konflikt beim Sichern, gelöschte Datei, Schreiben während des Lesens, volle Platte, wann Wiederherstellungsdateien entstehen/verschwinden, nachgestellter Absturz |
-| `test_ai` | KI: Einstellungsdatei, JSON-Rundlauf (auch kaputtes UTF-8, Steuerzeichen), Antworten (Escapes, Surrogatpaare, verschachtelte Werte, kaputtes JSON), Vorschlag bereinigen, Modellliste lesen und Code-Modell wählen |
-| `test_ai_glue` | KI-Ablauf aus `main.c`: wann gefragt wird, Kontextgrenzen, veraltete/fehlerhafte Antworten, Geistertext, Tab als eigener Undo-Schritt, Weitertippen, Abbrechen, Einstellungsdatei, Modellliste (fehlendes Modell ersetzen, Server nicht erreichbar, kein Code-Modell), Verbindungstest |
+| `test_ai` | KI: Einstellungsdatei, JSON-Rundlauf (auch kaputtes UTF-8, Steuerzeichen), Antworten (Escapes, Surrogatpaare, verschachtelte Werte, kaputtes JSON), Vorschlag bereinigen, Modellliste lesen und Code-Modell wählen, Fließtext (Dateityp, Anfrage, Satzende) |
+| `test_ai_glue` | KI-Ablauf aus `main.c`: wann gefragt wird, Kontextgrenzen, veraltete/fehlerhafte Antworten, Geistertext, Tab als eigener Undo-Schritt, Weitertippen, Abbrechen, Einstellungsdatei, Modellliste (fehlendes Modell ersetzen, Server nicht erreichbar, kein Code-Modell), Verbindungstest, Fließtext-Modus (eigenes Modell, Rückfall ohne Fill-in-the-Middle, Test in zwei Stufen, Menü) |
 | `test_gapbuffer`, `test_oom` | Gap-Buffer und Speichermangel-Helfer |
 | `test_strings`, `test_tab_label`, `test_font_size`, `test_row_capacity` | Übersetzungstabelle, Tab-Beschriftung, Schriftgröße, sichtbare Zeilen |
 

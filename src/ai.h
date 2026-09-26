@@ -15,6 +15,7 @@ typedef struct {
     int api;            /* BTN_AI_API_* */
     char url[256];      /* ohne Pfad, z.B. "http://127.0.0.1:11434" */
     char model[128];    /* nur Ollama */
+    char text_model[128]; /* Fliesstext (.txt, .md, unbenannt); leer = model */
     int delay_ms;       /* Tipp-Pause bis zur Anfrage */
     int max_tokens;
 } BtnAiConfig;
@@ -62,14 +63,35 @@ int btn_ai_find_model(const BtnAiModel *models, size_t count, const char *name);
 /* Schreibt die Konfiguration im selben Format (malloc, NUL-terminiert). */
 char *btn_ai_config_format(const BtnAiConfig *c);
 
-/* Voller Endpunkt (malloc): url + "/api/generate" bzw. "/infill". */
-char *btn_ai_endpoint(const BtnAiConfig *c);
+/* Voller Endpunkt (malloc): url + "/api/generate" bzw. bei llama-server
+ * "/infill" (Code) oder "/completion" (text: reine Fortsetzung). */
+char *btn_ai_endpoint(const BtnAiConfig *c, int text);
+
+/* Modell fuer Fliesstext: text_model, leer = model. */
+const char *btn_ai_text_model(const BtnAiConfig *c);
+
+/* Fliesstext statt Code? Unbenannt (NULL), .txt, .text, .md, .markdown, .rst. */
+int btn_ai_path_is_text(const char *path);
 
 /* JSON-Koerper der Anfrage (malloc, *out_len ohne NUL): Text vor und nach
  * dem Cursor als Fill-in-the-Middle, nur eine Zeile (Stopp bei '\n').
  * Ungueltiges UTF-8 wird zu U+FFFD. */
 char *btn_ai_request_body(const BtnAiConfig *c, const char *prefix, size_t prefix_len, const char *suffix,
                           size_t suffix_len, size_t *out_len);
+
+/* Fliesstext: nur der Text vor dem Cursor, als reine Fortsetzung (Ollama
+ * raw ohne Vorlage, llama-server /completion) - geht mit jedem Modell, auch
+ * ohne Fill-in-the-Middle. Stopp bei '\n'. */
+char *btn_ai_request_body_text(const BtnAiConfig *c, const char *model, const char *prefix, size_t prefix_len,
+                               size_t *out_len);
+
+/* Ollama-Fehler "model does not support insert": das Modell kann kein
+ * Fill-in-the-Middle. */
+int btn_ai_is_no_insert_error(const char *body, size_t len);
+
+/* Fliesstext-Vorschlag nach dem ersten Satzende (". ", "! ", "? ", "…"
+ * bzw. 。！？) abschneiden; Rueckgabe: neue Laenge (NUL gesetzt). */
+size_t btn_ai_cut_sentence(char *s, size_t n);
 
 /* Hol den Vorschlag aus der Antwort ("response" bei Ollama, "content" bei
  * llama-server) als UTF-8 (malloc). 1 = gefunden. */

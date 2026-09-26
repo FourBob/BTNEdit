@@ -2493,6 +2493,8 @@ static BtnAiConfig g_ai;
 static unsigned long g_ai_request = 0;   /* laufende Anfrage, 0 = keine */
 static size_t g_ai_request_seq, g_ai_request_cursor;
 static size_t g_ai_last_seq = (size_t)-1; /* Inhaltsstand der letzten Anfrage */
+static int g_ai_request_text = 0;          /* als Fliesstext (nur Text davor) */
+static char g_ai_request_model[128];
 static struct {
     char *text; /* NUL-terminiert */
     size_t len;
@@ -2574,6 +2576,38 @@ static void ai_debug(const char *what, const char *data, size_t len) {
     }
 }
 
+/* Modelle, die laut Ollama kein Fill-in-the-Middle koennen ("does not
+ * support insert", meist allgemeine Chat-Modelle): fuer sie auch bei Code
+ * nur den Text vor dem Cursor schicken. Gilt bis zum Beenden. */
+#define AI_NO_FIM_MAX 8
+static char g_ai_no_fim[AI_NO_FIM_MAX][128];
+static int g_ai_no_fim_count = 0;
+
+static int ai_model_lacks_fim(const char *model) {
+    for (int i = 0; i < g_ai_no_fim_count && i < AI_NO_FIM_MAX; i++) {
+        if (strcmp(g_ai_no_fim[i], model) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void ai_note_no_fim(const char *model) {
+    if (!ai_model_lacks_fim(model)) {
+        snprintf(g_ai_no_fim[g_ai_no_fim_count % AI_NO_FIM_MAX], sizeof(g_ai_no_fim[0]), "%s", model);
+        g_ai_no_fim_count++;
+    }
+}
+
+/* Fliesstext oder Code, und welches Modell - fuer das aktive Dokument. */
+static int ai_mode_for(const Document *d, const char **model) {
+    int text = btn_ai_path_is_text(d->path);
+    *model = text ? btn_ai_text_model(&g_ai) : g_ai.model;
+    return text || (g_ai.api == BTN_AI_API_OLLAMA && ai_model_lacks_fim(*model));
+}
+
+static void ai_on_idle(void);
+
 static void ai_on_response(unsigned long id, int status, const char *body, size_t len) {
     char st[32];
     snprintf(st, sizeof(st), "Antwort HTTP %d:", status);
@@ -2582,6 +2616,12 @@ static void ai_on_response(unsigned long id, int status, const char *body, size_
         return; /* veraltet */
     }
     g_ai_request = 0;
+    if (status == 400 && !g_ai_request_text && g_ai.api == BTN_AI_API_OLLAMA && btn_ai_is_no_insert_error(body, len)) {
+        ai_note_no_fim(g_ai_request_model);
+        g_ai_last_seq = (size_t)-1;
+        ai_on_idle(); /* gleich noch einmal, jetzt als reine Fortsetzung */
+        return;
+    }
     Editor *ed = &active_doc()->editor;
     if (status != 200 || !body || ed->edit_seq != g_ai_request_seq || ed->cursor != g_ai_request_cursor ||
         editor_has_selection(ed) || g_focus != BTN_FOCUS_DOCUMENT || g_marked.len) {
@@ -2597,6 +2637,9 @@ static void ai_on_response(unsigned long id, int status, const char *body, size_
     char *rest = gb_copy_range(&ed->buffer, ed->cursor, rest_len);
     n = btn_ai_clean_suggestion(s, n, rest, rest_len);
     free(rest);
+    if (g_ai_request_text) {
+        n = btn_ai_cut_sentence(s, n); /* ein Satz auf einmal reicht */
+    }
     if (n == 0) {
         free(s);
         return;
@@ -2636,12 +2679,17 @@ static void ai_on_idle(void) {
         start++;
     }
     char *prefix = gb_copy_range(&ed->buffer, start, cur - start);
+    const char *model;
+    int text = ai_mode_for(d, &model);
     size_t body_len;
-    char *body = btn_ai_request_body(&g_ai, prefix, cur - start, suffix, end - cur, &body_len);
-    char *url = btn_ai_endpoint(&g_ai);
+    char *body = text ? btn_ai_request_body_text(&g_ai, model, prefix, cur - start, &body_len)
+                      : btn_ai_request_body(&g_ai, prefix, cur - start, suffix, end - cur, &body_len);
+    char *url = btn_ai_endpoint(&g_ai, text);
     /* 60 s: die erste Anfrage laedt das Modell erst in den Speicher */
     ai_debug(url, body, body_len);
     g_ai_request = btn_http_post_json(url, body, body_len, 60.0, ai_on_response);
+    g_ai_request_text = text;
+    snprintf(g_ai_request_model, sizeof(g_ai_request_model), "%s", model);
     g_ai_request_seq = ed->edit_seq;
     g_ai_request_cursor = cur;
     g_ai_last_seq = ed->edit_seq;
@@ -2679,14 +2727,55 @@ static void ai_note_typing(void) {
 /* ---- Bearbeiten > KI-Verbindung testen ----
  * Eine feste kleine Anfrage an den eingetragenen Server (Datei frisch
  * gelesen), das Ergebnis als Meldung: erreichbar, Modell vorhanden, was es
- * vorschlaegt - sonst meldet die Vervollstaendigung Fehler bewusst nie. */
+ * vorschlaegt - sonst meldet die Vervollstaendigung Fehler bewusst nie. Ist
+ * fuer Fliesstext ein eigenes Modell gewaehlt, folgt eine zweite Anfrage
+ * an dieses; die Meldung nennt dann beide. */
 static unsigned long g_ai_test_request = 0;
+static int g_ai_test_stage = 0; /* 0 = Code-Modell, 1 = Fliesstext-Modell */
+static int g_ai_test_text = 0;  /* laufende Testanfrage als Fliesstext */
+static char g_ai_test_info[2048];
+
+static const char *ai_test_model(void) {
+    return g_ai_test_stage ? btn_ai_text_model(&g_ai) : g_ai.model;
+}
+
+/* Eigenes Modell fuer Fliesstext, das einen zweiten Test lohnt? */
+static int ai_test_has_text_stage(void) {
+    return g_ai.api == BTN_AI_API_OLLAMA && g_ai.text_model[0] && strcmp(g_ai.text_model, g_ai.model) != 0;
+}
+
+/* Ergebnis einer Stufe anhaengen (bei zwei Stufen mit Abschnittsnamen). */
+static void ai_test_add_line(const char *line) {
+    size_t l = strlen(g_ai_test_info);
+    if (ai_test_has_text_stage()) {
+        snprintf(g_ai_test_info + l, sizeof(g_ai_test_info) - l, "%s%s: %s", l ? "\n\n" : "",
+                 btn_tr(g_ai_test_stage ? BTN_STR_AI_MODEL_FOR_TEXT : BTN_STR_AI_MODEL_FOR_CODE), line);
+    } else {
+        snprintf(g_ai_test_info + l, sizeof(g_ai_test_info) - l, "%s", line);
+    }
+}
+
+static void ai_test_finish(void) {
+    if (!g_ai.enabled) {
+        size_t l = strlen(g_ai_test_info);
+        snprintf(g_ai_test_info + l, sizeof(g_ai_test_info) - l, "%s", btn_tr(BTN_STR_AI_TEST_OFF_NOTE));
+    }
+    btn_show_error_alert(btn_tr(BTN_STR_AI_TEST_TITLE), g_ai_test_info);
+}
+
+static void ai_send_test_request(void);
 
 static void ai_on_test_response(unsigned long id, int status, const char *body, size_t len) {
     if (id != g_ai_test_request) {
         return;
     }
     g_ai_test_request = 0;
+    const char *model = ai_test_model();
+    if (status == 400 && !g_ai_test_text && g_ai.api == BTN_AI_API_OLLAMA && btn_ai_is_no_insert_error(body, len)) {
+        ai_note_no_fim(model);
+        ai_send_test_request(); /* noch einmal als reine Fortsetzung */
+        return;
+    }
     char info[1024];
     char *s = NULL, *err = NULL;
     size_t n = 0, en = 0;
@@ -2699,14 +2788,18 @@ static void ai_on_test_response(unsigned long id, int status, const char *body, 
             }
         }
         n = btn_ai_clean_suggestion(s, n, "", 0);
-        const char *model = g_ai.api == BTN_AI_API_LLAMA ? "llama-server" : g_ai.model;
+        const char *shown = g_ai.api == BTN_AI_API_LLAMA ? "llama-server" : model;
         if (n > 0) {
-            snprintf(info, sizeof(info), btn_tr(BTN_STR_AI_TEST_OK_FMT), model, s);
+            snprintf(info, sizeof(info), btn_tr(BTN_STR_AI_TEST_OK_FMT), shown, s);
         } else {
-            snprintf(info, sizeof(info), btn_tr(BTN_STR_AI_TEST_EMPTY_FMT), model, raw);
+            snprintf(info, sizeof(info), btn_tr(BTN_STR_AI_TEST_EMPTY_FMT), shown, raw);
+        }
+        if (g_ai_test_text && g_ai_test_stage == 0) {
+            size_t l = strlen(info);
+            snprintf(info + l, sizeof(info) - l, "%s", btn_tr(BTN_STR_AI_TEST_NO_FIM));
         }
     } else if (status == 0) {
-        char *url = btn_ai_endpoint(&g_ai);
+        char *url = btn_ai_endpoint(&g_ai, g_ai_test_text);
         snprintf(info, sizeof(info), btn_tr(BTN_STR_AI_TEST_UNREACHABLE_FMT), url);
         free(url);
     } else {
@@ -2718,31 +2811,47 @@ static void ai_on_test_response(unsigned long id, int status, const char *body, 
             snprintf(info, sizeof(info), btn_tr(BTN_STR_AI_TEST_HTTP_FMT), status, excerpt);
         }
     }
-    if (!g_ai.enabled) {
-        size_t l = strlen(info);
-        snprintf(info + l, sizeof(info) - l, "%s", btn_tr(BTN_STR_AI_TEST_OFF_NOTE));
-    }
     free(s);
     free(err);
-    btn_show_error_alert(btn_tr(BTN_STR_AI_TEST_TITLE), info);
+    ai_test_add_line(info);
+    if (g_ai_test_stage == 0 && status != 0 && ai_test_has_text_stage()) {
+        g_ai_test_stage = 1;
+        ai_send_test_request();
+        return;
+    }
+    ai_test_finish();
 }
 
-/* Die eigentliche Testanfrage (nach der Modellliste, siehe unten). */
-static void ai_send_test(void) {
-    static const char prefix[] = "def add(a, b):\n    return ";
+/* Testanfrage der aktuellen Stufe: Code als Fill-in-the-Middle (ohne FIM
+ * als Fortsetzung), Fliesstext immer als Fortsetzung. */
+static void ai_send_test_request(void) {
+    static const char code[] = "def add(a, b):\n    return ";
+    static const char prose[] = "The weather today is";
+    const char *model = ai_test_model();
+    g_ai_test_text = g_ai_test_stage == 1 || (g_ai.api == BTN_AI_API_OLLAMA && ai_model_lacks_fim(model));
     size_t body_len;
-    char *body = btn_ai_request_body(&g_ai, prefix, sizeof(prefix) - 1, "\n", 1, &body_len);
-    char *url = btn_ai_endpoint(&g_ai);
+    const char *prompt = g_ai_test_stage == 1 ? prose : code;
+    char *body = g_ai_test_text ? btn_ai_request_body_text(&g_ai, model, prompt, strlen(prompt), &body_len)
+                                : btn_ai_request_body(&g_ai, code, sizeof(code) - 1, "\n", 1, &body_len);
+    char *url = btn_ai_endpoint(&g_ai, g_ai_test_text);
     btn_http_cancel(g_ai_test_request);
     ai_debug(url, body, body_len);
     g_ai_test_request = btn_http_post_json(url, body, body_len, 90.0, ai_on_test_response);
     if (!g_ai_test_request) {
         char info[512];
         snprintf(info, sizeof(info), btn_tr(BTN_STR_AI_TEST_UNREACHABLE_FMT), url);
-        btn_show_error_alert(btn_tr(BTN_STR_AI_TEST_TITLE), info);
+        ai_test_add_line(info);
+        ai_test_finish();
     }
     free(url);
     free(body);
+}
+
+/* Der Test (nach der Modellliste, siehe unten): von vorn, mit Stufe 0. */
+static void ai_send_test(void) {
+    g_ai_test_stage = 0;
+    g_ai_test_info[0] = '\0';
+    ai_send_test_request();
 }
 
 /* ---- Bearbeiten > KI-Modell ----
@@ -2764,8 +2873,16 @@ static void ai_update_model_menu(void) {
     for (int i = 0; i < n; i++) {
         names[i] = g_ai_models[i].name;
     }
-    int sel = g_ai.api == BTN_AI_API_OLLAMA ? btn_ai_find_model(g_ai_models, g_ai_model_count, g_ai.model) : -1;
-    btn_app_set_ai_model_menu(g_ai_status[0] ? g_ai_status : btn_tr(BTN_STR_AI_STATUS_UNKNOWN), names, n, sel);
+    int sel = -1, text_sel = -1; /* text_sel: -1 = "wie Code", -2 = keins */
+    if (g_ai.api == BTN_AI_API_OLLAMA) {
+        sel = btn_ai_find_model(g_ai_models, g_ai_model_count, g_ai.model);
+        if (g_ai.text_model[0]) {
+            int t = btn_ai_find_model(g_ai_models, g_ai_model_count, g_ai.text_model);
+            text_sel = t >= 0 ? t : -2;
+        }
+    }
+    btn_app_set_ai_model_menu(g_ai_status[0] ? g_ai_status : btn_tr(BTN_STR_AI_STATUS_UNKNOWN), names, n, sel,
+                              text_sel);
 }
 
 /* key=value in ~/.btnedit_ai setzen, der Rest der Datei bleibt; ohne Datei
@@ -2787,12 +2904,15 @@ static void ai_write_config_value(const char *key, const char *value) {
     free(path);
 }
 
-static void ai_set_model(const char *name) {
-    if (strlen(name) >= sizeof(g_ai.model) || strcmp(name, g_ai.model) == 0) {
+/* Modell fuer Code (text = 0) bzw. Fliesstext (text = 1, "" = wie Code)
+ * einstellen und in ~/.btnedit_ai merken. */
+static void ai_choose_model(int text, const char *name) {
+    char *dst = text ? g_ai.text_model : g_ai.model;
+    if (strlen(name) >= sizeof(g_ai.model) || strcmp(name, dst) == 0) {
         return;
     }
-    snprintf(g_ai.model, sizeof(g_ai.model), "%s", name);
-    ai_write_config_value("model", g_ai.model);
+    snprintf(dst, sizeof(g_ai.model), "%s", name);
+    ai_write_config_value(text ? "text_model" : "model", dst);
     ai_cancel();
     ghost_clear();
     g_ai_last_seq = (size_t)-1; /* mit dem neuen Modell neu fragen */
@@ -2819,7 +2939,7 @@ static void ai_on_models(unsigned long id, int status, const char *body, size_t 
         snprintf(g_ai_status, sizeof(g_ai_status), btn_tr(BTN_STR_AI_STATUS_UNREACHABLE_FMT), g_ai.url);
         ai_update_model_menu();
         if (notify || test) {
-            char *url = btn_ai_endpoint(&g_ai);
+            char *url = btn_ai_endpoint(&g_ai, 0);
             snprintf(info, sizeof(info), btn_tr(BTN_STR_AI_TEST_UNREACHABLE_FMT), url);
             free(url);
             btn_show_error_alert(btn_tr(BTN_STR_AI_TEST_TITLE), info);
@@ -2834,10 +2954,15 @@ static void ai_on_models(unsigned long id, int status, const char *body, size_t 
         } else {
             snprintf(g_ai_status, sizeof(g_ai_status), btn_tr(BTN_STR_AI_STATUS_COUNT_FMT), (int)g_ai_model_count);
         }
+        /* Fliesstext-Modell nicht (mehr) installiert: wie Code */
+        if (g_ai_model_count > 0 && g_ai.text_model[0] &&
+            btn_ai_find_model(g_ai_models, g_ai_model_count, g_ai.text_model) < 0) {
+            ai_choose_model(1, "");
+        }
         if (btn_ai_find_model(g_ai_models, g_ai_model_count, g_ai.model) < 0) {
             int pick = btn_ai_pick_model(g_ai_models, g_ai_model_count);
             if (pick >= 0) {
-                ai_set_model(g_ai_models[pick].name);
+                ai_choose_model(0, g_ai_models[pick].name);
             } else if (notify || test) {
                 btn_show_error_alert(btn_tr(BTN_STR_AI_TEST_TITLE), btn_tr(BTN_STR_AI_NO_CODER));
                 test = 0; /* ohne passendes Modell kaeme nur "not found" */
@@ -2876,6 +3001,24 @@ static void ai_test_connection(void) {
     load_ai_config(); /* Aenderungen an der Datei gelten */
     g_ai_test_after = 1;
     ai_refresh_models(0);
+}
+
+/* Klick auf ein Modell (Code oder Fliesstext) bzw. "Wie Code"; 1 = war
+ * ein solcher Eintrag. */
+static int ai_on_model_menu(int tag) {
+    if (tag == BTN_MENU_AI_TEXT_SAME) {
+        ai_choose_model(1, "");
+    } else if (tag >= BTN_MENU_AI_MODEL_BASE && tag < BTN_MENU_AI_TEXT_MODEL_BASE + BTN_MAX_AI_MODELS) {
+        int text = tag >= BTN_MENU_AI_TEXT_MODEL_BASE;
+        size_t index = (size_t)(tag - (text ? BTN_MENU_AI_TEXT_MODEL_BASE : BTN_MENU_AI_MODEL_BASE));
+        if (index < g_ai_model_count) {
+            ai_choose_model(text, g_ai_models[index].name);
+        }
+    } else {
+        return 0;
+    }
+    ai_update_model_menu();
+    return 1;
 }
 
 /* Bearbeiten > KI-Vervollstaendigung */
@@ -3824,12 +3967,7 @@ static void on_menu(int tag) {
     /* Sichern, Kopieren usw. sollen den Text sehen, der gerade getippt wird. */
     commit_marked();
 
-    if (tag >= BTN_MENU_AI_MODEL_BASE && tag < BTN_MENU_AI_MODEL_BASE + BTN_MAX_AI_MODELS) {
-        size_t index = (size_t)(tag - BTN_MENU_AI_MODEL_BASE);
-        if (index < g_ai_model_count) {
-            ai_set_model(g_ai_models[index].name);
-            ai_update_model_menu();
-        }
+    if (ai_on_model_menu(tag)) {
         return;
     }
     if (tag >= BTN_MENU_RECENT_BASE) {

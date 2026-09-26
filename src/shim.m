@@ -783,7 +783,7 @@ void btn_app_build_menu(void) {
         g_aiModelMenu = [[NSMenu alloc] initWithTitle:trs(BTN_STR_AI_MODEL_MENU)];
         NSMenuItem *modelItem = [editMenu addItemWithTitle:trs(BTN_STR_AI_MODEL_MENU) action:nil keyEquivalent:@""];
         [modelItem setSubmenu:g_aiModelMenu];
-        btn_app_set_ai_model_menu(btn_tr(BTN_STR_AI_STATUS_UNKNOWN), NULL, 0, -1);
+        btn_app_set_ai_model_menu(btn_tr(BTN_STR_AI_STATUS_UNKNOWN), NULL, 0, -1, -1);
         [editMenuItem setSubmenu:editMenu];
 
         NSMenuItem *viewMenuItem = [NSMenuItem new];
@@ -847,7 +847,13 @@ void btn_app_set_recent_files(const char **paths, int count) {
     }
 }
 
-void btn_app_set_ai_model_menu(const char *status, const char *const *names, int count, int selected) {
+/* Grauer Abschnittstitel (ohne Aktion, von der Menue-Validierung gesperrt) */
+static void add_section_title(NSMenu *menu, BtnStringId title) {
+    [menu addItemWithTitle:trs(title) action:nil keyEquivalent:@""];
+}
+
+void btn_app_set_ai_model_menu(const char *status, const char *const *names, int count, int selected,
+                               int text_selected) {
     if (!g_aiModelMenu) {
         return;
     }
@@ -861,11 +867,23 @@ void btn_app_set_ai_model_menu(const char *status, const char *const *names, int
         if (count > BTN_MAX_AI_MODELS) {
             count = BTN_MAX_AI_MODELS;
         }
-        for (int i = 0; i < count; i++) {
-            NSMenuItem *item = add_item(g_aiModelMenu, ns_from_c(names[i]), @"", BTN_MENU_AI_MODEL_BASE + i);
-            [item setState:i == selected ? NSControlStateValueOn : NSControlStateValueOff];
-        }
         if (count > 0) {
+            add_section_title(g_aiModelMenu, BTN_STR_AI_MODEL_FOR_CODE);
+            for (int i = 0; i < count; i++) {
+                NSMenuItem *item = add_item(g_aiModelMenu, ns_from_c(names[i]), @"", BTN_MENU_AI_MODEL_BASE + i);
+                [item setState:i == selected ? NSControlStateValueOn : NSControlStateValueOff];
+                [item setIndentationLevel:1];
+            }
+            [g_aiModelMenu addItem:[NSMenuItem separatorItem]];
+            add_section_title(g_aiModelMenu, BTN_STR_AI_MODEL_FOR_TEXT);
+            NSMenuItem *same = add_item(g_aiModelMenu, trs(BTN_STR_AI_TEXT_SAME), @"", BTN_MENU_AI_TEXT_SAME);
+            [same setState:text_selected == -1 ? NSControlStateValueOn : NSControlStateValueOff];
+            [same setIndentationLevel:1];
+            for (int i = 0; i < count; i++) {
+                NSMenuItem *item = add_item(g_aiModelMenu, ns_from_c(names[i]), @"", BTN_MENU_AI_TEXT_MODEL_BASE + i);
+                [item setState:i == text_selected ? NSControlStateValueOn : NSControlStateValueOff];
+                [item setIndentationLevel:1];
+            }
             [g_aiModelMenu addItem:[NSMenuItem separatorItem]];
         }
         add_item(g_aiModelMenu, trs(BTN_STR_AI_MODELS_REFRESH), @"", BTN_MENU_AI_MODELS_REFRESH);
