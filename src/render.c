@@ -377,15 +377,20 @@ static size_t decode_row_for_display(const unsigned char *raw, size_t len, UniCh
  * am Anfang seiner Spalten, alles andere -> ' ', am Ende der logischen Zeile
  * '¬'. Nur Latin-1-Zeichen, die Menlo selbst hat - ein Ersatzfont koennte
  * eine andere Breite haben und die folgenden Marker verschieben. out braucht
- * Platz fuer 6 * len + 3 Bytes; Rueckgabe: Laenge (NUL-terminiert). */
-static size_t build_invisibles(const unsigned char *raw, size_t len, int line_end, char *out) {
+ * Platz fuer INVISIBLES_BYTES_PER_BYTE * len + 3 Bytes (ein Tab: '»' und bis
+ * zu BTN_TAB_WIDTH - 1 Leerzeichen); Rueckgabe: Laenge (NUL-terminiert),
+ * *any_mark = 0, wenn es nichts zu zeichnen gibt. */
+#define INVISIBLES_BYTES_PER_BYTE (BTN_TAB_WIDTH + 1 > 2 ? BTN_TAB_WIDTH + 1 : 2)
+static size_t build_invisibles(const unsigned char *raw, size_t len, int line_end, char *out, int *any_mark) {
     size_t o = 0, col = 0, i = 0;
+    *any_mark = line_end;
     while (i < len) {
         size_t clen = btn_utf8_char_len(raw + i, len - i);
         if (raw[i] == '\t') {
             size_t stop = editor_tab_advance(col);
             memcpy(out + o, "\xC2\xBB", 2); /* » */
             o += 2;
+            *any_mark = 1;
             for (col++; col < stop; col++) {
                 out[o++] = ' ';
             }
@@ -393,6 +398,7 @@ static size_t build_invisibles(const unsigned char *raw, size_t len, int line_en
             if (raw[i] == ' ') {
                 memcpy(out + o, "\xC2\xB7", 2); /* · */
                 o += 2;
+                *any_mark = 1;
             } else {
                 out[o++] = ' ';
             }
@@ -1659,8 +1665,10 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
         if (g_show_invisibles) {
             int line_end = row_end < editor_length(ed) && gb_char_at(&ed->buffer, row_end) == '\n';
             char *raw = gb_copy_range(&ed->buffer, row_start, row_len);
-            char *marks = btn_xmalloc(btn_xmul(row_len, 6) + 3);
-            if (build_invisibles((const unsigned char *)raw, row_len, line_end, marks) > 0) {
+            char *marks = btn_xmalloc(btn_xmul(row_len, INVISIBLES_BYTES_PER_BYTE) + 3);
+            int any_mark;
+            build_invisibles((const unsigned char *)raw, row_len, line_end, marks, &any_mark);
+            if (any_mark) {
                 draw_text_at(ctx, marks, GUTTER_WIDTH + LEFT_PADDING, top_y + 4.0, get_dim_attrs());
             }
             free(marks);

@@ -1390,17 +1390,26 @@ void editor_toggle_line_comment(Editor *ed, const char *prefix) {
     size_t old_len = end - first;
     char *old = gb_copy_range(&ed->buffer, first, old_len);
 
-    /* Durchgang 1: sind alle nicht-leeren Zeilen schon kommentiert, und wie
-     * weit ist die am wenigsten eingerueckte eingerueckt? */
+    /* Durchgang 1: sind alle nicht-leeren Zeilen schon kommentiert, und
+     * welchen Leerraum-Anfang haben sie gemeinsam? Gemeinsam in Bytes, nicht
+     * "geringste Einrueckung": bei gemischten Tabs/Leerzeichen landete das
+     * Zeichen sonst mitten in der Einrueckung einer anderen Zeile. */
     int all = 1, any = 0;
-    size_t min_ind = (size_t)-1, lines = 1;
+    size_t min_ind = (size_t)-1, ref = 0, lines = 1;
     for (size_t i = 0;;) {
         if (!blank_line_at(old, old_len, i)) {
             size_t ind = leading_blank(old, old_len, i);
-            any = 1;
-            if (ind < min_ind) {
+            if (!any) {
+                ref = i;
                 min_ind = ind;
+            } else {
+                size_t k = 0;
+                while (k < min_ind && k < ind && old[i + k] == old[ref + k]) {
+                    k++;
+                }
+                min_ind = k;
             }
+            any = 1;
             if (i + ind + plen > old_len || memcmp(old + i + ind, prefix, plen) != 0) {
                 all = 0;
             }
@@ -1419,8 +1428,8 @@ void editor_toggle_line_comment(Editor *ed, const char *prefix) {
         return;
     }
 
-    /* Durchgang 2: neu aufbauen. Kommentieren setzt "prefix " auf die
-     * geringste Einrueckung (die Spalte bleibt im Block einheitlich),
+    /* Durchgang 2: neu aufbauen. Kommentieren setzt "prefix " hinter den
+     * gemeinsamen Leerraum (die Spalte bleibt im Block einheitlich),
      * Entkommentieren nimmt prefix und ein folgendes Leerzeichen weg. */
     char *out = btn_xmalloc(old_len + btn_xmul(lines, plen + 1) + 1);
     size_t o = 0;
@@ -1478,23 +1487,26 @@ void editor_duplicate_lines(Editor *ed) {
     size_t len = editor_length(ed);
     size_t block_len = end - first;
     char *block = gb_copy_range(&ed->buffer, first, block_len);
-    char *text = btn_xmalloc(block_len + 2);
-    size_t at;
+    char *text = btn_xmalloc(block_len + 3);
+    size_t at, term = 1;
     if (end < len) {
         /* "block\n" hinter das '\n' der letzten Zeile */
         memcpy(text, block, block_len);
         text[block_len] = '\n';
         at = end + 1;
     } else {
-        /* letzte Zeile ohne '\n': "\nblock" ans Ende */
-        text[0] = '\n';
-        memcpy(text + 1, block, block_len);
+        /* letzte Zeile ohne Zeilenende: "\nblock" ans Ende - mit dem
+         * Zeilenende der Zeile davor ("\r\n" in roh geladenen Dateien) */
+        int crlf = first >= 2 && gb_char_at(&ed->buffer, first - 2) == '\r';
+        term = crlf ? 2 : 1;
+        memcpy(text, crlf ? "\r\n" : "\n", term);
+        memcpy(text + term, block, block_len);
         at = end;
     }
     free(block);
-    size_t delta = block_len + 1;
+    size_t delta = block_len + term;
     size_t anchor = ed->anchor + delta, cursor = ed->cursor + delta;
-    replace_lines(ed, at, at, text, block_len + 1, anchor, cursor);
+    replace_lines(ed, at, at, text, block_len + term, anchor, cursor);
     free(text);
 }
 
@@ -1531,21 +1543,25 @@ void editor_move_lines(Editor *ed, int down) {
      * nicht, wenn sie leer ist (dann endet der Bereich mit dem '\n' von upper). */
     int ends_nl = lower_len > 0 && lower[lower_len - 1] == '\n';
 
-    /* lower + '\n' (falls es die letzte Zeile ohne war) + upper, und ohne
-     * '\n' am Ende, wenn der Bereich keins hatte. */
-    char *out = btn_xmalloc(region_len + 2);
+    /* lower + Zeilenende (falls es die letzte Zeile ohne war) + upper, und
+     * ohne Zeilenende am Schluss, wenn der Bereich keins hatte. Das
+     * Zeilenende wandert von upper zu lower - "\r\n" in roh geladenen
+     * Dateien als Ganzes, sonst bliebe ein einzelnes '\r' zurueck. */
+    size_t term = upper_len >= 2 && upper[upper_len - 2] == '\r' ? 2 : 1;
+    char *out = btn_xmalloc(region_len + 3);
     size_t o = 0;
     memcpy(out, lower, lower_len);
     o = lower_len;
     size_t lower_nl_len = lower_len;
     if (!ends_nl) {
-        out[o++] = '\n';
-        lower_nl_len++;
+        memcpy(out + o, upper + upper_len - term, term);
+        o += term;
+        lower_nl_len += term;
     }
     memcpy(out + o, upper, upper_len);
     o += upper_len;
     if (!ends_nl) {
-        o--; /* das '\n' von upper */
+        o -= term; /* das Zeilenende von upper */
     }
     /* Neue Lage des Blocks: oben am Bereichsanfang bzw. hinter lower */
     size_t block_new = down ? region_start + lower_nl_len : region_start;

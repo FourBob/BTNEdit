@@ -36,9 +36,9 @@ Graphics/Core Text gezeichnet.
   einen Backslash im Ersetzen-Feld); "Alle ersetzen" ist ein einziger
   Undo-Schritt
 - Gehe zu Zeile (`⌘L`)
-- Zeilen-Befehle: Kommentar ein/aus (`⌘/`, mit `//` bzw. `#` je nach
-  Sprache, auf der Einrückung des Blocks), Zeilen duplizieren (`⇧⌘D`),
-  Zeilen nach oben/unten verschieben (`⌥⌘[` / `⌥⌘]`) - jeweils für alle
+- Zeilen-Befehle: Kommentar ein/aus (`⌘/`, mit `//`, `#` bzw. `;` (INI) je
+  nach Sprache, hinter der gemeinsamen Einrückung des Blocks), Zeilen duplizieren (`⇧⌘D`),
+  Zeilen nach oben/unten verschieben (`⌥⌘[` / `⌥⌘]` oder `⌥⌘↑` / `⌥⌘↓`) - jeweils für alle
   Zeilen der Auswahl und als ein Undo-Schritt
 - Unsichtbare Zeichen einblenden (`⌥⌘I`): Leerzeichen `·`, Tabs `»`,
   Zeilenenden `¬`; wird über Neustarts hinweg gemerkt
@@ -200,7 +200,7 @@ in die Liste `TESTS` eintragen.
 | Zeilen ein-/ausrücken (Selektion über mehrere Zeilen) | `Tab` / `⇧Tab` |
 | Kommentar ein/aus | `⌘/` |
 | Zeilen duplizieren | `⇧⌘D` |
-| Zeilen nach oben / unten verschieben | `⌥⌘[` / `⌥⌘]` |
+| Zeilen nach oben / unten verschieben | `⌥⌘[` / `⌥⌘]` oder `⌥⌘↑` / `⌥⌘↓` |
 | Unsichtbare Zeichen einblenden | `⌥⌘I` |
 | Nächster / vorheriger Tab | `⌃Tab` / `⌃⇧Tab` oder `⇧⌘]` / `⇧⌘[` |
 | Im Dock ablegen / Vollbild | `⌘M` / `⌃⌘F` |

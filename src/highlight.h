@@ -31,8 +31,8 @@ typedef struct BtnLangSpec BtnLangSpec;
  * oder path==NULL (dann keine Hervorhebung). */
 const BtnLangSpec *btn_highlight_lang_for_path(const char *path);
 
-/* Zeichen fuer einen Zeilenkommentar ("//" bzw. "#"), NULL wenn die Sprache
- * keinen hat (oder lang == NULL) - fuer "Kommentar umschalten". */
+/* Zeichen fuer "Kommentar ein/aus" ("//", "#", ";" bei INI), NULL wenn die
+ * Sprache keins hat (oder lang == NULL, z.B. .config - oft XML). */
 const char *btn_highlight_line_comment(const BtnLangSpec *lang);
 
 /* Tokenisiert eine einzelne logische Zeile. starts_in_comment gibt an, ob

@@ -232,8 +232,9 @@ int editor_indent_uses_spaces(Editor *ed);
  * auf ihrem Text.
  * editor_toggle_line_comment(): sind alle nicht-leeren Zeilen schon mit
  *   prefix (z.B. "//", "#") kommentiert, wird prefix samt einem folgenden
- *   Leerzeichen entfernt; sonst wird "prefix " auf die geringste Einrueckung
- *   des Blocks gesetzt. Leere Zeilen bleiben unveraendert.
+ *   Leerzeichen entfernt; sonst wird "prefix " hinter den Leerraum gesetzt,
+ *   mit dem alle Zeilen des Blocks beginnen. Leere Zeilen bleiben
+ *   unveraendert.
  * editor_duplicate_lines(): Kopie der Zeilen direkt darunter; die Selektion
  *   wandert in die Kopie (erneut ausfuehren = weiter duplizieren).
  * editor_move_lines(): tauscht die Zeilen mit der darueber (down = 0) bzw.

@@ -26,11 +26,16 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
 
 - Zeilen-Befehle: "Kommentar ein/aus" kennt nur Zeilenkommentare (`//`,
   `#`, `;`) und die Sprache nur über die Dateiendung - unbenannte Dokumente,
-  Markdown, SVG, STL, DXF und unbekannte Endungen bekommen einen Signalton
-  statt Blockkommentaren (`/* */`, `<!-- -->`). Endet eine Auswahl genau am
+  Markdown, SVG, STL, DXF, `.config` (oft XML) und unbekannte Endungen
+  bekommen einen Signalton statt Blockkommentaren (`/* */`, `<!-- -->`).
+  Eine Zeile, die nur aus dem Kommentarzeichen besteht (`//`), ist nach dem
+  Entkommentieren leer und wird beim nächsten ⌘/ als Leerzeile übersprungen. Endet eine Auswahl genau am
   Anfang einer Zeile, gehört diese Zeile nicht dazu (wie beim Einrücken);
   schiebt man so einen Block ans Dokumentende, kann der Rückweg eine
-  angehängte Leerzeile anders zuordnen. Die unsichtbaren Zeichen zeigen
+  angehängte Leerzeile anders zuordnen. Die Markierungen für unsichtbare
+  Zeichen folgen dem Spaltenraster (ein Zeichen = eine Spalte, siehe unten):
+  hinter doppelt breiten CJK-Zeichen, Emoji oder kombinierenden Zeichen
+  stehen sie so versetzt wie der Cursor dort. Die unsichtbaren Zeichen zeigen
   kein `\r` (in roh geladenen Dateien mit gemischten Zeilenenden) und kein
   geschütztes Leerzeichen gesondert an.
 

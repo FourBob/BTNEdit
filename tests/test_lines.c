@@ -60,6 +60,16 @@ static void test_comment(void) {
     editor_toggle_line_comment(&ed, "//");
     CHECK(text_is("    a\n        b\n") && ed.anchor == 4 && ed.cursor == 12, "and back, selection too");
 
+    set("        foo\n\t\tbar\n", 0, 16);
+    editor_toggle_line_comment(&ed, "//");
+    CHECK(text_is("//         foo\n// \t\tbar\n"),
+          "tabs vs spaces: no common whitespace -> column 0, indentation not split");
+    set("\t\tfoo\n\t  bar", 0, 13);
+    editor_toggle_line_comment(&ed, "//");
+    CHECK(text_is("\t// \tfoo\n\t//   bar"), "common whitespace prefix (one tab)");
+    editor_toggle_line_comment(&ed, "//");
+    CHECK(text_is("\t\tfoo\n\t  bar"), "and back");
+
     set("// a\nb\n", 0, 6);
     editor_toggle_line_comment(&ed, "//");
     CHECK(text_is("// // a\n// b\n"), "mixed block: everything gets commented");
@@ -201,6 +211,20 @@ static void test_move(void) {
     editor_move_lines(&ed, 1);
     CHECK(text_is("1\n4\n22\n333\n") && ed.anchor == 5 && ed.cursor == 9, "block down twice");
 
+    /* roh geladene CRLF-Datei (gemischte Zeilenenden): "\r\n" wandert als Ganzes */
+    set("a\r\nb\r\nc", 7, 7);
+    editor_move_lines(&ed, 0);
+    CHECK(text_is("a\r\nc\r\nb"), "CRLF: last line up keeps CRLF, no lone CR");
+    set("a\r\nb", 0, 0);
+    editor_move_lines(&ed, 1);
+    CHECK(text_is("b\r\na"), "CRLF: first line down into the last line");
+    set("a\r\nb", 3, 3);
+    editor_duplicate_lines(&ed);
+    CHECK(text_is("a\r\nb\r\nb") && ed.cursor == 6, "CRLF: duplicate the last line");
+    set("a\r\nb\r\n", 0, 0);
+    editor_duplicate_lines(&ed);
+    CHECK(text_is("a\r\na\r\nb\r\n"), "CRLF: duplicate a middle line");
+
     set("a\nb\n", 4, 4); /* leere letzte Zeile */
     editor_move_lines(&ed, 0);
     CHECK(text_is("a\n\nb") && ed.cursor == 2, "empty last line up");
@@ -273,12 +297,15 @@ static size_t char_count(const char *s) {
 
 static void test_invisibles(void) {
     char out[256];
-    build_invisibles((const unsigned char *)"a b\tc", 5, 1, out);
+    int any;
+    build_invisibles((const unsigned char *)"a b\tc", 5, 1, out, &any);
     CHECK(strcmp(out, " \xC2\xB7 \xC2\xBB \xC2\xAC") == 0, "space, tab, line end (%s)", out);
-    build_invisibles((const unsigned char *)"\tx", 2, 0, out);
+    build_invisibles((const unsigned char *)"\tx", 2, 0, out, &any);
     CHECK(strcmp(out, "\xC2\xBB    ") == 0, "tab fills its columns (then x), no line end mark");
-    build_invisibles((const unsigned char *)"", 0, 1, out);
-    CHECK(strcmp(out, "\xC2\xAC") == 0, "empty line: just the line end");
+    build_invisibles((const unsigned char *)"", 0, 1, out, &any);
+    CHECK(strcmp(out, "\xC2\xAC") == 0 && any, "empty line: just the line end");
+    build_invisibles((const unsigned char *)"abc", 3, 0, out, &any);
+    CHECK(!any, "nothing to mark: nothing drawn");
 
     /* Fuzz gegen die Spaltenregel des Editors: jeder Marker genau auf der
      * Spalte seines Zeichens, Gesamtbreite = Breite der Row */
@@ -296,7 +323,11 @@ static void test_invisibles(void) {
         }
         int line_end = rand() % 2;
         char *marks = malloc(n * 6 + 3);
-        build_invisibles((const unsigned char *)row, n, line_end, marks);
+        build_invisibles((const unsigned char *)row, n, line_end, marks, &any);
+        int has = line_end || memchr(row, ' ', n) || memchr(row, '\t', n);
+        if (any != has) {
+            bad++;
+        }
         editor_set_text(&ed, row, n);
         size_t width = editor_visual_column_in_range(&ed, 0, n);
         if (char_count(marks) != width + (size_t)line_end) {
@@ -354,7 +385,9 @@ static void test_comment_prefix(void) {
     CHECK(strcmp(btn_highlight_line_comment(btn_highlight_lang_for_path("a.c")), "//") == 0, "C: //");
     CHECK(strcmp(btn_highlight_line_comment(btn_highlight_lang_for_path("a.swift")), "//") == 0, "Swift: //");
     CHECK(strcmp(btn_highlight_line_comment(btn_highlight_lang_for_path("a.py")), "#") == 0, "Python: #");
-    CHECK(strcmp(btn_highlight_line_comment(btn_highlight_lang_for_path("a.ini")), "#") == 0, "INI: #");
+    CHECK(strcmp(btn_highlight_line_comment(btn_highlight_lang_for_path("a.ini")), ";") == 0, "INI: ; (Windows INI knows only ;)");
+    CHECK(btn_highlight_line_comment(btn_highlight_lang_for_path("web.config")) == NULL, ".config (often XML): none");
+    CHECK(strcmp(btn_highlight_line_comment(btn_highlight_lang_for_path("a.sh")), "#") == 0, "Shell: #");
     CHECK(btn_highlight_line_comment(btn_highlight_lang_for_path("a.md")) == NULL, "Markdown: none");
     CHECK(btn_highlight_line_comment(btn_highlight_lang_for_path("a.txt")) == NULL, "unknown: none");
     CHECK(btn_highlight_line_comment(NULL) == NULL, "no language: none");

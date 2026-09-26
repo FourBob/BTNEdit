@@ -2725,6 +2725,8 @@ static void insert_typed_chars(Editor *ed, const char *chars) {
     }
 }
 
+static void perform_line_command(int tag);
+
 static void on_key(const char *characters, unsigned short keycode, unsigned long modifierFlags) {
     int shift = (modifierFlags & BTN_MOD_SHIFT) != 0;
     int option = (modifierFlags & BTN_MOD_OPTION) != 0;
@@ -2752,6 +2754,17 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
     }
 
     Editor *ed = &active_doc()->editor;
+
+    /* Wahl+Cmd+Pfeil hoch/runter: Zeilen verschieben - zweites Kuerzel
+     * neben Wahl+Cmd+[ / ], das auf Tastaturen ohne eigene [-Taste
+     * (deutsch: Wahl+5) schlecht zu greifen ist. */
+    if (command && option && !shift && (keycode == KEYCODE_UP || keycode == KEYCODE_DOWN)) {
+        perform_line_command(keycode == KEYCODE_UP ? BTN_MENU_MOVE_LINES_UP : BTN_MENU_MOVE_LINES_DOWN);
+        sync_window_state();
+        sync_scroll_to_cursor();
+        btn_app_request_redraw();
+        return;
+    }
 
     switch (keycode) {
         case KEYCODE_LEFT:
