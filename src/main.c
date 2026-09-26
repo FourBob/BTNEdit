@@ -2436,6 +2436,9 @@ static void restore_recovered_documents(void) {
     char **files;
     size_t count = btn_recovery_find_orphans(g_recovery_dir, g_recovery_run, &files);
     if (count == 0) {
+        /* Sperrdateien frueherer, normal beendeter Laeufe - sonst sammelte
+         * sich bei jedem Start eine leere Datei an. */
+        btn_recovery_cleanup_locks(g_recovery_dir, g_recovery_run);
         return;
     }
     char info[512];

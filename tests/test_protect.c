@@ -624,9 +624,16 @@ static void test_restore(void) {
     n = btn_recovery_find_orphans(g_recovery_dir, g_recovery_run, &files);
     btn_recovery_free_list(files, n);
     CHECK(g_choice_count == 1 && n == 0 && g_doc_count == 1 && doc_is_blank(&g_docs[0]), "discard: files removed, nothing opened");
+    char old_lock[600];
+    snprintf(old_lock, sizeof old_lock, "%s/555-1.lock", g_recovery_dir);
+    write_raw(old_lock, ""); /* frueherer, normal beendeter Lauf */
     answers(1, 1);
     restore_recovered_documents();
     CHECK(g_choice_count == 0, "nothing left: no dialog");
+    CHECK(access(old_lock, F_OK) != 0, "lock file of an earlier run removed at start");
+    char own_lock[600];
+    snprintf(own_lock, sizeof own_lock, "%s/%s.lock", g_recovery_dir, g_recovery_run);
+    CHECK(access(own_lock, F_OK) == 0, "own lock kept");
     reset_docs();
 }
 
