@@ -194,6 +194,22 @@ const BtnLangSpec *btn_highlight_lang_for_path(const char *path) {
     return NULL;
 }
 
+const char *btn_highlight_line_comment(const BtnLangSpec *lang) {
+    if (!lang) {
+        return NULL;
+    }
+    if (lang->line_comment_slash) {
+        return "//";
+    }
+    if (lang->line_comment_hash) {
+        return "#";
+    }
+    if (lang->line_comment_semicolon) {
+        return ";";
+    }
+    return NULL;
+}
+
 static int is_keyword(const BtnLangSpec *lang, const char *word, size_t len) {
     if (!lang || !lang->keywords) {
         return 0;

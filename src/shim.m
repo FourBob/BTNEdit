@@ -31,6 +31,8 @@ static NSMenu *g_recentMenu = nil;
  * Haekchen per btn_app_set_line_ending_menu(). */
 static NSMenuItem *g_eolItems[3];
 static BOOL g_eolMenuEnabled = YES;
+static NSMenuItem *g_invisiblesItem = nil;
+static BOOL g_invisiblesOn = NO; /* auch vor dem Menuebau gesetzt (Einstellung) */
 
 /* Maustaste gedrueckt und ihre letzte Position (View-Koordinaten) - der
  * Autoscroll-Takt schickt sie erneut, solange die Maus still steht. */
@@ -516,10 +518,11 @@ static void btn_activate_and_focus_window(void) {
 
 static BTNMenuTarget *g_menuTarget = nil;
 
-static void add_item(NSMenu *menu, NSString *title, NSString *key, int tag) {
+static NSMenuItem *add_item(NSMenu *menu, NSString *title, NSString *key, int tag) {
     NSMenuItem *item = [menu addItemWithTitle:title action:@selector(menuAction:) keyEquivalent:key];
     [item setTarget:g_menuTarget];
     [item setTag:tag];
+    return item;
 }
 
 /* Kurzform fuer btn_tr() + Umwandlung in NSString - btn_tr() gibt bewusst
@@ -758,6 +761,14 @@ void btn_app_build_menu(void) {
         add_item(editMenu, trs(BTN_STR_FIND_PREVIOUS), @"G", BTN_MENU_FIND_PREVIOUS);
         add_item(editMenu, trs(BTN_STR_USE_SELECTION_FOR_FIND), @"e", BTN_MENU_USE_SELECTION_FOR_FIND);
         add_item(editMenu, trs(BTN_STR_GOTO_LINE), @"l", BTN_MENU_GOTO_LINE);
+        [editMenu addItem:[NSMenuItem separatorItem]];
+        add_item(editMenu, trs(BTN_STR_TOGGLE_COMMENT), @"/", BTN_MENU_TOGGLE_COMMENT);
+        add_item(editMenu, trs(BTN_STR_DUPLICATE_LINES), @"D", BTN_MENU_DUPLICATE_LINES);
+        /* Wie in Xcode; Wahl+Pfeil ist schon das zeilenweise Springen */
+        NSMenuItem *moveUp = add_item(editMenu, trs(BTN_STR_MOVE_LINES_UP), @"[", BTN_MENU_MOVE_LINES_UP);
+        [moveUp setKeyEquivalentModifierMask:NSEventModifierFlagOption | NSEventModifierFlagCommand];
+        NSMenuItem *moveDown = add_item(editMenu, trs(BTN_STR_MOVE_LINES_DOWN), @"]", BTN_MENU_MOVE_LINES_DOWN);
+        [moveDown setKeyEquivalentModifierMask:NSEventModifierFlagOption | NSEventModifierFlagCommand];
         [editMenuItem setSubmenu:editMenu];
 
         NSMenuItem *viewMenuItem = [NSMenuItem new];
@@ -766,6 +777,10 @@ void btn_app_build_menu(void) {
         add_item(viewMenu, trs(BTN_STR_ZOOM_IN), @"=", BTN_MENU_ZOOM_IN);
         add_item(viewMenu, trs(BTN_STR_ZOOM_OUT), @"-", BTN_MENU_ZOOM_OUT);
         add_item(viewMenu, trs(BTN_STR_ZOOM_RESET), @"0", BTN_MENU_ZOOM_RESET);
+        [viewMenu addItem:[NSMenuItem separatorItem]];
+        g_invisiblesItem = add_item(viewMenu, trs(BTN_STR_SHOW_INVISIBLES), @"i", BTN_MENU_SHOW_INVISIBLES);
+        [g_invisiblesItem setKeyEquivalentModifierMask:NSEventModifierFlagOption | NSEventModifierFlagCommand];
+        [g_invisiblesItem setState:g_invisiblesOn ? NSControlStateValueOn : NSControlStateValueOff];
         [viewMenuItem setSubmenu:viewMenu];
 
         /* Fenster: die AppKit-Standardaktionen (target nil -> Responder-Kette
@@ -815,6 +830,11 @@ void btn_app_set_recent_files(const char **paths, int count) {
             [empty setEnabled:NO];
         }
     }
+}
+
+void btn_app_set_show_invisibles_menu(int on) {
+    g_invisiblesOn = on ? YES : NO;
+    [g_invisiblesItem setState:on ? NSControlStateValueOn : NSControlStateValueOff];
 }
 
 void btn_app_set_line_ending_menu(int index, int enabled) {

@@ -39,7 +39,12 @@ enum {
     BTN_MENU_FIND_PREVIOUS,
     BTN_MENU_USE_SELECTION_FOR_FIND,
     BTN_MENU_NEXT_TAB,
-    BTN_MENU_PREVIOUS_TAB
+    BTN_MENU_PREVIOUS_TAB,
+    BTN_MENU_TOGGLE_COMMENT,
+    BTN_MENU_DUPLICATE_LINES,
+    BTN_MENU_MOVE_LINES_UP,
+    BTN_MENU_MOVE_LINES_DOWN,
+    BTN_MENU_SHOW_INVISIBLES
 };
 
 /* Tags fuer die dynamischen "Zuletzt geoeffnet"-Menuepunkte liegen ab hier,
@@ -174,6 +179,9 @@ void btn_beep(void);
  * (0 = LF, 1 = CRLF, 2 = CR, wie BtnEol; -1 = keins, z.B. bei gemischten
  * Zeilenenden). enabled = 0 sperrt die drei Eintraege (Binaerdatei). */
 void btn_app_set_line_ending_menu(int index, int enabled);
+
+/* Haekchen bei Darstellung > Unsichtbare Zeichen einblenden. */
+void btn_app_set_show_invisibles_menu(int on);
 void btn_app_run(void);
 
 /* Systemweite Zwischenablage. btn_pasteboard_set_string nimmt bytes+len

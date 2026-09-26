@@ -1246,18 +1246,44 @@ static int blank_line_at(const char *t, size_t len, size_t i) {
  * aufgebaut und als EIN Ersetzen angewendet - zwei Undo-Records statt einem
  * pro Zeile (Alles auswaehlen + Tab bei 1 Mio. Zeilen kostete sonst ein
  * Vielfaches der Dateigroesse). Anker und Cursor bleiben auf ihrem Text. */
-static void indent_lines(Editor *ed, int outdent) {
+/* Die Zeilen, die die Selektion beruehrt (ohne Selektion: die des Cursors):
+ * [*first, *end) - *first am Zeilenanfang, *end auf dem '\n' der letzten
+ * Zeile bzw. am Textende. Eine Zeile, auf deren Spalte 0 die Selektion nur
+ * endet, zaehlt nicht mit. */
+static void selected_lines(Editor *ed, size_t *first, size_t *end) {
     size_t s = editor_selection_start(ed), e = editor_selection_end(ed);
     size_t len = editor_length(ed);
     size_t last = e;
     if (e > s && gb_char_at(&ed->buffer, e - 1) == '\n') {
         last = e - 1;
     }
-    size_t first = line_start_at(ed, s);
-    size_t range_end = last;
-    while (range_end < len && gb_char_at(&ed->buffer, range_end) != '\n') {
-        range_end++;
+    *first = line_start_at(ed, s);
+    *end = last;
+    while (*end < len && gb_char_at(&ed->buffer, *end) != '\n') {
+        (*end)++;
     }
+}
+
+/* Ersetzt [from, to) durch text als EIN Undo-Schritt und setzt danach Anker
+ * und Cursor. */
+static void replace_lines(Editor *ed, size_t from, size_t to, const char *text, size_t n, size_t anchor,
+                          size_t cursor) {
+    editor_begin_undo_group(ed);
+    editor_set_cursor(ed, from, 0);
+    editor_set_cursor(ed, to, 1);
+    if (n == 0) {
+        editor_delete_selection(ed);
+    } else {
+        editor_insert_text(ed, text, n);
+    }
+    editor_end_undo_group(ed);
+    editor_set_cursor(ed, anchor, 0);
+    editor_set_cursor(ed, cursor, 1);
+}
+
+static void indent_lines(Editor *ed, int outdent) {
+    size_t first, range_end;
+    selected_lines(ed, &first, &range_end);
     size_t old_len = range_end - first;
     char *old = gb_copy_range(&ed->buffer, first, old_len);
 
@@ -1309,17 +1335,8 @@ static void indent_lines(Editor *ed, int outdent) {
         }
     }
     if (o != old_len || memcmp(out, old, o) != 0) {
-        editor_begin_undo_group(ed);
-        editor_set_cursor(ed, first, 0);
-        editor_set_cursor(ed, range_end, 1);
-        if (o == 0) {
-            editor_delete_selection(ed);
-        } else {
-            editor_insert_text(ed, out, o);
-        }
-        editor_end_undo_group(ed);
-        editor_set_cursor(ed, (size_t)((long)pos[0] + shift[0]), 0);
-        editor_set_cursor(ed, (size_t)((long)pos[1] + shift[1]), 1);
+        replace_lines(ed, first, range_end, out, o, (size_t)((long)pos[0] + shift[0]),
+                      (size_t)((long)pos[1] + shift[1]));
     }
     free(out);
     free(old);
@@ -1350,4 +1367,191 @@ void editor_tab_key(Editor *ed, int outdent) {
         editor_insert_text(ed, "\t", 1);
     }
     editor_end_undo_group(ed);
+}
+
+/* ---- Zeilen-Befehle: Kommentar, Duplizieren, Verschieben ---- */
+
+/* Laenge des Leerraums (Leerzeichen/Tabs) am Anfang der Zeile ab t[i]. */
+static size_t leading_blank(const char *t, size_t len, size_t i) {
+    size_t n = 0;
+    while (i + n < len && (t[i + n] == ' ' || t[i + n] == '\t')) {
+        n++;
+    }
+    return n;
+}
+
+void editor_toggle_line_comment(Editor *ed, const char *prefix) {
+    size_t plen = prefix ? strlen(prefix) : 0;
+    if (plen == 0) {
+        return;
+    }
+    size_t first, end;
+    selected_lines(ed, &first, &end);
+    size_t old_len = end - first;
+    char *old = gb_copy_range(&ed->buffer, first, old_len);
+
+    /* Durchgang 1: sind alle nicht-leeren Zeilen schon kommentiert, und wie
+     * weit ist die am wenigsten eingerueckte eingerueckt? */
+    int all = 1, any = 0;
+    size_t min_ind = (size_t)-1, lines = 1;
+    for (size_t i = 0;;) {
+        if (!blank_line_at(old, old_len, i)) {
+            size_t ind = leading_blank(old, old_len, i);
+            any = 1;
+            if (ind < min_ind) {
+                min_ind = ind;
+            }
+            if (i + ind + plen > old_len || memcmp(old + i + ind, prefix, plen) != 0) {
+                all = 0;
+            }
+        }
+        while (i < old_len && old[i] != '\n') {
+            i++;
+        }
+        if (i >= old_len) {
+            break;
+        }
+        i++;
+        lines++;
+    }
+    if (!any) {
+        free(old); /* nur leere Zeilen: nichts zu kommentieren */
+        return;
+    }
+
+    /* Durchgang 2: neu aufbauen. Kommentieren setzt "prefix " auf die
+     * geringste Einrueckung (die Spalte bleibt im Block einheitlich),
+     * Entkommentieren nimmt prefix und ein folgendes Leerzeichen weg. */
+    char *out = btn_xmalloc(old_len + btn_xmul(lines, plen + 1) + 1);
+    size_t o = 0;
+    size_t pos[2] = { ed->anchor, ed->cursor };
+    long shift[2] = { 0, 0 };
+    for (size_t i = 0;;) {
+        size_t line = first + i;
+        if (!blank_line_at(old, old_len, i)) {
+            if (all) {
+                size_t ind = leading_blank(old, old_len, i);
+                size_t n = plen + (i + ind + plen < old_len && old[i + ind + plen] == ' ');
+                memcpy(out + o, old + i, ind);
+                o += ind;
+                size_t at = line + ind;
+                for (int j = 0; j < 2; j++) {
+                    if (pos[j] > at) {
+                        shift[j] -= (long)((pos[j] < at + n ? pos[j] : at + n) - at);
+                    }
+                }
+                i += ind + n;
+            } else {
+                memcpy(out + o, old + i, min_ind);
+                o += min_ind;
+                memcpy(out + o, prefix, plen);
+                out[o + plen] = ' ';
+                o += plen + 1;
+                size_t at = line + min_ind;
+                for (int j = 0; j < 2; j++) {
+                    /* Am Zeilenanfang bleibt eine Position stehen (die
+                     * Selektion umfasst dann auch das neue Zeichen). */
+                    if (pos[j] > at || (pos[j] == at && at != line)) {
+                        shift[j] += (long)(plen + 1);
+                    }
+                }
+                i += min_ind;
+            }
+        }
+        while (i < old_len && old[i] != '\n') {
+            out[o++] = old[i++];
+        }
+        if (i < old_len) {
+            out[o++] = old[i++];
+        } else {
+            break;
+        }
+    }
+    replace_lines(ed, first, end, out, o, (size_t)((long)pos[0] + shift[0]), (size_t)((long)pos[1] + shift[1]));
+    free(out);
+    free(old);
+}
+
+void editor_duplicate_lines(Editor *ed) {
+    size_t first, end;
+    selected_lines(ed, &first, &end);
+    size_t len = editor_length(ed);
+    size_t block_len = end - first;
+    char *block = gb_copy_range(&ed->buffer, first, block_len);
+    char *text = btn_xmalloc(block_len + 2);
+    size_t at;
+    if (end < len) {
+        /* "block\n" hinter das '\n' der letzten Zeile */
+        memcpy(text, block, block_len);
+        text[block_len] = '\n';
+        at = end + 1;
+    } else {
+        /* letzte Zeile ohne '\n': "\nblock" ans Ende */
+        text[0] = '\n';
+        memcpy(text + 1, block, block_len);
+        at = end;
+    }
+    free(block);
+    size_t delta = block_len + 1;
+    size_t anchor = ed->anchor + delta, cursor = ed->cursor + delta;
+    replace_lines(ed, at, at, text, block_len + 1, anchor, cursor);
+    free(text);
+}
+
+void editor_move_lines(Editor *ed, int down) {
+    size_t first, end;
+    selected_lines(ed, &first, &end);
+    size_t len = editor_length(ed);
+    size_t block_end = end < len ? end + 1 : end; /* samt '\n' */
+    size_t region_start, region_end, upper_len;
+    if (!down) {
+        if (first == 0) {
+            return;
+        }
+        region_start = line_start_at(ed, first - 1);
+        region_end = block_end;
+        upper_len = first - region_start; /* die Zeile darueber */
+    } else {
+        if (end >= len) {
+            return;
+        }
+        size_t next_end = end + 1;
+        while (next_end < len && gb_char_at(&ed->buffer, next_end) != '\n') {
+            next_end++;
+        }
+        region_start = first;
+        region_end = next_end < len ? next_end + 1 : next_end;
+        upper_len = block_end - first; /* der Block selbst */
+    }
+    size_t region_len = region_end - region_start;
+    char *r = gb_copy_range(&ed->buffer, region_start, region_len);
+    const char *upper = r, *lower = r + upper_len;
+    size_t lower_len = region_len - upper_len;
+    /* Hat die untere Zeile ein '\n'? Nicht, wenn sie die letzte ist - auch
+     * nicht, wenn sie leer ist (dann endet der Bereich mit dem '\n' von upper). */
+    int ends_nl = lower_len > 0 && lower[lower_len - 1] == '\n';
+
+    /* lower + '\n' (falls es die letzte Zeile ohne war) + upper, und ohne
+     * '\n' am Ende, wenn der Bereich keins hatte. */
+    char *out = btn_xmalloc(region_len + 2);
+    size_t o = 0;
+    memcpy(out, lower, lower_len);
+    o = lower_len;
+    size_t lower_nl_len = lower_len;
+    if (!ends_nl) {
+        out[o++] = '\n';
+        lower_nl_len++;
+    }
+    memcpy(out + o, upper, upper_len);
+    o += upper_len;
+    if (!ends_nl) {
+        o--; /* das '\n' von upper */
+    }
+    /* Neue Lage des Blocks: oben am Bereichsanfang bzw. hinter lower */
+    size_t block_new = down ? region_start + lower_nl_len : region_start;
+    size_t anchor = block_new + (ed->anchor - first);
+    size_t cursor = block_new + (ed->cursor - first);
+    replace_lines(ed, region_start, region_end, out, o, anchor, cursor);
+    free(out);
+    free(r);
 }

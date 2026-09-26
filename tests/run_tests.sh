@@ -44,6 +44,7 @@ TESTS=(
     "test_indent|$EDITOR_SRC|"
     "test_textinput|$EDITOR_SRC src/textinput.c|"
     "test_shortcuts|$EDITOR_SRC|"
+    "test_lines|$EDITOR_SRC|"
     "test_mouse|$EDITOR_SRC -Itests/stubs|"
     "test_recovery|src/recovery.c src/filestamp.c|"
     "test_protect|$EDITOR_SRC src/recovery.c src/filestamp.c|"

@@ -64,6 +64,8 @@ HEADERS = {
         "btn_scrollbar_knob", "btn_scrollbar_row_for_knob_top", "typedef:FindBarGeometry",
         "find_bar_geometry", "btn_text_cursor_rects"]),
     "drag_type_extracted.h": ("main.c", ["typedef:BtnDrag"]),
+    "invisibles_extracted.h": ("render.c", ["build_invisibles"]),
+    "linecmd_extracted.h": ("main.c", ["perform_line_command"]),
     "protect_extracted.h": ("main.c", [
         "#BTN_RECOVERY_INTERVAL", "#BTN_RECOVERY_BYTES_PER_SECOND", "#BTN_MAX_FILE_MB", "#BTN_MAX_FILE_SIZE",
         "typedef:BtnReadResult", "monotonic_seconds", "active_doc", "discard_recovery", "basename_of", "doc_display_name", "set_doc_path",

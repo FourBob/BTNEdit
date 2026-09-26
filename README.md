@@ -36,6 +36,12 @@ Graphics/Core Text gezeichnet.
   einen Backslash im Ersetzen-Feld); "Alle ersetzen" ist ein einziger
   Undo-Schritt
 - Gehe zu Zeile (`⌘L`)
+- Zeilen-Befehle: Kommentar ein/aus (`⌘/`, mit `//` bzw. `#` je nach
+  Sprache, auf der Einrückung des Blocks), Zeilen duplizieren (`⇧⌘D`),
+  Zeilen nach oben/unten verschieben (`⌥⌘[` / `⌥⌘]`) - jeweils für alle
+  Zeilen der Auswahl und als ein Undo-Schritt
+- Unsichtbare Zeichen einblenden (`⌥⌘I`): Leerzeichen `·`, Tabs `»`,
+  Zeilenenden `¬`; wird über Neustarts hinweg gemerkt
 - Dark Mode - folgt automatisch dem System-Erscheinungsbild
 - Schriftgröße anpassen (`⌘+`/`⌘-`/`⌘0` für Zurücksetzen) - wird über
   Neustarts hinweg gemerkt
@@ -153,6 +159,7 @@ umbenennt, muss sie dort nachziehen.
 | `test_textinput` | Eingabemethoden: UTF-16-Umrechnung, nachgestellte Abläufe (Tottaste, Pinyin, Akzent-Menü, Emoji, Suchfeld) mit dem Code aus `main.c` |
 | `test_shortcuts` | Weitersuchen, Auswahl für Suche (auch mit NUL-Byte), Tab-Wechsel mit Umlauf |
 | `test_mouse` | Scrollbalken-Geometrie samt Umkehrung, I-Beam-Flächen, Autoscroll-Tempo; `on_mouse()` aus `main.c` mit echtem Layout: Markieren mit Autoscroll-Takt, Knopf ziehen, Seite blättern |
+| `test_lines` | Kommentar ein/aus (Einrückung, Leerzeilen, `#`, Selektion, Undo), Duplizieren, Verschieben (Ränder, letzte Zeile ohne Umbruch), Fuzz-Rückwege; Markierungen für unsichtbare Zeichen gegen die Spaltenregel; Menü-Verdrahtung aus `main.c` |
 | `test_indent` | Auto-Indent bei Return, Tab/⇧Tab über mehrere Zeilen, Tab vs. Leerzeichen, Fuzz: Ausrücken nach Einrücken = Original |
 | `test_save_atomic`, `test_save_links_perms`, `test_file_io` | atomares Sichern, Symlinks, Schreibschutz, Laden, Recent-Liste |
 | `test_close_flow` | Schließen/Beenden verliert nie ungesicherte Änderungen |
@@ -191,5 +198,9 @@ in die Liste `TESTS` eintragen.
 | Vergrößern / Verkleinern / Tatsächliche Größe | `⌘+` / `⌘-` / `⌘0` |
 | Wort-/Zeilensprung, Zeilenanfang/-ende | `⌥←/→`, `⌘←/→`, Pos1/Ende |
 | Zeilen ein-/ausrücken (Selektion über mehrere Zeilen) | `Tab` / `⇧Tab` |
+| Kommentar ein/aus | `⌘/` |
+| Zeilen duplizieren | `⇧⌘D` |
+| Zeilen nach oben / unten verschieben | `⌥⌘[` / `⌥⌘]` |
+| Unsichtbare Zeichen einblenden | `⌥⌘I` |
 | Nächster / vorheriger Tab | `⌃Tab` / `⌃⇧Tab` oder `⇧⌘]` / `⇧⌘[` |
 | Im Dock ablegen / Vollbild | `⌘M` / `⌃⌘F` |

@@ -226,6 +226,22 @@ void editor_insert_newline(Editor *ed);
 void editor_tab_key(Editor *ed, int outdent);
 int editor_indent_uses_spaces(Editor *ed);
 
+/* Zeilen-Befehle, jeweils auf alle Zeilen, die die Selektion beruehrt (ohne
+ * Selektion: die des Cursors; eine Zeile, auf deren Spalte 0 die Selektion
+ * nur endet, zaehlt nicht), als EIN Undo-Schritt; Anker und Cursor bleiben
+ * auf ihrem Text.
+ * editor_toggle_line_comment(): sind alle nicht-leeren Zeilen schon mit
+ *   prefix (z.B. "//", "#") kommentiert, wird prefix samt einem folgenden
+ *   Leerzeichen entfernt; sonst wird "prefix " auf die geringste Einrueckung
+ *   des Blocks gesetzt. Leere Zeilen bleiben unveraendert.
+ * editor_duplicate_lines(): Kopie der Zeilen direkt darunter; die Selektion
+ *   wandert in die Kopie (erneut ausfuehren = weiter duplizieren).
+ * editor_move_lines(): tauscht die Zeilen mit der darueber (down = 0) bzw.
+ *   darunter; am Dokumentrand nichts. */
+void editor_toggle_line_comment(Editor *ed, const char *prefix);
+void editor_duplicate_lines(Editor *ed);
+void editor_move_lines(Editor *ed, int down);
+
 /* Alle Aenderungen zwischen begin und end werden EIN Undo-Schritt (z.B.
  * "Alle ersetzen": vorher je Treffer zwei Records, bei 5000 Treffern also
  * 10 000x Cmd+Z). Verschachtelbar, nur das aeusserste Paar zaehlt. Jedes

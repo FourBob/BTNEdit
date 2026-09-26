@@ -386,7 +386,18 @@ static char *prefs_file_path(void) {
     return path;
 }
 
-static void save_font_size_pref(void) {
+/* Darstellung > Unsichtbare Zeichen einblenden (zweite Zeile der Prefs-Datei). */
+static int g_show_invisibles = 0;
+
+static void apply_show_invisibles(int on) {
+    g_show_invisibles = on;
+    btn_render_set_show_invisibles(on);
+    btn_app_set_show_invisibles_menu(on);
+}
+
+/* Zeile 1: Schriftgroesse, Zeile 2: unsichtbare Zeichen (0/1). Eine alte
+ * Datei mit nur der ersten Zeile laesst die zweite Einstellung aus. */
+static void save_prefs(void) {
     char *path = prefs_file_path();
     if (!path) {
         return;
@@ -396,11 +407,11 @@ static void save_font_size_pref(void) {
     if (!f) {
         return;
     }
-    fprintf(f, "%.1f\n", btn_render_get_font_size());
+    fprintf(f, "%.1f\n%d\n", btn_render_get_font_size(), g_show_invisibles);
     fclose(f);
 }
 
-static void load_font_size_pref(void) {
+static void load_prefs(void) {
     char *path = prefs_file_path();
     if (!path) {
         return;
@@ -411,8 +422,12 @@ static void load_font_size_pref(void) {
         return;
     }
     double size;
+    int invisibles;
     if (fscanf(f, "%lf", &size) == 1) {
         btn_render_set_font_size(size);
+        if (fscanf(f, "%d", &invisibles) == 1) {
+            apply_show_invisibles(invisibles != 0);
+        }
     }
     fclose(f);
 }
@@ -3281,6 +3296,37 @@ static void on_open_file(const char *path) {
     btn_app_request_redraw();
 }
 
+/* Zeilen-Befehle (Bearbeiten-Menue) wirken aufs Dokument - die Suchfelder
+ * sind einzeilig. Kommentar umschalten braucht eine Sprache mit
+ * Zeilenkommentar (Dateiendung), sonst Signalton. */
+static void perform_line_command(int tag) {
+    Document *d = active_doc();
+    if (g_focus != BTN_FOCUS_DOCUMENT) {
+        btn_beep();
+        return;
+    }
+    switch (tag) {
+        case BTN_MENU_TOGGLE_COMMENT: {
+            const char *prefix = btn_highlight_line_comment(btn_highlight_lang_for_path(d->path));
+            if (!prefix) {
+                btn_beep();
+                return;
+            }
+            editor_toggle_line_comment(&d->editor, prefix);
+            break;
+        }
+        case BTN_MENU_DUPLICATE_LINES:
+            editor_duplicate_lines(&d->editor);
+            break;
+        case BTN_MENU_MOVE_LINES_UP:
+        case BTN_MENU_MOVE_LINES_DOWN:
+            editor_move_lines(&d->editor, tag == BTN_MENU_MOVE_LINES_DOWN);
+            break;
+        default:
+            break;
+    }
+}
+
 static void on_menu(int tag) {
     char *clip;
 
@@ -3314,6 +3360,16 @@ static void on_menu(int tag) {
             break;
         case BTN_MENU_USE_SELECTION_FOR_FIND:
             use_selection_for_find();
+            break;
+        case BTN_MENU_TOGGLE_COMMENT:
+        case BTN_MENU_DUPLICATE_LINES:
+        case BTN_MENU_MOVE_LINES_UP:
+        case BTN_MENU_MOVE_LINES_DOWN:
+            perform_line_command(tag);
+            break;
+        case BTN_MENU_SHOW_INVISIBLES:
+            apply_show_invisibles(!g_show_invisibles);
+            save_prefs();
             break;
         case BTN_MENU_NEXT_TAB:
         case BTN_MENU_PREVIOUS_TAB:
@@ -3410,15 +3466,15 @@ static void on_menu(int tag) {
             break;
         case BTN_MENU_ZOOM_IN:
             btn_render_zoom_in();
-            save_font_size_pref();
+            save_prefs();
             break;
         case BTN_MENU_ZOOM_OUT:
             btn_render_zoom_out();
-            save_font_size_pref();
+            save_prefs();
             break;
         case BTN_MENU_ZOOM_RESET:
             btn_render_zoom_reset();
-            save_font_size_pref();
+            save_prefs();
             break;
         default:
             break;
@@ -3485,7 +3541,7 @@ int main(void) {
     /* Muss vor btn_app_run() stehen, damit der allererste Redraw schon mit
      * der zuletzt eingestellten Schriftgroesse zeichnet, statt kurz bei
      * BTN_DEFAULT_FONT_SIZE aufzublitzen. */
-    load_font_size_pref();
+    load_prefs();
     btn_app_run();
 
     for (int i = 0; i < g_doc_count; i++) {

@@ -5,11 +5,9 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
 
 ## Fehlende Features (nach Priorität)
 
-1. **Code-Editor-Funktionen.** Kommentar umschalten (⌘/), Zeile duplizieren,
-   Zeile(n) hoch/runter verschieben, unsichtbare Zeichen anzeigen,
-   Wortumbruch an/aus, Kodierung beim Öffnen/Sichern wählen (heute: Bytes
-   unverändert, Anzeige als UTF-8 mit Latin-1-Fallback), Suche über alle
-   Tabs.
+1. **Code-Editor-Funktionen.** Wortumbruch an/aus, Kodierung beim
+   Öffnen/Sichern wählen (heute: Bytes unverändert, Anzeige als UTF-8 mit
+   Latin-1-Fallback), Suche über alle Tabs.
 2. **KI-Vervollständigung mit lokalem LLM (optional, standardmäßig aus).**
    Kein eingebautes Modell: BTNEdit fragt per HTTP einen lokal laufenden
    Server an (Ollama oder llama-server), Adresse und Modellname in der
@@ -25,6 +23,16 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
    der Eingabemethoden (render.c, `draw_marked_overlay`) als Vorlage nehmen.
 
 ## Bekannte Einschränkungen (bewusst zurückgestellt, kein akuter Bug)
+
+- Zeilen-Befehle: "Kommentar ein/aus" kennt nur Zeilenkommentare (`//`,
+  `#`, `;`) und die Sprache nur über die Dateiendung - unbenannte Dokumente,
+  Markdown, SVG, STL, DXF und unbekannte Endungen bekommen einen Signalton
+  statt Blockkommentaren (`/* */`, `<!-- -->`). Endet eine Auswahl genau am
+  Anfang einer Zeile, gehört diese Zeile nicht dazu (wie beim Einrücken);
+  schiebt man so einen Block ans Dokumentende, kann der Rückweg eine
+  angehängte Leerzeile anders zuordnen. Die unsichtbaren Zeichen zeigen
+  kein `\r` (in roh geladenen Dateien mit gemischten Zeilenenden) und kein
+  geschütztes Leerzeichen gesondert an.
 
 - Schutz der Arbeit: Änderungen von außen werden beim Aktivieren der App
   (nicht, solange ein Dialog offen ist), alle paar Sekunden (nur Tabs ohne

@@ -371,6 +371,49 @@ static size_t decode_row_for_display(const unsigned char *raw, size_t len, UniCh
     return n;
 }
 
+/* ---- Unsichtbare Zeichen ----
+ * Eine Zeile Markierungen, die genau ueber die Spalten der Row faellt (dieselbe
+ * Spaltenregel wie decode_row_for_display()): Leerzeichen -> '·', Tab -> '»'
+ * am Anfang seiner Spalten, alles andere -> ' ', am Ende der logischen Zeile
+ * '¬'. Nur Latin-1-Zeichen, die Menlo selbst hat - ein Ersatzfont koennte
+ * eine andere Breite haben und die folgenden Marker verschieben. out braucht
+ * Platz fuer 6 * len + 3 Bytes; Rueckgabe: Laenge (NUL-terminiert). */
+static size_t build_invisibles(const unsigned char *raw, size_t len, int line_end, char *out) {
+    size_t o = 0, col = 0, i = 0;
+    while (i < len) {
+        size_t clen = btn_utf8_char_len(raw + i, len - i);
+        if (raw[i] == '\t') {
+            size_t stop = editor_tab_advance(col);
+            memcpy(out + o, "\xC2\xBB", 2); /* » */
+            o += 2;
+            for (col++; col < stop; col++) {
+                out[o++] = ' ';
+            }
+        } else {
+            if (raw[i] == ' ') {
+                memcpy(out + o, "\xC2\xB7", 2); /* · */
+                o += 2;
+            } else {
+                out[o++] = ' ';
+            }
+            col++;
+        }
+        i += clen;
+    }
+    if (line_end) {
+        memcpy(out + o, "\xC2\xAC", 2); /* ¬ */
+        o += 2;
+    }
+    out[o] = '\0';
+    return o;
+}
+
+static int g_show_invisibles = 0;
+
+void btn_render_set_show_invisibles(int on) {
+    g_show_invisibles = on;
+}
+
 /* ---- Wortumbruch-Layout ---- */
 
 double btn_layout_text_width(CGRect bounds) {
@@ -1613,6 +1656,16 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
             }
         }
 
+        if (g_show_invisibles) {
+            int line_end = row_end < editor_length(ed) && gb_char_at(&ed->buffer, row_end) == '\n';
+            char *raw = gb_copy_range(&ed->buffer, row_start, row_len);
+            char *marks = btn_xmalloc(btn_xmul(row_len, 6) + 3);
+            if (build_invisibles((const unsigned char *)raw, row_len, line_end, marks) > 0) {
+                draw_text_at(ctx, marks, GUTTER_WIDTH + LEFT_PADDING, top_y + 4.0, get_dim_attrs());
+            }
+            free(marks);
+            free(raw);
+        }
         draw_row_line(ctx, ed, lang, rows, row_count, r, GUTTER_WIDTH + LEFT_PADDING, top_y, attrs,
                        &cached_line, &cached_line_start, &comment_state, tokens, &token_count);
     }

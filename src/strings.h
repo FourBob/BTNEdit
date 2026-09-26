@@ -132,6 +132,12 @@ typedef enum {
     BTN_STR_RECOVERY_INFO_FMT,
     BTN_STR_BTN_RESTORE,
     BTN_STR_BTN_DISCARD,
+    /* Zeilen-Befehle (Bearbeiten) und unsichtbare Zeichen (Darstellung) */
+    BTN_STR_TOGGLE_COMMENT,
+    BTN_STR_DUPLICATE_LINES,
+    BTN_STR_MOVE_LINES_UP,
+    BTN_STR_MOVE_LINES_DOWN,
+    BTN_STR_SHOW_INVISIBLES,
     BTN_STR_COUNT
 } BtnStringId;
 

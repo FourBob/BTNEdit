@@ -265,6 +265,21 @@ int main(void) {
               "Window menu registered with Zoom");
         it = find_item(menubar, @"f", cmd);
         CHECK(it && [it tag] == BTN_MENU_FIND, "Cmd+F still Find (no clash with full screen)");
+        it = find_item(menubar, @"/", cmd);
+        CHECK(it && [it tag] == BTN_MENU_TOGGLE_COMMENT, "Cmd+/ = Toggle Comment");
+        it = find_item(menubar, @"D", cmd);
+        CHECK(it && [it tag] == BTN_MENU_DUPLICATE_LINES, "Shift+Cmd+D = Duplicate Lines");
+        NSEventModifierFlags optcmd = NSEventModifierFlagOption | cmd;
+        it = find_item(menubar, @"[", optcmd);
+        CHECK(it && [it tag] == BTN_MENU_MOVE_LINES_UP, "Option+Cmd+[ = Move Lines Up");
+        it = find_item(menubar, @"]", optcmd);
+        CHECK(it && [it tag] == BTN_MENU_MOVE_LINES_DOWN, "Option+Cmd+] = Move Lines Down");
+        it = find_item(menubar, @"i", optcmd);
+        CHECK(it && [it tag] == BTN_MENU_SHOW_INVISIBLES && [it state] == NSControlStateValueOff, "Option+Cmd+I = Show Invisibles (off)");
+        btn_app_set_show_invisibles_menu(1);
+        CHECK(it && [it state] == NSControlStateValueOn, "Show Invisibles checkmark on");
+        btn_app_set_show_invisibles_menu(0);
+        CHECK(it && [it state] == NSControlStateValueOff, "and off again");
 
         /* ---- Dateien ins Fenster ziehen ---- */
         btn_app_set_open_file_callback(open_cb);
