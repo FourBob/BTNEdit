@@ -15,6 +15,7 @@
 #include "gapbuffer.h"
 #include "textinput.h"
 #include "filestamp.h"
+#include "strings.h"
 #include "doc_extracted.h"
 #include "focus_extracted.h"
 

@@ -104,13 +104,24 @@ static void random_edit(Editor *ed) {
     }
 }
 
+/* Feldweise: memcmp saehe die Fuellbytes hinter is_continuation */
+static int rows_equal(const BtnRow *a, const BtnRow *b, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        if (a[i].start != b[i].start || a[i].len != b[i].len || a[i].logical_line != b[i].logical_line ||
+            a[i].is_continuation != b[i].is_continuation) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static void verify(Editor *ed, const BtnLangSpec *lang, double width) {
     size_t n_cached, n_fresh, words_fresh;
     const BtnRow *cached = btn_layout_get(ed, width, &n_cached);
     BtnRow *fresh = layout_build(ed, chars_per_row_for(width), &n_fresh, &words_fresh, NULL);
 
     checks++;
-    if (n_cached != n_fresh || memcmp(cached, fresh, n_fresh * sizeof(BtnRow)) != 0) {
+    if (n_cached != n_fresh || !rows_equal(cached, fresh, n_fresh)) {
         FAIL("layout cache differs from fresh build (rows %zu vs %zu)", n_cached, n_fresh);
     }
     checks++;

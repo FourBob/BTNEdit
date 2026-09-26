@@ -21,7 +21,7 @@ mkdir -p "$OUT"
 
 python3 tests/gen_headers.py src "$GEN" || { echo "Header-Erzeugung fehlgeschlagen"; exit 1; }
 
-CFLAGS="-std=gnu11 -g -O1 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter -Isrc -I$GEN -Itests ${TEST_EXTRA_CFLAGS:-}"
+CFLAGS="-std=gnu11 -g -O1 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter -Werror=implicit-function-declaration -Isrc -I$GEN -Itests ${TEST_EXTRA_CFLAGS:-}"
 if [ "${SANITIZE:-1}" != 0 ]; then
     CFLAGS="$CFLAGS -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer"
 fi
