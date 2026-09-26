@@ -30,6 +30,8 @@ struct BtnLangSpec {
                                    * line_comment_hash zu verallgemeinern, weil
                                    * manche INI-Dialekte BEIDE ';' und '#'
                                    * gleichzeitig als Kommentar akzeptieren. */
+    const char *toggle_comment;  /* Zeichen fuer "Kommentar ein/aus", NULL =
+                                   * keins (Signalton) */
 };
 
 static const char *const C_KEYWORDS[] = {
@@ -43,7 +45,8 @@ static const char *const C_KEYWORDS[] = {
     NULL
 };
 static const BtnLangSpec C_LANG = {
-    .keywords = C_KEYWORDS, .line_comment_slash = 1, .block_comment = 1, .line_prefix_char = '#'
+    .keywords = C_KEYWORDS, .line_comment_slash = 1, .block_comment = 1, .line_prefix_char = '#',
+    .toggle_comment = "//"
 };
 
 static const char *const PY_KEYWORDS[] = {
@@ -53,14 +56,14 @@ static const char *const PY_KEYWORDS[] = {
     "return", "try", "while", "with", "yield", "None", "True", "False", "self",
     NULL
 };
-static const BtnLangSpec PY_LANG = { .keywords = PY_KEYWORDS, .line_comment_hash = 1 };
+static const BtnLangSpec PY_LANG = { .keywords = PY_KEYWORDS, .line_comment_hash = 1, .toggle_comment = "#" };
 
 static const char *const SHELL_KEYWORDS[] = {
     "if", "then", "else", "elif", "fi", "for", "while", "do", "done", "case", "esac",
     "function", "return", "exit", "local", "export", "echo", "in",
     NULL
 };
-static const BtnLangSpec SHELL_LANG = { .keywords = SHELL_KEYWORDS, .line_comment_hash = 1 };
+static const BtnLangSpec SHELL_LANG = { .keywords = SHELL_KEYWORDS, .line_comment_hash = 1, .toggle_comment = "#" };
 
 static const char *const JS_KEYWORDS[] = {
     "break", "case", "catch", "class", "const", "continue", "debugger", "default",
@@ -70,7 +73,9 @@ static const char *const JS_KEYWORDS[] = {
     "true", "false", "null", "undefined",
     NULL
 };
-static const BtnLangSpec JS_LANG = { .keywords = JS_KEYWORDS, .line_comment_slash = 1, .block_comment = 1 };
+static const BtnLangSpec JS_LANG = {
+    .keywords = JS_KEYWORDS, .line_comment_slash = 1, .block_comment = 1, .toggle_comment = "//"
+};
 
 static const char *const SWIFT_KEYWORDS[] = {
     "associatedtype", "class", "deinit", "enum", "extension", "fileprivate", "func",
@@ -82,7 +87,9 @@ static const char *const SWIFT_KEYWORDS[] = {
     "true", "try",
     NULL
 };
-static const BtnLangSpec SWIFT_LANG = { .keywords = SWIFT_KEYWORDS, .line_comment_slash = 1, .block_comment = 1 };
+static const BtnLangSpec SWIFT_LANG = {
+    .keywords = SWIFT_KEYWORDS, .line_comment_slash = 1, .block_comment = 1, .toggle_comment = "//"
+};
 
 /* Kein eigener Tokenizer-Zustand fuer Markdown - reine Zweckentfremdung
  * bestehender Mechanismen (siehe Kommentare bei line_prefix_char/
@@ -113,6 +120,12 @@ static const BtnLangSpec STL_LANG = { .keywords = STL_KEYWORDS };
  * (die zeigen dann einfach unformatierten Text wie bisher, keine
  * Verschlechterung). */
 static const BtnLangSpec INI_LANG = {
+    .line_comment_hash = 1, .line_prefix_char = '[', .line_comment_semicolon = 1,
+    .toggle_comment = ";" /* Windows-INI kennt nur ';', configparser beides */
+};
+/* .config: gleiche Hervorhebung, aber oft XML (app.config/web.config) -
+ * "Kommentar ein/aus" wuerde es mit ';' beschaedigen, also keins. */
+static const BtnLangSpec CONFIG_LANG = {
     .line_comment_hash = 1, .line_prefix_char = '[', .line_comment_semicolon = 1
 };
 
@@ -182,7 +195,7 @@ const BtnLangSpec *btn_highlight_lang_for_path(const char *path) {
         { ".swift", &SWIFT_LANG },
         { ".md", &MD_LANG }, { ".markdown", &MD_LANG },
         { ".stl", &STL_LANG },
-        { ".ini", &INI_LANG }, { ".config", &INI_LANG },
+        { ".ini", &INI_LANG }, { ".config", &CONFIG_LANG },
         { ".svg", &SVG_LANG },
         { ".dxf", &DXF_LANG },
     };
@@ -192,6 +205,10 @@ const BtnLangSpec *btn_highlight_lang_for_path(const char *path) {
         }
     }
     return NULL;
+}
+
+const char *btn_highlight_line_comment(const BtnLangSpec *lang) {
+    return lang ? lang->toggle_comment : NULL;
 }
 
 static int is_keyword(const BtnLangSpec *lang, const char *word, size_t len) {

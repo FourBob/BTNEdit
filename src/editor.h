@@ -21,6 +21,9 @@ typedef struct {
     size_t len;
     size_t capacity;
     char *text;       /* inserted text (insert record) or deleted text (delete record) */
+    /* 0 = eigenstaendiger Schritt; sonst die Gruppe (editor_begin_undo_group()),
+     * deren aufeinanderfolgende Records Undo/Redo gemeinsam anwenden. */
+    unsigned long group;
 } UndoRecord;
 
 typedef struct {
@@ -28,6 +31,9 @@ typedef struct {
     size_t count;     /* total records currently valid */
     size_t capacity;
     size_t pos;       /* records[0..pos) are applied; pos==count means nothing to redo */
+    unsigned long open_group;  /* Gruppe fuer neue Records, 0 = keine offen */
+    unsigned long last_group;  /* zuletzt vergebene Gruppen-ID */
+    int group_depth;           /* Verschachtelung von begin/end */
 } UndoStack;
 
 typedef struct {
@@ -41,8 +47,18 @@ typedef struct {
      * Laden gemerkten Wert, um "ungesichert" zu erkennen - bewusst NICHT
      * ueber undo.pos, weil das beim Zusammenfassen (Coalescing) aufeinander
      * folgender Tastendruecke unveraendert bleiben kann, obwohl sich der
-     * Inhalt sehr wohl geaendert hat. */
+     * Inhalt sehr wohl geaendert hat. Kommt aus einem Zaehler ueber ALLE
+     * Editoren: jeder Wert identifiziert genau einen Inhaltsstand genau
+     * eines Editors - auch nach editor_set_text() (neuer Wert statt 0) und
+     * nach dem memmove der Dokumente beim Tab-Schliessen. Darauf verlassen
+     * sich render.c's Layout-/Kommentar-Caches. Nur auf Gleichheit
+     * vergleichen, nie Differenzen bilden. */
     size_t edit_seq;
+    /* Kleinster Byte-Offset, der seit dem Inhaltsstand dirty_base_seq
+     * veraendert wurde ((size_t)-1 = nichts) - siehe
+     * editor_changed_from()/editor_rebase_changes(). */
+    size_t dirty_base_seq;
+    size_t dirty_floor;
     /* Von jeder Cursor-Neupositionierung (Klick, Pfeiltasten, Undo/Redo,
      * Wort-/Zeilen-/Alles-Auswahl) auf 1 gesetzt und vom naechsten Insert/
      * Delete konsumiert: verhindert, dass Tippen nach einem Klick zurueck
@@ -53,7 +69,7 @@ typedef struct {
      * siehe editor_set_single_line()) - zentral hier statt an jeder
      * Einfuege-Stelle einzeln zu pruefen, damit kein neuer Einfuegeweg
      * (Drag&Drop, IME) die Regel vergessen kann. editor_insert_text()/
-     * editor_set_text() ersetzen '\n'/'\r'/'\t' durch ' ', bevor sie
+     * editor_set_text() ersetzen '\n'/'\r' durch ' ', bevor sie
      * einfuegen; editor_delete_backward() lässt dafuer die "leeres
      * Klammerpaar auf einen Schlag loeschen"-Sonderbehandlung aus, weil
      * ein einzeiliges Feld nie ueber editor_handle_bracket_key() (das
@@ -82,7 +98,7 @@ void editor_free(Editor *ed);
 /* Ersetzt den gesamten Inhalt (z.B. beim Laden einer Datei), setzt Cursor
  * und Undo-Verlauf zurueck - das Laden selbst ist nicht rueckgaengig machbar.
  * Ist single_line gesetzt (siehe editor_set_single_line()), werden '\n'/
- * '\r'/'\t' in text durch ' ' ersetzt. */
+ * '\r' in text durch ' ' ersetzt (Tabs bleiben). */
 void editor_set_text(Editor *ed, const char *text, size_t len);
 
 /* Markiert ed als einzeiliges Feld (Suchen/Ersetzen-Leiste) - siehe den
@@ -97,6 +113,20 @@ size_t editor_line_count(Editor *ed);
 void editor_line_bounds(Editor *ed, size_t line_index, size_t *out_start, size_t *out_len);
 size_t editor_offset_to_line(Editor *ed, size_t offset);
 size_t editor_word_count(Editor *ed);
+/* Das Wortzeichen-Kriterium von editor_word_count() - render.c zaehlt
+ * Woerter im selben Durchlauf wie das Layout und muss exakt dieselbe Regel
+ * anwenden. */
+int editor_is_word_char(char c);
+
+/* Aenderungsverfolgung fuer inkrementelle Caches: kleinster Byte-Offset,
+ * der sich seit dem Inhaltsstand base_seq (einem frueheren edit_seq dieses
+ * Editors) geaendert haben KANN. (size_t)-1 = unveraendert, 0 = alles bzw.
+ * unbekannt (base_seq ist nicht der letzte Bezugspunkt). Alle Bytes VOR dem
+ * Rueckgabewert sind garantiert unveraendert. editor_rebase_changes() setzt
+ * den Bezugspunkt auf den aktuellen Stand - es gibt genau EINEN Bezugspunkt
+ * pro Editor, also nur einen Verbraucher (render.c's Kommentar-Cache). */
+size_t editor_changed_from(const Editor *ed, size_t base_seq);
+void editor_rebase_changes(Editor *ed);
 
 /* Tab-bewusste visuelle Spalte eines Offsets innerhalb seiner Zeile, bzw.
  * der Zeichen-Offset einer visuellen Spalte in einer gegebenen Zeile
@@ -114,11 +144,23 @@ size_t editor_offset_for_column_in_range(Editor *ed, size_t range_start, size_t 
 /* Naechster Tabstopp ab der gegebenen Spalte. */
 size_t editor_tab_advance(size_t col);
 
-/* Anfang der UTF-8-Sequenz, die das Byte bei pos enthaelt (pos selbst,
- * falls es schon ein Lead-/ASCII-Byte ist). Fuer render.c's Wortumbruch,
- * damit ein erzwungener Umbruch (kein Leerzeichen gefunden) nie mitten in
- * einem mehrbytigen Zeichen landet. */
+/* Was im ganzen Programm als EIN Zeichen gilt: eine gueltige UTF-8-Sequenz
+ * (RFC 3629: keine Ueberlaengen, keine Surrogate, hoechstens U+10FFFF) ist
+ * ein Zeichen; jedes andere Byte (Latin-1-Datei, abgeschnittene Sequenz,
+ * verirrtes Fortsetzungsbyte) ist fuer sich ein Zeichen und wird als
+ * ISO-8859-1 gezeichnet. Cursorbewegung, Loeschen, Spalten, Umbruch, Undo
+ * und Anzeige benutzen alle diese Regel - nur so bleiben sie konsistent.
+ * btn_utf8_char_len: Laenge (1-4) des Zeichens am Anfang von s, avail >= 1
+ * Bytes verfuegbar. editor_char_len: dasselbe fuer den Puffer an pos, nicht
+ * ueber limit hinaus (pos < limit). */
+size_t btn_utf8_char_len(const unsigned char *s, size_t avail);
+size_t editor_char_len(Editor *ed, size_t pos, size_t limit);
+
+/* Anfang des Zeichens (siehe oben), das das Byte bei pos enthaelt - pos
+ * selbst, wenn dort schon ein Zeichen beginnt. */
 size_t editor_utf8_seq_start(Editor *ed, size_t pos);
+/* Dasselbe fuer einen zusammenhaengenden Puffer s[0,len). */
+size_t btn_utf8_seq_start(const unsigned char *s, size_t len, size_t pos);
 
 /* Setzt suppress_coalesce - von jeder Cursor-Neupositionierung ausserhalb
  * von editor.c aufzurufen (z.B. main.c's wortumbruch-bewusste Zeilen-
@@ -142,6 +184,11 @@ size_t editor_selection_end(Editor *ed);
 int editor_cursor_adjacent_bracket(Editor *ed, size_t *out_pos);
 int editor_find_matching_bracket(Editor *ed, size_t offset, size_t *out_match);
 
+/* Fuegt text am Cursor ein (ersetzt eine Selektion) - in einem Dokument
+ * genau diese len Bytes (Aufrufer wie wrap_selection_with() und "Alle
+ * ersetzen" rechnen damit), in einem einzeiligen Feld mit '\n'/'\r' als ' '.
+ * Zeilenenden vereinheitlicht main.c dort, wo Text von aussen kommt (Laden,
+ * Einfuegen aus der Zwischenablage), siehe eol.h. */
 void editor_insert_text(Editor *ed, const char *text, size_t len);
 void editor_delete_backward(Editor *ed);
 void editor_delete_forward(Editor *ed);
@@ -166,6 +213,42 @@ char *editor_get_selection_text(Editor *ed);
 
 void editor_undo(Editor *ed);
 void editor_redo(Editor *ed);
+
+/* Einruecken. editor_insert_newline(): Return - neue Zeile mit der
+ * Einrueckung (Leerzeichen/Tabs) der aktuellen Zeile bis zum Cursor.
+ * editor_tab_key(): Tab bzw. Shift+Tab (outdent=1). Mit einer Selektion
+ * ueber mehrere Zeilen (oder bei Shift+Tab immer) werden alle beruehrten
+ * Zeilen um eine Stufe ein- bzw. ausgerueckt, sonst wird ein Tab
+ * eingefuegt - in einer Datei, die ueberwiegend mit Leerzeichen einrueckt,
+ * als Leerzeichen bis zum naechsten Tabstopp. Jeweils ein Undo-Schritt.
+ * editor_indent_uses_spaces(): diese Stil-Erkennung (erstes MB der Datei). */
+void editor_insert_newline(Editor *ed);
+void editor_tab_key(Editor *ed, int outdent);
+int editor_indent_uses_spaces(Editor *ed);
+
+/* Zeilen-Befehle, jeweils auf alle Zeilen, die die Selektion beruehrt (ohne
+ * Selektion: die des Cursors; eine Zeile, auf deren Spalte 0 die Selektion
+ * nur endet, zaehlt nicht), als EIN Undo-Schritt; Anker und Cursor bleiben
+ * auf ihrem Text.
+ * editor_toggle_line_comment(): sind alle nicht-leeren Zeilen schon mit
+ *   prefix (z.B. "//", "#") kommentiert, wird prefix samt einem folgenden
+ *   Leerzeichen entfernt; sonst wird "prefix " hinter den Leerraum gesetzt,
+ *   mit dem alle Zeilen des Blocks beginnen. Leere Zeilen bleiben
+ *   unveraendert.
+ * editor_duplicate_lines(): Kopie der Zeilen direkt darunter; die Selektion
+ *   wandert in die Kopie (erneut ausfuehren = weiter duplizieren).
+ * editor_move_lines(): tauscht die Zeilen mit der darueber (down = 0) bzw.
+ *   darunter; am Dokumentrand nichts. */
+void editor_toggle_line_comment(Editor *ed, const char *prefix);
+void editor_duplicate_lines(Editor *ed);
+void editor_move_lines(Editor *ed, int down);
+
+/* Alle Aenderungen zwischen begin und end werden EIN Undo-Schritt (z.B.
+ * "Alle ersetzen": vorher je Treffer zwei Records, bei 5000 Treffern also
+ * 10 000x Cmd+Z). Verschachtelbar, nur das aeusserste Paar zaehlt. Jedes
+ * begin braucht genau ein end. */
+void editor_begin_undo_group(Editor *ed);
+void editor_end_undo_group(Editor *ed);
 
 #ifdef __cplusplus
 }

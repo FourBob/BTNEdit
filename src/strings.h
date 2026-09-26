@@ -68,6 +68,98 @@ typedef enum {
     BTN_STR_BINARY_WARNING_TITLE_FMT,
     BTN_STR_BINARY_WARNING_INFO,
     BTN_STR_BTN_OPEN_ANYWAY,
+    /* Menuepunkt UND Alert-Titel des "Gehe zu Zeile..."-Dialogs (siehe
+     * btn_show_goto_line_dialog() in shim.h) - bewusst dieselbe Zeichenkette
+     * fuer beides, macOS-ueblich mit "..."-Suffix auch im Alert-Titel. */
+    BTN_STR_GOTO_LINE,
+    /* Enthaelt ein "%d" fuer die hoechste gueltige Zeilennummer - siehe
+     * BTN_STR_SAVE_PROMPT_TITLE_FMT. */
+    BTN_STR_GOTO_LINE_INFO_FMT,
+    BTN_STR_BTN_OK,
+    BTN_STR_VIEW_MENU,
+    BTN_STR_ZOOM_IN,
+    BTN_STR_ZOOM_OUT,
+    BTN_STR_ZOOM_RESET,
+    /* Ersetzt den Trefferzaehler in der Statusanzeige, wenn die Live-Suche
+     * fuer diesen Tastendruck ausfaellt: Dokument zu gross (siehe
+     * BTN_LIVE_SEARCH_MAX_DOC_LEN in main.c) oder Regex zu aufwendig (siehe
+     * regex_too_expensive_for_live_search()) - Suchen funktioniert weiterhin
+     * ganz normal per Return. Kurz halten: bei Mindestfensterbreite passen
+     * rund 29 Zeichen. */
+    BTN_STR_FIND_LIVE_SEARCH_TOO_LARGE,
+    /* Statuszeile links: genau zwei "%zu" (Zeile, Spalte) - render.c
+     * formatiert mit size_t und prueft das per btn_footer_format_ok(). */
+    BTN_STR_FOOTER_POS_FMT,
+    /* Statuszeile rechts: genau drei "%zu" (Zeilen, Woerter, Zeichen). */
+    BTN_STR_FOOTER_STATS_FMT,
+    /* Fehlermeldungen beim Oeffnen/Sichern (btn_show_error_alert()). Die
+     * *_TITLE_FMT enthalten ein "%s" fuer den Dateinamen, TOO_LARGE ein "%d"
+     * fuer die Obergrenze in MB - siehe BTN_STR_SAVE_PROMPT_TITLE_FMT. */
+    BTN_STR_OPEN_FAILED_TITLE_FMT,
+    BTN_STR_OPEN_FAILED_INFO,
+    BTN_STR_FILE_TOO_LARGE_INFO_FMT,
+    BTN_STR_SAVE_FAILED_TITLE_FMT,
+    BTN_STR_SAVE_FAILED_INFO,
+    /* Untermenue "Zeilenenden" in Ablage und seine drei Eintraege. */
+    BTN_STR_LINE_ENDINGS,
+    BTN_STR_EOL_LF,
+    BTN_STR_EOL_CRLF,
+    BTN_STR_EOL_CR,
+    /* Statuszeile bei einer Datei mit gemischten Zeilenenden: ein "%s" fuer
+     * das vorherrschende Format ("CRLF") - siehe BTN_STR_SAVE_PROMPT_TITLE_FMT. */
+    BTN_STR_EOL_MIXED_FMT,
+    /* Bearbeiten: Weitersuchen/Rueckwaerts suchen/Auswahl fuer Suche */
+    BTN_STR_FIND_NEXT,
+    BTN_STR_FIND_PREVIOUS,
+    BTN_STR_USE_SELECTION_FOR_FIND,
+    /* Menue "Fenster" */
+    BTN_STR_WINDOW_MENU,
+    BTN_STR_MINIMIZE,
+    BTN_STR_ZOOM,
+    BTN_STR_FULL_SCREEN,
+    BTN_STR_NEXT_TAB,
+    BTN_STR_PREVIOUS_TAB,
+    /* Schutz der Arbeit: Datei von aussen geaendert ("%s" = Dateiname),
+     * Konflikt beim Sichern, Wiederherstellung nach Absturz ("%d" = Anzahl). */
+    BTN_STR_FILE_CHANGED_TITLE_FMT,
+    BTN_STR_FILE_CHANGED_INFO,
+    BTN_STR_BTN_RELOAD,
+    BTN_STR_BTN_KEEP_MINE,
+    BTN_STR_SAVE_CONFLICT_TITLE_FMT,
+    BTN_STR_SAVE_CONFLICT_INFO,
+    BTN_STR_BTN_SAVE_ANYWAY,
+    BTN_STR_RECOVERY_TITLE,
+    BTN_STR_RECOVERY_INFO_FMT,
+    BTN_STR_BTN_RESTORE,
+    BTN_STR_BTN_DISCARD,
+    /* Zeilen-Befehle (Bearbeiten) und unsichtbare Zeichen (Darstellung) */
+    BTN_STR_TOGGLE_COMMENT,
+    BTN_STR_DUPLICATE_LINES,
+    BTN_STR_MOVE_LINES_UP,
+    BTN_STR_MOVE_LINES_DOWN,
+    BTN_STR_SHOW_INVISIBLES,
+    BTN_STR_AI_COMPLETION,
+    /* KI-Verbindung testen: Menue, Titel, Ergebnisse ("%s" Modell/Vorschlag
+     * bzw. Adresse, "%d" HTTP-Status), Hinweis wenn ausgeschaltet */
+    BTN_STR_AI_TEST,
+    BTN_STR_AI_TEST_TITLE,
+    BTN_STR_AI_TEST_OK_FMT,
+    BTN_STR_AI_TEST_EMPTY_FMT,
+    BTN_STR_AI_TEST_UNREACHABLE_FMT,
+    BTN_STR_AI_TEST_HTTP_FMT,
+    BTN_STR_AI_TEST_OFF_NOTE,
+    /* Bearbeiten > KI-Modell: Untermenue, Statuszeilen ("%s" Adresse, "%d"
+     * Anzahl), Hinweis ohne Code-Modell */
+    BTN_STR_AI_MODEL_MENU,
+    BTN_STR_AI_MODELS_REFRESH,
+    BTN_STR_AI_STATUS_UNKNOWN,
+    BTN_STR_AI_STATUS_CHECKING,
+    BTN_STR_AI_STATUS_UNREACHABLE_FMT,
+    BTN_STR_AI_STATUS_COUNT_FMT,
+    BTN_STR_AI_STATUS_NONE,
+    BTN_STR_AI_STATUS_LLAMA,
+    BTN_STR_AI_STATUS_LLAMA_HTTP_FMT,
+    BTN_STR_AI_NO_CODER,
     BTN_STR_COUNT
 } BtnStringId;
 

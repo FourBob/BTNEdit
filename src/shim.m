@@ -20,16 +20,149 @@ static btn_mouse_callback g_mouse_cb = NULL;
 static btn_scroll_callback g_scroll_cb = NULL;
 static btn_should_close_callback g_should_close_cb = NULL;
 static btn_open_file_callback g_open_file_cb = NULL;
+static btn_void_callback g_launch_cb = NULL;
+static btn_void_callback g_activate_cb = NULL;
+static BtnTextInputCallbacks g_ti;
+static BOOL g_ti_set = NO;
 
 static NSWindow *g_window = nil;
 static NSMenu *g_recentMenu = nil;
+/* Die drei Eintraege von Ablage > Zeilenenden (Index wie BtnEol), fuer das
+ * Haekchen per btn_app_set_line_ending_menu(). */
+static NSMenuItem *g_eolItems[3];
+static BOOL g_eolMenuEnabled = YES;
+static NSMenuItem *g_invisiblesItem = nil;
+static BOOL g_invisiblesOn = NO; /* auch vor dem Menuebau gesetzt (Einstellung) */
+static NSMenuItem *g_aiItem = nil;
+static BOOL g_aiOn = NO;
+static NSMenu *g_aiModelMenu = nil;
 
-@interface BTNContentView : NSView
+/* Laufende HTTP-Anfragen nach Kennung - was hier fehlt, ist abgebrochen. */
+static NSMutableDictionary *g_httpTasks = nil;
+static unsigned long g_httpNextId = 1;
+static NSTimer *g_idleTimer = nil; /* gehalten von der Run Loop */
+
+/* Maustaste gedrueckt und ihre letzte Position (View-Koordinaten) - der
+ * Autoscroll-Takt schickt sie erneut, solange die Maus still steht. */
+static BOOL g_mouse_down = NO;
+static NSPoint g_last_mouse;
+static NSTimer *g_autoscroll_timer = nil; /* gehalten von der Run Loop */
+static int g_test_button_state = -1;       /* btn_shim_test_set_mouse_button() */
+
+/* I-Beam-Flaechen, siehe btn_app_set_text_cursor_rects() */
+#define BTN_MAX_CURSOR_RECTS 4
+static CGRect g_cursor_rects[BTN_MAX_CURSOR_RECTS];
+static int g_cursor_rect_count = 0;
+
+static void stop_autoscroll(void) {
+    [g_autoscroll_timer invalidate];
+    g_autoscroll_timer = nil;
+}
+
+/* "Oeffnen mit", Dock-Icon und Ablegen im Fenster: jede Datei einzeln an
+ * main.c (dieselbe Logik wie Ablage > Oeffnen...). */
+static void open_file_urls(NSArray<NSURL *> *urls) {
+    if (!g_open_file_cb) {
+        return;
+    }
+    for (NSURL *url in urls) {
+        if (![url isFileURL]) {
+            continue;
+        }
+        const char *path = [[url path] UTF8String];
+        if (path) {
+            g_open_file_cb(path);
+        }
+    }
+}
+
+/* Nur Datei-URLs (keine Web-Links, kein Text) */
+static NSArray<NSURL *> *dropped_file_urls(id<NSDraggingInfo> info) {
+    return [[info draggingPasteboard] readObjectsForClasses:@[ [NSURL class] ]
+                                                    options:@{ NSPasteboardURLReadingFileURLsOnlyKey : @YES }];
+}
+
+/* Gibt ein Tasten-Event wie frueher an main.c weiter (Keycode, Modifier und
+ * characters) - fuer alles, was keinen Text erzeugt. */
+static void forward_key_event(NSEvent *event) {
+    if (!g_key_cb) {
+        return;
+    }
+    NSString *characters = [event characters];
+    const char *chars = [characters UTF8String];
+    /* Funktions-/Navigationstasten (F1-F12, Bild auf/ab, Hilfe, Pfeile,
+     * ...) liefern in [event characters] Codepunkte aus dem von AppKit
+     * reservierten Bereich U+F700-U+F7FF (NSUpArrowFunctionKey bis
+     * NSModeSwitchFunctionKey = U+F747). Bewusst NICHT bis U+F8FF: das
+     * Apple-Logo (Wahl+Umschalt+K) ist U+F8FF und ein echtes, tippbares
+     * Zeichen. Ohne Filter wuerde main.c alles, was es nicht per Keycode
+     * kennt, wie normalen Text einfuegen: ein unsichtbares 3-Byte-Zeichen,
+     * und das Dokument gilt als geaendert. Leeren String statt das Event zu
+     * schlucken - Keycode/Modifier gehen unveraendert weiter, damit
+     * Pfeile/Pos1/Ende usw. in main.c ueber den Keycode funktionieren. */
+    if ([characters length] > 0) {
+        unichar first = [characters characterAtIndex:0];
+        if (first >= 0xF700 && first <= 0xF7FF) {
+            chars = "";
+        }
+    }
+    g_key_cb(chars ? chars : "", [event keyCode], (unsigned long)[event modifierFlags]);
+}
+
+static long ns_loc(NSRange r) {
+    return r.location == NSNotFound ? -1 : (long)r.location;
+}
+
+/* Eigene View statt NSTextView (siehe Kopfkommentar), aber mit
+ * NSTextInputClient: nur so funktionieren Tottasten (^ ´ ` auf der
+ * deutschen Tastatur), Eingabemethoden (Pinyin, Kana), die Emoji-Palette
+ * und das Akzent-Menue beim Gedrueckthalten einer Taste. Die Logik dahinter
+ * liegt in main.c/textinput.c; hier wird nur uebersetzt. */
+@interface BTNContentView : NSView <NSTextInputClient> {
+    NSEvent *_keyEvent; /* das Event, das gerade interpretKeyEvents: durchlaeuft */
+    BOOL _keyForwarded; /* schon an main.c weitergereicht (hoechstens einmal pro Event) */
+}
 @end
 
 @implementation BTNContentView
 
+- (instancetype)initWithFrame:(NSRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        [self registerForDraggedTypes:@[ NSPasteboardTypeFileURL ]];
+    }
+    return self;
+}
+
 - (BOOL)acceptsFirstResponder {
+    return YES;
+}
+
+- (void)resetCursorRects {
+    for (int i = 0; i < g_cursor_rect_count; i++) {
+        [self addCursorRect:NSRectFromCGRect(g_cursor_rects[i]) cursor:[NSCursor IBeamCursor]];
+    }
+}
+
+/* Dateien aus dem Finder ins Fenster ziehen: jede wird in einem Tab
+ * geoeffnet. Text (z.B. aus einem Browser) wird nicht angenommen. */
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+    return (g_open_file_cb && [dropped_file_urls(sender) count] > 0) ? NSDragOperationCopy : NSDragOperationNone;
+}
+
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    NSArray<NSURL *> *urls = dropped_file_urls(sender);
+    if (!g_open_file_cb || [urls count] == 0) {
+        return NO;
+    }
+    /* Erst nach dem Ende der Drag-Sitzung oeffnen: eine Fehlermeldung
+     * (Datei zu gross, Ordner, ...) waere sonst ein modaler Dialog mitten
+     * im Ablegen, und der Finder wartete so lange auf das Ende. */
+    dispatch_async(dispatch_get_main_queue(), ^{
+        open_file_urls(urls);
+        [NSApp activateIgnoringOtherApps:YES];
+        [[self window] makeKeyAndOrderFront:nil];
+    });
     return YES;
 }
 
@@ -42,27 +175,160 @@ static NSMenu *g_recentMenu = nil;
 }
 
 - (void)keyDown:(NSEvent *)event {
-    if (g_key_cb) {
-        const char *chars = [[event characters] UTF8String];
-        g_key_cb(chars, [event keyCode], (unsigned long)[event modifierFlags]);
+    [NSCursor setHiddenUntilMouseMoves:YES]; /* wie in TextEdit beim Tippen */
+    if (!g_ti_set) {
+        forward_key_event(event); /* ohne Eingabemethoden-Callbacks wie frueher */
+        return;
+    }
+    /* Cmd+Taste ohne Menuepunkt ist ein Befehl, kein Text - direkt wie
+     * frueher. Nur waehrend einer Eingabe geht sie durch die Eingabemethode,
+     * damit die ihren Text erst festschreiben kann. */
+    if (([event modifierFlags] & NSEventModifierFlagCommand) && ![self hasMarkedText]) {
+        forward_key_event(event);
+        return;
+    }
+    /* macOS entscheidet: Text (insertText:/setMarkedText:) oder Befehl
+     * (doCommandBySelector:). Verschachtelt moeglich, daher sichern. */
+    NSEvent *previous = _keyEvent;
+    BOOL previous_forwarded = _keyForwarded;
+    _keyEvent = event;
+    _keyForwarded = NO;
+    [self interpretKeyEvents:@[ event ]];
+    _keyEvent = previous;
+    _keyForwarded = previous_forwarded;
+}
+
+/* Taste ohne Text: das Original-Event an main.c, das Pfeile, Return, Tab,
+ * Backspace, Escape usw. per Keycode behandelt wie bisher. Hoechstens
+ * einmal pro Event: manche Tasten sind in macOS an zwei Befehle gebunden
+ * (Wahl+Pfeil hoch = moveBackward: + moveToBeginningOfParagraph:) und
+ * wuerden sonst doppelt ausgefuehrt. */
+- (void)doCommandBySelector:(SEL)selector {
+    (void)selector;
+    if (_keyEvent && !_keyForwarded) {
+        _keyForwarded = YES;
+        forward_key_event(_keyEvent);
     }
 }
 
+- (void)insertText:(id)string replacementRange:(NSRange)replacementRange {
+    NSString *s = [string isKindOfClass:[NSAttributedString class]] ? [(NSAttributedString *)string string] : string;
+    /* Tasten ohne Belegung (F1-F19, Hilfe, Loeschen auf dem Ziffernblock)
+     * kommen als ein Zeichen aus dem AppKit-Bereich U+F700-U+F7FF - das ist
+     * kein Text (siehe forward_key_event()). */
+    if ([s length] == 1 && ![self hasMarkedText]) {
+        unichar c = [s characterAtIndex:0];
+        if (c >= 0xF700 && c <= 0xF7FF) {
+            if (_keyEvent && !_keyForwarded) {
+                _keyForwarded = YES;
+                forward_key_event(_keyEvent);
+            }
+            return;
+        }
+    }
+    const char *utf8 = [s UTF8String];
+    if (utf8 && g_ti.insert_text) {
+        g_ti.insert_text(utf8, ns_loc(replacementRange), (long)replacementRange.length);
+    }
+}
+
+- (void)setMarkedText:(id)string selectedRange:(NSRange)selectedRange replacementRange:(NSRange)replacementRange {
+    NSString *s = [string isKindOfClass:[NSAttributedString class]] ? [(NSAttributedString *)string string] : string;
+    const char *utf8 = [s UTF8String];
+    if (g_ti.set_marked_text) {
+        g_ti.set_marked_text(utf8 ? utf8 : "", ns_loc(selectedRange), (long)selectedRange.length,
+                             ns_loc(replacementRange), (long)replacementRange.length);
+    }
+}
+
+- (void)unmarkText {
+    if (g_ti.unmark_text) {
+        g_ti.unmark_text();
+    }
+}
+
+- (NSRange)selectedRange {
+    long sel_loc = 0, sel_len = 0, mk_loc = -1, mk_len = 0;
+    if (g_ti.query) {
+        g_ti.query(&sel_loc, &sel_len, &mk_loc, &mk_len);
+    }
+    return NSMakeRange((NSUInteger)sel_loc, (NSUInteger)sel_len);
+}
+
+- (NSRange)markedRange {
+    long sel_loc = 0, sel_len = 0, mk_loc = -1, mk_len = 0;
+    if (g_ti.query) {
+        g_ti.query(&sel_loc, &sel_len, &mk_loc, &mk_len);
+    }
+    return mk_loc < 0 ? NSMakeRange(NSNotFound, 0) : NSMakeRange((NSUInteger)mk_loc, (NSUInteger)mk_len);
+}
+
+- (BOOL)hasMarkedText {
+    return [self markedRange].location != NSNotFound;
+}
+
+- (NSAttributedString *)attributedSubstringForProposedRange:(NSRange)range actualRange:(NSRangePointer)actualRange {
+    if (!g_ti.substring || range.location == NSNotFound) {
+        return nil;
+    }
+    long actual_loc = 0;
+    size_t n = 0;
+    uint16_t *u16 = g_ti.substring((long)range.location, (long)range.length, &actual_loc, &n);
+    if (!u16) {
+        return nil;
+    }
+    NSString *str = [[[NSString alloc] initWithCharacters:(const unichar *)u16 length:n] autorelease];
+    free(u16);
+    if (actualRange) {
+        *actualRange = NSMakeRange((NSUInteger)actual_loc, [str length]);
+    }
+    return [[[NSAttributedString alloc] initWithString:str] autorelease];
+}
+
+- (NSArray<NSAttributedStringKey> *)validAttributesForMarkedText {
+    return @[];
+}
+
+/* Bildschirm-Rechteck des Cursors - dort oeffnet macOS das
+ * Kandidatenfenster bzw. das Akzent-Menue. */
+- (NSRect)firstRectForCharacterRange:(NSRange)range actualRange:(NSRangePointer)actualRange {
+    if (actualRange) {
+        *actualRange = range;
+    }
+    NSRect r = g_ti.caret_rect ? NSRectFromCGRect(g_ti.caret_rect(ns_loc(range))) : NSZeroRect;
+    NSWindow *window = [self window];
+    if (!window) {
+        return r;
+    }
+    r = [self convertRect:r toView:nil];
+    return [window convertRectToScreen:r];
+}
+
+- (NSUInteger)characterIndexForPoint:(NSPoint)point {
+    (void)point;
+    return NSNotFound;
+}
+
 - (void)mouseDown:(NSEvent *)event {
+    g_mouse_down = YES;
+    g_last_mouse = [self convertPoint:[event locationInWindow] fromView:nil];
     if (g_mouse_cb) {
-        NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
-        g_mouse_cb(BTN_MOUSE_DOWN, p.x, p.y, (int)[event clickCount], (unsigned long)[event modifierFlags]);
+        g_mouse_cb(BTN_MOUSE_DOWN, g_last_mouse.x, g_last_mouse.y, (int)[event clickCount],
+                   (unsigned long)[event modifierFlags]);
     }
 }
 
 - (void)mouseDragged:(NSEvent *)event {
+    g_last_mouse = [self convertPoint:[event locationInWindow] fromView:nil];
     if (g_mouse_cb) {
-        NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
-        g_mouse_cb(BTN_MOUSE_DRAGGED, p.x, p.y, (int)[event clickCount], (unsigned long)[event modifierFlags]);
+        g_mouse_cb(BTN_MOUSE_DRAGGED, g_last_mouse.x, g_last_mouse.y, (int)[event clickCount],
+                   (unsigned long)[event modifierFlags]);
     }
 }
 
 - (void)mouseUp:(NSEvent *)event {
+    g_mouse_down = NO;
+    stop_autoscroll();
     if (g_mouse_cb) {
         NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
         g_mouse_cb(BTN_MOUSE_UP, p.x, p.y, (int)[event clickCount], (unsigned long)[event modifierFlags]);
@@ -75,11 +341,79 @@ static NSMenu *g_recentMenu = nil;
     }
 }
 
+/* Standard-Editieraktionen (Undo/Redo/Cut/Copy/Paste/SelectAll) - werden
+ * ueber die Menue-Eintraege mit target:nil aufgerufen (siehe
+ * btn_app_build_menu() weiter unten), NICHT ueber den eigenen menuAction:/
+ * Tag-Mechanismus wie der Rest des Menues. Grund: bei target:nil schickt
+ * AppKit die Aktion die Responder-Chain hoch und liefert sie an das jeweils
+ * TATSAECHLICH fokussierte Objekt aus - ist das diese View (der normale
+ * Fall, waehrend ein Dokument/die Suchleiste editiert wird), landen wir
+ * hier und reichen es wie gewohnt an main.c weiter; ist stattdessen z.B.
+ * das Dateinamensfeld eines nativen NSSavePanel fokussiert, greift dessen
+ * eigene eingebaute Editier-Logik, OHNE dass diese View ueberhaupt beteiligt
+ * ist. Mit dem alten festen target/@selector(menuAction:) haette das Menue
+ * Cmd+C/V/X/Z/A IMMER zuerst abgefangen (AppKit prueft Menue-Tastenkuerzel
+ * vor der eigentlichen keyDown:-Zustellung) und dabei stets auf main.c's
+ * eigenem Editor-Zustand gearbeitet, selbst wenn currently ein natives
+ * Cocoa-Textfeld wie das Speichern-Dialog-Feld den echten Tastaturfokus
+ * hatte - das native Feld haette Cmd+C/V/X nie zu sehen bekommen. */
+- (void)cut:(id)sender {
+    (void)sender;
+    if (g_menu_cb) {
+        g_menu_cb(BTN_MENU_CUT);
+    }
+}
+
+- (void)copy:(id)sender {
+    (void)sender;
+    if (g_menu_cb) {
+        g_menu_cb(BTN_MENU_COPY);
+    }
+}
+
+- (void)paste:(id)sender {
+    (void)sender;
+    if (g_menu_cb) {
+        g_menu_cb(BTN_MENU_PASTE);
+    }
+}
+
+- (void)selectAll:(id)sender {
+    (void)sender;
+    if (g_menu_cb) {
+        g_menu_cb(BTN_MENU_SELECT_ALL);
+    }
+}
+
+- (void)undo:(id)sender {
+    (void)sender;
+    if (g_menu_cb) {
+        g_menu_cb(BTN_MENU_UNDO);
+    }
+}
+
+- (void)redo:(id)sender {
+    (void)sender;
+    if (g_menu_cb) {
+        g_menu_cb(BTN_MENU_REDO);
+    }
+}
+
 - (void)setFrameSize:(NSSize)newSize {
     [super setFrameSize:newSize];
     if (g_resize_cb) {
         g_resize_cb(NSSizeToCGSize(newSize));
     }
+    [self setNeedsDisplay:YES];
+}
+
+/* Wird von AppKit gerufen, wenn sich das Erscheinungsbild AUCH OHNE
+ * Nutzeraktion in dieser App aendert (z.B. automatischer Hell/Dunkel-Wechsel
+ * bei Sonnenuntergang, waehrend die App im Hintergrund ist) - main.c fragt
+ * btn_app_is_dark_mode() sonst nur bei jedem Redraw ab, der durch Tippen/
+ * Groessenaenderung ausgeloest wird; ohne diesen Hook wuerde die Farbe erst
+ * beim naechsten Tastendruck nachziehen. */
+- (void)viewDidChangeEffectiveAppearance {
     [self setNeedsDisplay:YES];
 }
 
@@ -118,6 +452,18 @@ static void btn_activate_and_focus_window(void) {
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     (void)notification;
     btn_activate_and_focus_window();
+    if (g_launch_cb) {
+        g_launch_cb();
+    }
+}
+
+- (void)applicationDidBecomeActive:(NSNotification *)notification {
+    (void)notification;
+    /* Nicht in einen offenen Dialog (Sichern?, Drucken) hinein pruefen und
+     * womoeglich neu laden - das naechste Aktivieren holt es nach. */
+    if (g_activate_cb && ![NSApp modalWindow]) {
+        g_activate_cb();
+    }
 }
 
 - (BOOL)windowShouldClose:(id)sender {
@@ -147,15 +493,7 @@ static void btn_activate_and_focus_window(void) {
     if (!g_open_file_cb) {
         return;
     }
-    for (NSURL *url in urls) {
-        if (![url isFileURL]) {
-            continue;
-        }
-        const char *path = [[url path] UTF8String];
-        if (path) {
-            g_open_file_cb(path);
-        }
-    }
+    open_file_urls(urls);
     btn_activate_and_focus_window();
 }
 
@@ -174,22 +512,49 @@ static void btn_activate_and_focus_window(void) {
     }
 }
 
+/* NSMenu aktiviert Eintraege automatisch - hier nur die Zeilenenden sperren,
+ * solange das aktive Dokument eine Binaerdatei ist. */
+- (BOOL)validateMenuItem:(NSMenuItem *)item {
+    NSInteger tag = [item tag];
+    if (tag >= BTN_MENU_EOL_LF && tag <= BTN_MENU_EOL_CR) {
+        return g_eolMenuEnabled;
+    }
+    return YES;
+}
+
 @end
 
 static BTNMenuTarget *g_menuTarget = nil;
 
-static void add_item(NSMenu *menu, NSString *title, NSString *key, int tag) {
+static NSMenuItem *add_item(NSMenu *menu, NSString *title, NSString *key, int tag) {
     NSMenuItem *item = [menu addItemWithTitle:title action:@selector(menuAction:) keyEquivalent:key];
     [item setTarget:g_menuTarget];
     [item setTag:tag];
+    return item;
 }
 
 /* Kurzform fuer btn_tr() + Umwandlung in NSString - btn_tr() gibt bewusst
  * ein rohes C-const-char* zurueck (siehe strings.h), damit main.c dieselbe
  * Tabelle ohne Foundation nutzen kann; hier im Shim wird daraus erst bei
  * Bedarf ein NSString. */
+/* C-String -> NSString fuer Text, der nicht garantiert gueltiges UTF-8 ist
+ * (Dateinamen/Pfade auf SMB/NFS/FAT-Volumes, per snprintf gekuerzte
+ * Meldungen): erst UTF-8, sonst ISO-8859-1 (nimmt jedes Byte). Nie nil -
+ * nil in setTitle:/addItemWithTitle:/setMessageText: wirft eine Exception
+ * bzw. zeigt nichts an. */
+static NSString *ns_from_c(const char *s) {
+    if (!s) {
+        return @"";
+    }
+    NSString *r = [NSString stringWithUTF8String:s];
+    if (!r) {
+        r = [[[NSString alloc] initWithBytes:s length:strlen(s) encoding:NSISOLatin1StringEncoding] autorelease];
+    }
+    return r ? r : @"";
+}
+
 static NSString *trs(BtnStringId id) {
-    return [NSString stringWithUTF8String:btn_tr(id)];
+    return ns_from_c(btn_tr(id));
 }
 
 BtnUiLang btn_app_detect_system_language(void) {
@@ -197,6 +562,14 @@ BtnUiLang btn_app_detect_system_language(void) {
         NSArray<NSString *> *preferred = [NSLocale preferredLanguages];
         NSString *code = preferred.count > 0 ? preferred[0] : @"en";
         return btn_strings_lang_from_code([code UTF8String]);
+    }
+}
+
+int btn_app_is_dark_mode(void) {
+    @autoreleasepool {
+        NSAppearance *appearance = [NSApp effectiveAppearance];
+        NSAppearanceName match = [appearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]];
+        return [match isEqualToString:NSAppearanceNameDarkAqua] ? 1 : 0;
     }
 }
 
@@ -232,12 +605,102 @@ void btn_app_set_scroll_callback(btn_scroll_callback cb) {
     g_scroll_cb = cb;
 }
 
+void btn_app_set_launch_callback(btn_void_callback cb) {
+    g_launch_cb = cb;
+}
+
+void btn_app_set_activate_callback(btn_void_callback cb) {
+    g_activate_cb = cb;
+}
+
+void btn_app_start_repeating_timer(double seconds, btn_void_callback cb) {
+    NSTimer *timer = [NSTimer timerWithTimeInterval:seconds repeats:YES block:^(NSTimer *t) {
+        (void)t;
+        cb();
+    }];
+    /* Nur Standardmodus: hinter einem Dialog (Sichern?, Datei geaendert?)
+     * soll nichts neu geladen oder geschrieben werden. */
+    [[NSRunLoop currentRunLoop] addTimer:timer forMode:NSDefaultRunLoopMode];
+}
+
+void btn_app_set_autoscroll(int on) {
+    if (!on || !g_mouse_down) {
+        stop_autoscroll();
+        return;
+    }
+    if (g_autoscroll_timer) {
+        return; /* laeuft schon - bei jeder Mausbewegung neu starten hiesse nie ticken */
+    }
+    g_autoscroll_timer = [NSTimer timerWithTimeInterval:0.05 repeats:YES block:^(NSTimer *timer) {
+        (void)timer;
+        /* Das mouseUp kann verloren gehen (Loslassen waehrend eines modalen
+         * Dialogs, z.B. nach Cmd+W mitten im Markieren) - ohne diese Pruefung
+         * liefe der Autoscroll danach bis zum Dokumentende weiter. */
+        BOOL pressed = g_test_button_state >= 0 ? g_test_button_state : ([NSEvent pressedMouseButtons] & 1) != 0;
+        if (!pressed) {
+            g_mouse_down = NO;
+            stop_autoscroll();
+            if (g_mouse_cb) {
+                g_mouse_cb(BTN_MOUSE_UP, g_last_mouse.x, g_last_mouse.y, 1, (unsigned long)[NSEvent modifierFlags]);
+            }
+            return;
+        }
+        if (g_mouse_cb) {
+            g_mouse_cb(BTN_MOUSE_AUTOSCROLL, g_last_mouse.x, g_last_mouse.y, 1, (unsigned long)[NSEvent modifierFlags]);
+        }
+    }];
+    /* Nicht NSRunLoopCommonModes: die enthalten auch den Modus modaler
+     * Dialoge, und hinter einem Sichern-Dialog soll nichts scrollen. */
+    [[NSRunLoop currentRunLoop] addTimer:g_autoscroll_timer forMode:NSDefaultRunLoopMode];
+    [[NSRunLoop currentRunLoop] addTimer:g_autoscroll_timer forMode:NSEventTrackingRunLoopMode];
+}
+
+void btn_shim_test_set_mouse_button(int state) {
+    g_test_button_state = state;
+}
+
+void btn_app_set_text_cursor_rects(const CGRect *rects, int count) {
+    if (count < 0) {
+        count = 0;
+    }
+    if (count > BTN_MAX_CURSOR_RECTS) {
+        count = BTN_MAX_CURSOR_RECTS;
+    }
+    if (count == g_cursor_rect_count &&
+        (count == 0 || memcmp(rects, g_cursor_rects, (size_t)count * sizeof(CGRect)) == 0)) {
+        return;
+    }
+    if (count > 0) {
+        memcpy(g_cursor_rects, rects, (size_t)count * sizeof(CGRect));
+    }
+    g_cursor_rect_count = count;
+    [[g_view window] invalidateCursorRectsForView:g_view];
+}
+
 void btn_app_set_should_close_callback(btn_should_close_callback cb) {
     g_should_close_cb = cb;
 }
 
 void btn_app_set_open_file_callback(btn_open_file_callback cb) {
     g_open_file_cb = cb;
+}
+
+void btn_app_set_text_input_callbacks(const BtnTextInputCallbacks *cb) {
+    if (cb) {
+        g_ti = *cb;
+        g_ti_set = YES;
+    } else {
+        memset(&g_ti, 0, sizeof(g_ti));
+        g_ti_set = NO;
+    }
+}
+
+void btn_text_input_discard(void) {
+    [[g_view inputContext] discardMarkedText];
+}
+
+void btn_text_input_invalidate(void) {
+    [[g_view inputContext] invalidateCharacterCoordinates];
 }
 
 void btn_app_build_menu(void) {
@@ -267,6 +730,16 @@ void btn_app_build_menu(void) {
         [fileMenu addItem:[NSMenuItem separatorItem]];
         add_item(fileMenu, trs(BTN_STR_SAVE), @"s", BTN_MENU_SAVE);
         add_item(fileMenu, trs(BTN_STR_SAVE_AS), @"S", BTN_MENU_SAVE_AS);
+        /* Zeilenenden, mit denen das aktive Dokument gesichert wird. */
+        NSMenu *eolMenu = [[NSMenu alloc] initWithTitle:trs(BTN_STR_LINE_ENDINGS)];
+        const BtnStringId eolTitles[3] = { BTN_STR_EOL_LF, BTN_STR_EOL_CRLF, BTN_STR_EOL_CR };
+        for (int i = 0; i < 3; i++) {
+            g_eolItems[i] = [eolMenu addItemWithTitle:trs(eolTitles[i]) action:@selector(menuAction:) keyEquivalent:@""];
+            [g_eolItems[i] setTarget:g_menuTarget];
+            [g_eolItems[i] setTag:BTN_MENU_EOL_LF + i];
+        }
+        NSMenuItem *eolItem = [fileMenu addItemWithTitle:trs(BTN_STR_LINE_ENDINGS) action:nil keyEquivalent:@""];
+        [eolItem setSubmenu:eolMenu];
         [fileMenu addItem:[NSMenuItem separatorItem]];
         add_item(fileMenu, trs(BTN_STR_CLOSE), @"w", BTN_MENU_CLOSE);
         [fileMenu addItem:[NSMenuItem separatorItem]];
@@ -276,16 +749,73 @@ void btn_app_build_menu(void) {
         NSMenuItem *editMenuItem = [NSMenuItem new];
         [menubar addItem:editMenuItem];
         NSMenu *editMenu = [[NSMenu alloc] initWithTitle:trs(BTN_STR_EDIT_MENU)];
-        add_item(editMenu, trs(BTN_STR_UNDO), @"z", BTN_MENU_UNDO);
-        add_item(editMenu, trs(BTN_STR_REDO), @"Z", BTN_MENU_REDO);
+        /* target:nil (nicht add_item()) fuer die Standard-Editieraktionen -
+         * siehe der ausfuehrliche Kommentar bei BTNContentViews cut:/copy:/
+         * paste:/selectAll:/undo:/redo: oben, warum das noetig ist, damit
+         * Cmd+C/V/X/Z/A auch in nativen Cocoa-Textfeldern (z.B. dem
+         * Speichern-Dialog) funktionieren statt immer von diesem Menue
+         * abgefangen zu werden. */
+        [editMenu addItemWithTitle:trs(BTN_STR_UNDO) action:@selector(undo:) keyEquivalent:@"z"];
+        [editMenu addItemWithTitle:trs(BTN_STR_REDO) action:@selector(redo:) keyEquivalent:@"Z"];
         [editMenu addItem:[NSMenuItem separatorItem]];
-        add_item(editMenu, trs(BTN_STR_CUT), @"x", BTN_MENU_CUT);
-        add_item(editMenu, trs(BTN_STR_COPY), @"c", BTN_MENU_COPY);
-        add_item(editMenu, trs(BTN_STR_PASTE), @"v", BTN_MENU_PASTE);
-        add_item(editMenu, trs(BTN_STR_SELECT_ALL), @"a", BTN_MENU_SELECT_ALL);
+        [editMenu addItemWithTitle:trs(BTN_STR_CUT) action:@selector(cut:) keyEquivalent:@"x"];
+        [editMenu addItemWithTitle:trs(BTN_STR_COPY) action:@selector(copy:) keyEquivalent:@"c"];
+        [editMenu addItemWithTitle:trs(BTN_STR_PASTE) action:@selector(paste:) keyEquivalent:@"v"];
+        [editMenu addItemWithTitle:trs(BTN_STR_SELECT_ALL) action:@selector(selectAll:) keyEquivalent:@"a"];
         [editMenu addItem:[NSMenuItem separatorItem]];
         add_item(editMenu, trs(BTN_STR_FIND), @"f", BTN_MENU_FIND);
+        /* Grossbuchstabe = mit Shift (wie "S" bei Sichern unter) */
+        add_item(editMenu, trs(BTN_STR_FIND_NEXT), @"g", BTN_MENU_FIND_NEXT);
+        add_item(editMenu, trs(BTN_STR_FIND_PREVIOUS), @"G", BTN_MENU_FIND_PREVIOUS);
+        add_item(editMenu, trs(BTN_STR_USE_SELECTION_FOR_FIND), @"e", BTN_MENU_USE_SELECTION_FOR_FIND);
+        add_item(editMenu, trs(BTN_STR_GOTO_LINE), @"l", BTN_MENU_GOTO_LINE);
+        [editMenu addItem:[NSMenuItem separatorItem]];
+        add_item(editMenu, trs(BTN_STR_TOGGLE_COMMENT), @"/", BTN_MENU_TOGGLE_COMMENT);
+        add_item(editMenu, trs(BTN_STR_DUPLICATE_LINES), @"D", BTN_MENU_DUPLICATE_LINES);
+        /* Wie in Xcode; Wahl+Pfeil ist schon das zeilenweise Springen */
+        NSMenuItem *moveUp = add_item(editMenu, trs(BTN_STR_MOVE_LINES_UP), @"[", BTN_MENU_MOVE_LINES_UP);
+        [moveUp setKeyEquivalentModifierMask:NSEventModifierFlagOption | NSEventModifierFlagCommand];
+        NSMenuItem *moveDown = add_item(editMenu, trs(BTN_STR_MOVE_LINES_DOWN), @"]", BTN_MENU_MOVE_LINES_DOWN);
+        [moveDown setKeyEquivalentModifierMask:NSEventModifierFlagOption | NSEventModifierFlagCommand];
+        [editMenu addItem:[NSMenuItem separatorItem]];
+        g_aiItem = add_item(editMenu, trs(BTN_STR_AI_COMPLETION), @"", BTN_MENU_AI_COMPLETION);
+        [g_aiItem setState:g_aiOn ? NSControlStateValueOn : NSControlStateValueOff];
+        g_aiModelMenu = [[NSMenu alloc] initWithTitle:trs(BTN_STR_AI_MODEL_MENU)];
+        NSMenuItem *modelItem = [editMenu addItemWithTitle:trs(BTN_STR_AI_MODEL_MENU) action:nil keyEquivalent:@""];
+        [modelItem setSubmenu:g_aiModelMenu];
+        btn_app_set_ai_model_menu(btn_tr(BTN_STR_AI_STATUS_UNKNOWN), NULL, 0, -1);
         [editMenuItem setSubmenu:editMenu];
+
+        NSMenuItem *viewMenuItem = [NSMenuItem new];
+        [menubar addItem:viewMenuItem];
+        NSMenu *viewMenu = [[NSMenu alloc] initWithTitle:trs(BTN_STR_VIEW_MENU)];
+        add_item(viewMenu, trs(BTN_STR_ZOOM_IN), @"=", BTN_MENU_ZOOM_IN);
+        add_item(viewMenu, trs(BTN_STR_ZOOM_OUT), @"-", BTN_MENU_ZOOM_OUT);
+        add_item(viewMenu, trs(BTN_STR_ZOOM_RESET), @"0", BTN_MENU_ZOOM_RESET);
+        [viewMenu addItem:[NSMenuItem separatorItem]];
+        g_invisiblesItem = add_item(viewMenu, trs(BTN_STR_SHOW_INVISIBLES), @"i", BTN_MENU_SHOW_INVISIBLES);
+        [g_invisiblesItem setKeyEquivalentModifierMask:NSEventModifierFlagOption | NSEventModifierFlagCommand];
+        [g_invisiblesItem setState:g_invisiblesOn ? NSControlStateValueOn : NSControlStateValueOff];
+        [viewMenuItem setSubmenu:viewMenu];
+
+        /* Fenster: die AppKit-Standardaktionen (target nil -> Responder-Kette
+         * bis zum NSWindow) plus Tab-Wechsel. setWindowsMenu: laesst macOS
+         * die Fensterliste selbst anhaengen. */
+        NSMenuItem *windowMenuItem = [NSMenuItem new];
+        [menubar addItem:windowMenuItem];
+        NSMenu *windowMenu = [[NSMenu alloc] initWithTitle:trs(BTN_STR_WINDOW_MENU)];
+        [windowMenu addItemWithTitle:trs(BTN_STR_MINIMIZE) action:@selector(performMiniaturize:) keyEquivalent:@"m"];
+        [windowMenu addItemWithTitle:trs(BTN_STR_ZOOM) action:@selector(performZoom:) keyEquivalent:@""];
+        NSMenuItem *fullScreen = [windowMenu addItemWithTitle:trs(BTN_STR_FULL_SCREEN)
+                                                       action:@selector(toggleFullScreen:)
+                                                keyEquivalent:@"f"];
+        [fullScreen setKeyEquivalentModifierMask:NSEventModifierFlagControl | NSEventModifierFlagCommand];
+        [windowMenu addItem:[NSMenuItem separatorItem]];
+        /* "}"/"{" = Shift+"]"/"[" (US-Layout, wie in Safari) */
+        add_item(windowMenu, trs(BTN_STR_NEXT_TAB), @"}", BTN_MENU_NEXT_TAB);
+        add_item(windowMenu, trs(BTN_STR_PREVIOUS_TAB), @"{", BTN_MENU_PREVIOUS_TAB);
+        [windowMenuItem setSubmenu:windowMenu];
+        [NSApp setWindowsMenu:windowMenu];
 
         NSMenuItem *helpMenuItem = [NSMenuItem new];
         [menubar addItem:helpMenuItem];
@@ -302,7 +832,7 @@ void btn_app_set_recent_files(const char **paths, int count) {
         }
         [g_recentMenu removeAllItems];
         for (int i = 0; i < count; i++) {
-            NSString *full = [NSString stringWithUTF8String:paths[i]];
+            NSString *full = ns_from_c(paths[i]);
             NSMenuItem *item = [g_recentMenu addItemWithTitle:[full lastPathComponent]
                                                         action:@selector(menuAction:)
                                                  keyEquivalent:@""];
@@ -317,13 +847,179 @@ void btn_app_set_recent_files(const char **paths, int count) {
     }
 }
 
+void btn_app_set_ai_model_menu(const char *status, const char *const *names, int count, int selected) {
+    if (!g_aiModelMenu) {
+        return;
+    }
+    /* Auch vor btn_app_run() aufgerufen (Start), da gibt es noch keinen Pool */
+    @autoreleasepool {
+        [g_aiModelMenu removeAllItems];
+        if (status) {
+            [g_aiModelMenu addItemWithTitle:ns_from_c(status) action:nil keyEquivalent:@""]; /* grau: nur Anzeige */
+            [g_aiModelMenu addItem:[NSMenuItem separatorItem]];
+        }
+        if (count > BTN_MAX_AI_MODELS) {
+            count = BTN_MAX_AI_MODELS;
+        }
+        for (int i = 0; i < count; i++) {
+            NSMenuItem *item = add_item(g_aiModelMenu, ns_from_c(names[i]), @"", BTN_MENU_AI_MODEL_BASE + i);
+            [item setState:i == selected ? NSControlStateValueOn : NSControlStateValueOff];
+        }
+        if (count > 0) {
+            [g_aiModelMenu addItem:[NSMenuItem separatorItem]];
+        }
+        add_item(g_aiModelMenu, trs(BTN_STR_AI_MODELS_REFRESH), @"", BTN_MENU_AI_MODELS_REFRESH);
+        add_item(g_aiModelMenu, trs(BTN_STR_AI_TEST), @"", BTN_MENU_AI_TEST);
+    }
+}
+
+void btn_app_set_ai_menu(int on) {
+    g_aiOn = on ? YES : NO;
+    [g_aiItem setState:on ? NSControlStateValueOn : NSControlStateValueOff];
+}
+
+/* Keine Umleitungen: ein 307 wuerde den Dokumenttext an eine andere
+ * Adresse weiterschicken. */
+@interface BTNHttpDelegate : NSObject <NSURLSessionTaskDelegate>
+@end
+
+@implementation BTNHttpDelegate
+- (void)URLSession:(NSURLSession *)session
+                          task:(NSURLSessionTask *)task
+    willPerformHTTPRedirection:(NSHTTPURLResponse *)response
+                    newRequest:(NSURLRequest *)request
+             completionHandler:(void (^)(NSURLRequest *))completionHandler {
+    (void)session; (void)task; (void)response; (void)request;
+    completionHandler(nil);
+}
+@end
+
+#define BTN_HTTP_MAX_RESPONSE (1024 * 1024)
+
+/* Eigene Sitzung: kein Cache, keine Cookies, kein System-Proxy (der Text
+ * soll direkt an den eingetragenen Server), hoechstens 90 s pro Anfrage
+ * insgesamt (timeoutInterval allein misst nur Pausen im Datenstrom). */
+static NSURLSession *http_session(void) {
+    static NSURLSession *session = nil;
+    if (!session) {
+        NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+        [cfg setConnectionProxyDictionary:@{}];
+        [cfg setTimeoutIntervalForResource:90.0]; /* erste Anfrage laedt das Modell */
+        [cfg setHTTPShouldSetCookies:NO];
+        BTNHttpDelegate *delegate = [[[BTNHttpDelegate alloc] init] autorelease];
+        session = [[NSURLSession sessionWithConfiguration:cfg delegate:delegate delegateQueue:nil] retain];
+    }
+    return session;
+}
+
+/* body == NULL: GET, sonst POST mit JSON-Koerper. */
+static unsigned long http_request(const char *url, const char *body, size_t len, double timeout_seconds,
+                                  btn_http_callback cb) {
+    @autoreleasepool {
+        NSURL *u = url ? [NSURL URLWithString:ns_from_c(url)] : nil;
+        if (!u || !cb || ![[u scheme] length]) {
+            return 0;
+        }
+        NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:u
+                                                           cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                                       timeoutInterval:timeout_seconds];
+        if (body) {
+            [req setHTTPMethod:@"POST"];
+            [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+            [req setHTTPBody:[NSData dataWithBytes:body length:len]];
+        }
+        if (!g_httpTasks) {
+            g_httpTasks = [[NSMutableDictionary alloc] init];
+        }
+        unsigned long rid = g_httpNextId++;
+        NSNumber *key = [NSNumber numberWithUnsignedLong:rid];
+        /* Die Bloecke werden kopiert und halten key/data dabei selbst fest
+         * (auch ohne ARC). */
+        NSURLSessionDataTask *task = [http_session()
+            dataTaskWithRequest:req
+              completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
+                  NSInteger status = 0;
+                  if (!err && [resp isKindOfClass:[NSHTTPURLResponse class]] && [data length] <= BTN_HTTP_MAX_RESPONSE) {
+                      status = [(NSHTTPURLResponse *)resp statusCode];
+                  }
+                  /* Im Haupt-Thread, aber nur im Standardmodus - nicht hinter
+                   * einem offenen Dialog (dispatch_get_main_queue liefe auch
+                   * dort). */
+                  CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopDefaultMode, ^{
+                      if (![g_httpTasks objectForKey:key]) {
+                          return; /* abgebrochen */
+                      }
+                      [g_httpTasks removeObjectForKey:key];
+                      int ok = status != 0;
+                      cb(rid, (int)status, ok && data ? (const char *)[data bytes] : NULL, ok && data ? [data length] : 0);
+                  });
+                  CFRunLoopWakeUp(CFRunLoopGetMain());
+              }];
+        [g_httpTasks setObject:task forKey:key];
+        [task resume];
+        return rid;
+    }
+}
+
+unsigned long btn_http_post_json(const char *url, const char *body, size_t len, double timeout_seconds,
+                                 btn_http_callback cb) {
+    return http_request(url, body ? body : "", len, timeout_seconds, cb);
+}
+
+unsigned long btn_http_get(const char *url, double timeout_seconds, btn_http_callback cb) {
+    return http_request(url, NULL, 0, timeout_seconds, cb);
+}
+
+void btn_http_cancel(unsigned long id) {
+    NSNumber *key = [NSNumber numberWithUnsignedLong:id];
+    NSURLSessionDataTask *task = [g_httpTasks objectForKey:key];
+    if (task) {
+        [task cancel];
+        [g_httpTasks removeObjectForKey:key];
+    }
+}
+
+void btn_app_restart_idle_timer(double seconds, btn_void_callback cb) {
+    [g_idleTimer invalidate];
+    g_idleTimer = nil;
+    if (seconds < 0 || !cb) {
+        return;
+    }
+    g_idleTimer = [NSTimer timerWithTimeInterval:seconds repeats:NO block:^(NSTimer *t) {
+        (void)t;
+        g_idleTimer = nil; /* feuert einmal, danach gibt die Run Loop ihn frei */
+        cb();
+    }];
+    [[NSRunLoop currentRunLoop] addTimer:g_idleTimer forMode:NSDefaultRunLoopMode];
+}
+
+void btn_app_set_show_invisibles_menu(int on) {
+    g_invisiblesOn = on ? YES : NO;
+    [g_invisiblesItem setState:on ? NSControlStateValueOn : NSControlStateValueOff];
+}
+
+void btn_app_set_line_ending_menu(int index, int enabled) {
+    g_eolMenuEnabled = enabled ? YES : NO;
+    for (int i = 0; i < 3; i++) {
+        [g_eolItems[i] setState:(i == index) ? NSControlStateValueOn : NSControlStateValueOff];
+    }
+}
+
+void btn_beep(void) {
+    NSBeep();
+}
+
 void btn_app_request_redraw(void) {
     [g_view setNeedsDisplay:YES];
 }
 
 void btn_app_run(void) {
     @autoreleasepool {
-        NSRect frame = NSMakeRect(200, 200, 900, 600);
+        /* Breite 1080 passend zur untenstehenden setMinSize: (AppKit wuerde
+         * ein kleiner angefordertes Fenster ohnehin sofort auf die
+         * Mindestbreite hochziehen, aber ein Startwert UNTER der eigenen
+         * Mindestgroesse waere irrefuehrend zu lesen). */
+        NSRect frame = NSMakeRect(200, 200, 1080, 600);
         NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                                    NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable;
         g_window = [[NSWindow alloc] initWithContentRect:frame
@@ -331,14 +1027,17 @@ void btn_app_run(void) {
                                                   backing:NSBackingStoreBuffered
                                                     defer:NO];
         [g_window setTitle:trs(BTN_STR_UNTITLED)];
-        /* Breite 800 statt z.B. 400: die Suchen/Ersetzen-Leiste (render.c)
-         * braucht bei sichtbarem "Alle ersetzen"-Knopf ueber 750pt, bevor
-         * ueberhaupt der Statustext anfaengt - bei einer kleineren Mindest-
-         * breite waeren Knopf und/oder Statustext im schmalsten Fenster
-         * abgeschnitten. shim.m kennt render.h's Layout-Konstanten bewusst
-         * nicht (reine Chrome), daher hier als grosszuegig bemessener,
-         * eigener Wert statt eines Verweises auf sie. */
-        [g_window setMinSize:NSMakeSize(800, 300)];
+        /* Breite 1080 statt z.B. 400: Felder, die drei Umschalter
+         * (".*"/"Aa"/"\b") und der "Alle ersetzen"-Knopf der Suchen/Ersetzen-
+         * Leiste (render.c) reichen bis x = 840pt, dahinter beginnt der
+         * Statustext. Bei 1080pt bleiben ihm gut 230pt; laengere Meldungen
+         * kuerzt render.c mit "..." (btn_render_find_bar()). Bei einer
+         * kleineren Mindestbreite waere der Knopf selbst abgeschnitten.
+         * shim.m kennt render.h's Layout-Konstanten bewusst nicht (reine
+         * Chrome), daher hier als eigener Wert statt eines Verweises. */
+        [g_window setMinSize:NSMakeSize(1080, 300)];
+        /* Fenster > Vollbild (toggleFullScreen:) */
+        [g_window setCollectionBehavior:NSWindowCollectionBehaviorFullScreenPrimary];
 
         g_view = [[BTNContentView alloc] initWithFrame:frame];
         [g_window setContentView:g_view];
@@ -356,12 +1055,27 @@ void btn_app_run(void) {
     }
 }
 
-void btn_pasteboard_set_string(const char *utf8) {
+int btn_pasteboard_set_string(const char *bytes, size_t len) {
     @autoreleasepool {
-        NSString *s = [NSString stringWithUTF8String:utf8 ? utf8 : ""];
+        NSString *s = @"";
+        if (bytes && len > 0) {
+            /* initWithBytes:length: statt stringWithUTF8String: - Letzteres
+             * bricht am ersten NUL-Byte ab und liefert bei ungueltigem UTF-8
+             * nil; dann landete nil in setString: und der Text war nach dem
+             * anschliessenden Loeschen (Ausschneiden) nirgends mehr.
+             * ISO-8859-1 bildet jeden Bytewert ab und schlaegt nie fehl -
+             * fuer Latin-1-/Binaerdateien, die render.c bewusst anzeigt. */
+            s = [[[NSString alloc] initWithBytes:bytes length:len encoding:NSUTF8StringEncoding] autorelease];
+            if (!s) {
+                s = [[[NSString alloc] initWithBytes:bytes length:len encoding:NSISOLatin1StringEncoding] autorelease];
+            }
+            if (!s) {
+                return 0;
+            }
+        }
         NSPasteboard *pb = [NSPasteboard generalPasteboard];
         [pb clearContents];
-        [pb setString:s forType:NSPasteboardTypeString];
+        return [pb setString:s forType:NSPasteboardTypeString] ? 1 : 0;
     }
 }
 
@@ -413,7 +1127,7 @@ char *btn_show_save_panel(const char *suggested_path) {
     @autoreleasepool {
         NSSavePanel *panel = [NSSavePanel savePanel];
         if (suggested_path) {
-            NSString *s = [NSString stringWithUTF8String:suggested_path];
+            NSString *s = ns_from_c(suggested_path);
             [panel setDirectoryURL:[[NSURL fileURLWithPath:s] URLByDeletingLastPathComponent]];
             [panel setNameFieldStringValue:[s lastPathComponent]];
         } else {
@@ -434,8 +1148,9 @@ int btn_show_unsaved_changes_alert(const char *display_name) {
         char msg[512];
         snprintf(msg, sizeof(msg), btn_tr(BTN_STR_SAVE_PROMPT_TITLE_FMT),
                  display_name ? display_name : btn_tr(BTN_STR_UNTITLED));
-        NSAlert *alert = [[NSAlert alloc] init];
-        [alert setMessageText:[NSString stringWithUTF8String:msg]];
+        /* autorelease: ohne ARC leakte jeder Dialog sein NSAlert samt Panel. */
+        NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+        [alert setMessageText:ns_from_c(msg)];
         [alert setInformativeText:trs(BTN_STR_SAVE_PROMPT_INFO)];
         [alert addButtonWithTitle:trs(BTN_STR_BTN_SAVE)];
         [alert addButtonWithTitle:trs(BTN_STR_BTN_DONT_SAVE)];
@@ -451,13 +1166,28 @@ int btn_show_unsaved_changes_alert(const char *display_name) {
     }
 }
 
+int btn_show_choice_alert(const char *title, const char *info, const char *first, const char *second,
+                          int escape_second) {
+    @autoreleasepool {
+        NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+        [alert setMessageText:ns_from_c(title)];
+        [alert setInformativeText:ns_from_c(info)];
+        [alert addButtonWithTitle:ns_from_c(first)];
+        NSButton *other = [alert addButtonWithTitle:ns_from_c(second)];
+        /* NSAlert legt Escape selbst auf einen Knopf namens "Cancel"/
+         * "Abbrechen" - hier ausdruecklich festlegen, in beide Richtungen. */
+        [other setKeyEquivalent:escape_second ? @"\033" : @""];
+        return [alert runModal] == NSAlertFirstButtonReturn ? 1 : 0;
+    }
+}
+
 int btn_show_binary_file_warning(const char *display_name) {
     @autoreleasepool {
         char msg[512];
         snprintf(msg, sizeof(msg), btn_tr(BTN_STR_BINARY_WARNING_TITLE_FMT),
                  display_name ? display_name : btn_tr(BTN_STR_UNTITLED));
-        NSAlert *alert = [[NSAlert alloc] init];
-        [alert setMessageText:[NSString stringWithUTF8String:msg]];
+        NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+        [alert setMessageText:ns_from_c(msg)];
         [alert setInformativeText:trs(BTN_STR_BINARY_WARNING_INFO)];
         [alert addButtonWithTitle:trs(BTN_STR_BTN_OPEN_ANYWAY)];
         [alert addButtonWithTitle:trs(BTN_STR_BTN_CANCEL)];
@@ -466,18 +1196,68 @@ int btn_show_binary_file_warning(const char *display_name) {
     }
 }
 
+int btn_show_goto_line_dialog(long max_line, long *out_line) {
+    @autoreleasepool {
+        char info[128];
+        snprintf(info, sizeof(info), btn_tr(BTN_STR_GOTO_LINE_INFO_FMT), (int)max_line);
+
+        NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+        [alert setMessageText:trs(BTN_STR_GOTO_LINE)];
+        [alert setInformativeText:ns_from_c(info)];
+        [alert addButtonWithTitle:trs(BTN_STR_BTN_OK)];
+        [alert addButtonWithTitle:trs(BTN_STR_BTN_CANCEL)];
+
+        /* Zahlen-Eingabefeld als Accessory View - wie die anderen Alerts
+         * hier ein reiner Systemdialog, kein eigenstaendiges Content-Fenster
+         * (siehe Architektur-Kommentar oben in dieser Datei). */
+        NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 200, 24)];
+        [[field cell] setPlaceholderString:@"1"];
+        [alert setAccessoryView:field];
+        /* initialFirstResponder gehoert zu NSWindow, nicht zu NSAlert selbst -
+         * [alert window] baut/liefert das dahinterliegende Panel (inklusive
+         * layoutetem Accessory View) erst bei diesem Zugriff. */
+        [[alert window] setInitialFirstResponder:field];
+
+        NSModalResponse resp = [alert runModal];
+        int ok = (resp == NSAlertFirstButtonReturn);
+        if (ok) {
+            long line = [[field stringValue] integerValue];
+            if (line < 1) {
+                line = 1;
+            }
+            if (max_line > 0 && line > max_line) {
+                line = max_line;
+            }
+            *out_line = line;
+        }
+        [field release];
+        return ok;
+    }
+}
+
 void btn_show_help_alert(void) {
     @autoreleasepool {
-        NSAlert *alert = [[NSAlert alloc] init];
+        NSAlert *alert = [[[NSAlert alloc] init] autorelease];
         [alert setMessageText:trs(BTN_STR_HELP_TITLE)];
         [alert setInformativeText:trs(BTN_STR_HELP_BODY)];
         [alert runModal];
     }
 }
 
+void btn_show_error_alert(const char *title, const char *info) {
+    @autoreleasepool {
+        NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+        [alert setAlertStyle:NSAlertStyleWarning];
+        [alert setMessageText:ns_from_c(title)];
+        [alert setInformativeText:ns_from_c(info)];
+        [alert addButtonWithTitle:trs(BTN_STR_BTN_OK)];
+        [alert runModal];
+    }
+}
+
 void btn_set_window_title(const char *title) {
     @autoreleasepool {
-        [g_window setTitle:[NSString stringWithUTF8String:title ? title : btn_tr(BTN_STR_UNTITLED)]];
+        [g_window setTitle:ns_from_c(title ? title : btn_tr(BTN_STR_UNTITLED))];
     }
 }
 

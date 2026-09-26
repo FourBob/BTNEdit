@@ -19,6 +19,46 @@ static int is_word_char(char c) {
            (c >= '0' && c <= '9') || c == '_';
 }
 
+int editor_is_word_char(char c) {
+    return is_word_char(c);
+}
+
+/* Zaehler ueber alle Editoren, siehe edit_seq-Kommentar in editor.h. */
+static size_t s_last_edit_seq = 0;
+
+/* Nach JEDER Inhaltsaenderung an Offset pos aufzurufen: neuer, global
+ * eindeutiger edit_seq, und dirty_floor merkt sich den kleinsten seit dem
+ * letzten Bezugspunkt veraenderten Offset. */
+static void mark_content_changed(Editor *ed, size_t pos) {
+    ed->edit_seq = ++s_last_edit_seq;
+    if (pos < ed->dirty_floor) {
+        ed->dirty_floor = pos;
+    }
+}
+
+/* Komplett neuer Inhalt (init/set_text): neuer edit_seq, der zugleich der
+ * neue Bezugspunkt ist - kein Cache kann diesen Wert schon kennen. */
+static void reset_content_tracking(Editor *ed) {
+    ed->edit_seq = ++s_last_edit_seq;
+    ed->dirty_base_seq = ed->edit_seq;
+    ed->dirty_floor = (size_t)-1;
+}
+
+size_t editor_changed_from(const Editor *ed, size_t base_seq) {
+    if (base_seq == ed->edit_seq) {
+        return (size_t)-1;
+    }
+    if (base_seq == ed->dirty_base_seq) {
+        return ed->dirty_floor;
+    }
+    return 0;
+}
+
+void editor_rebase_changes(Editor *ed) {
+    ed->dirty_base_seq = ed->edit_seq;
+    ed->dirty_floor = (size_t)-1;
+}
+
 /* "Klammer" umfasst hier auf Wunsch auch Anfuehrungszeichen (einfach und
  * doppelt) - fuers Auto-Vervollstaendigen/die Hervorhebung verhalten sie
  * sich fast wie eine Klammer, nur dass oeffnendes und schliessendes Zeichen
@@ -78,39 +118,110 @@ static size_t word_right(Editor *ed, size_t pos) {
     return i;
 }
 
-/* Byte-Laenge des UTF-8-Zeichens, das VOR pos endet (fuer Backspace) -
- * laeuft rueckwaerts ueber Continuation-Bytes (10xxxxxx) bis zum
- * Lead-Byte, hoechstens 4 Bytes (laengste gueltige UTF-8-Sequenz). Ohne
- * das wuerde Backspace bei jedem mehrbytigen Zeichen (Umlaute, Akzente,
- * nicht-lateinische Schrift) nur ein Byte davon loeschen und ein
- * ungueltiges UTF-8-Fragment im Puffer zuruecklassen. */
-static size_t utf8_backward_len(Editor *ed, size_t pos) {
-    size_t n = 1;
-    while (n < 4 && n < pos && (((unsigned char)gb_char_at(&ed->buffer, pos - n)) & 0xC0) == 0x80) {
-        n++;
+/* Die EINE Regel fuer "ein Zeichen" im ganzen Programm (siehe editor.h):
+ * eine gueltige UTF-8-Sequenz nach RFC 3629 - keine Ueberlaengen, keine
+ * Surrogate, nichts ueber U+10FFFF - ist ein Zeichen; jedes andere Byte ist
+ * fuer sich ein Zeichen und wird von render.c als ISO-8859-1 gezeichnet.
+ * Vorher prueften Cursorbewegung, Loeschen, Spaltenrechnung und Anzeige das
+ * jeweils anders: Entf auf einem Latin-1-"ae" (0xE4 = "3-Byte-Lead") loeschte
+ * die folgenden zwei Bytes mit, auch einen Zeilenumbruch. */
+size_t btn_utf8_char_len(const unsigned char *s, size_t avail) {
+    unsigned char b0 = s[0];
+    if (b0 < 0x80) {
+        return 1;
+    }
+    size_t n;
+    unsigned char lo = 0x80, hi = 0xBF;
+    if (b0 >= 0xC2 && b0 <= 0xDF) {
+        n = 2;
+    } else if (b0 == 0xE0) {
+        n = 3;
+        lo = 0xA0;
+    } else if ((b0 >= 0xE1 && b0 <= 0xEC) || b0 == 0xEE || b0 == 0xEF) {
+        n = 3;
+    } else if (b0 == 0xED) {
+        n = 3;
+        hi = 0x9F;
+    } else if (b0 == 0xF0) {
+        n = 4;
+        lo = 0x90;
+    } else if (b0 >= 0xF1 && b0 <= 0xF3) {
+        n = 4;
+    } else if (b0 == 0xF4) {
+        n = 4;
+        hi = 0x8F;
+    } else {
+        return 1;
+    }
+    if (avail < n || s[1] < lo || s[1] > hi) {
+        return 1;
+    }
+    for (size_t k = 2; k < n; k++) {
+        if ((s[k] & 0xC0) != 0x80) {
+            return 1;
+        }
     }
     return n;
 }
 
-/* Byte-Laenge des UTF-8-Zeichens, das BEI pos beginnt (fuer Forward Delete). */
+size_t btn_utf8_seq_start(const unsigned char *s, size_t len, size_t pos) {
+    if (pos >= len) {
+        return pos;
+    }
+    size_t p = pos;
+    size_t steps = 0;
+    while (steps < 3 && p > 0 && (s[p] & 0xC0) == 0x80) {
+        p--;
+        steps++;
+    }
+    if (p < pos && btn_utf8_char_len(s + p, len - p) > pos - p) {
+        return p;
+    }
+    return pos;
+}
+
+size_t editor_char_len(Editor *ed, size_t pos, size_t limit) {
+    unsigned char b[4];
+    b[0] = (unsigned char)gb_char_at(&ed->buffer, pos);
+    if (b[0] < 0x80) {
+        return 1;
+    }
+    size_t avail = limit - pos;
+    if (avail > 4) {
+        avail = 4;
+    }
+    for (size_t k = 1; k < avail; k++) {
+        b[k] = (unsigned char)gb_char_at(&ed->buffer, pos + k);
+    }
+    return btn_utf8_char_len(b, avail);
+}
+
+static int is_continuation_byte(Editor *ed, size_t pos) {
+    return (((unsigned char)gb_char_at(&ed->buffer, pos)) & 0xC0) == 0x80;
+}
+
+/* Byte-Laenge des Zeichens, das VOR pos endet (Backspace, Pfeil links).
+ * Kandidat ist das naechste Nicht-Fortsetzungsbyte hoechstens 3 Bytes davor;
+ * nur wenn von dort genau ein Zeichen bis pos reicht, ist es dieses Zeichen,
+ * sonst steht das Byte vor pos fuer sich (verirrtes Fortsetzungsbyte,
+ * abgeschnittene Sequenz). Jedes Nicht-Fortsetzungsbyte beginnt ein Zeichen,
+ * daher stimmt das exakt mit der Vorwaerts-Zerlegung ueberein. */
+static size_t utf8_backward_len(Editor *ed, size_t pos) {
+    size_t p = pos - 1;
+    size_t steps = 0;
+    while (steps < 3 && p > 0 && is_continuation_byte(ed, p)) {
+        p--;
+        steps++;
+    }
+    if (editor_char_len(ed, p, pos) == pos - p) {
+        return pos - p;
+    }
+    return 1;
+}
+
+/* Byte-Laenge des Zeichens, das BEI pos beginnt (Entf, Pfeil rechts). */
 static size_t utf8_forward_len(Editor *ed, size_t pos, size_t limit) {
-    unsigned char b = (unsigned char)gb_char_at(&ed->buffer, pos);
-    size_t n;
-    if ((b & 0x80) == 0x00) {
-        n = 1;
-    } else if ((b & 0xE0) == 0xC0) {
-        n = 2;
-    } else if ((b & 0xF0) == 0xE0) {
-        n = 3;
-    } else if ((b & 0xF8) == 0xF0) {
-        n = 4;
-    } else {
-        n = 1; /* ungueltiges Lead-Byte - defensiv nur 1 Byte loeschen */
-    }
-    if (pos + n > limit) {
-        n = limit - pos;
-    }
-    return n;
+    return editor_char_len(ed, pos, limit);
 }
 
 /* ---- Undo-Stack ---- */
@@ -120,6 +231,9 @@ static void undo_stack_init(UndoStack *st) {
     st->count = 0;
     st->capacity = 0;
     st->pos = 0;
+    st->open_group = 0;
+    st->last_group = 0;
+    st->group_depth = 0;
 }
 
 static void undo_stack_free(UndoStack *st) {
@@ -136,26 +250,59 @@ static void undo_stack_truncate_redo(UndoStack *st) {
     st->count = st->pos;
 }
 
+/* Antwort auf eine fehlgeschlagene Allokation im Undo-Stack: den ganzen
+ * Verlauf verwerfen. Die Bearbeitung selbst bleibt gueltig, sie ist nur
+ * nicht mehr rueckgaengig machbar. Ein fehlender oder halb geschriebener
+ * Record wuerde dagegen spaetere Undos an falscher Stelle anwenden - und
+ * realloc() direkt auf den Besitzer-Zeiger verlor vorher den alten Block
+ * und schrieb dann ueber NULL. Eine offene Gruppe bleibt offen. */
+static void undo_drop_history(UndoStack *st) {
+    unsigned long open_group = st->open_group, last_group = st->last_group;
+    int depth = st->group_depth;
+    undo_stack_free(st);
+    undo_stack_init(st);
+    st->open_group = open_group;
+    st->last_group = last_group;
+    st->group_depth = depth;
+}
+
 static UndoRecord *undo_stack_push_new(UndoStack *st) {
     undo_stack_truncate_redo(st);
     if (st->count == st->capacity) {
-        st->capacity = st->capacity ? st->capacity * 2 : 64;
-        st->records = realloc(st->records, st->capacity * sizeof(UndoRecord));
+        size_t new_cap = st->capacity ? st->capacity * 2 : 64;
+        UndoRecord *grown = NULL;
+        if (new_cap <= (size_t)-1 / sizeof(UndoRecord)) {
+            grown = realloc(st->records, new_cap * sizeof(UndoRecord));
+        }
+        if (!grown) {
+            undo_drop_history(st);
+            return NULL;
+        }
+        st->records = grown;
+        st->capacity = new_cap;
     }
     UndoRecord *r = &st->records[st->count++];
     st->pos = st->count;
     return r;
 }
 
-static void record_grow(UndoRecord *r, size_t extra) {
+/* 1 = Platz fuer extra weitere Bytes, 0 = Allokation fehlgeschlagen (r
+ * unveraendert). */
+static int record_grow(UndoRecord *r, size_t extra) {
     if (r->len + extra <= r->capacity) {
-        return;
+        return 1;
     }
-    r->capacity = r->capacity ? r->capacity * 2 : 16;
-    if (r->capacity < r->len + extra) {
-        r->capacity = r->len + extra;
+    size_t new_cap = r->capacity ? r->capacity * 2 : 16;
+    if (new_cap < r->len + extra) {
+        new_cap = r->len + extra;
     }
-    r->text = realloc(r->text, r->capacity);
+    char *grown = realloc(r->text, new_cap);
+    if (!grown) {
+        return 0;
+    }
+    r->text = grown;
+    r->capacity = new_cap;
+    return 1;
 }
 
 /* Legt einen frischen UndoRecord an und fuellt ihn - der gemeinsame Kern
@@ -163,12 +310,23 @@ static void record_grow(UndoRecord *r, size_t extra) {
  * brauchen (neuer Insert, neuer Delete, Block-Delete einer Selektion). */
 static void undo_record_fill(UndoStack *st, int is_insert, size_t pos, const char *src, size_t len) {
     UndoRecord *r = undo_stack_push_new(st);
+    if (!r) {
+        return;
+    }
+    char *text = malloc(len ? len : 1);
+    if (!text) {
+        st->count--;
+        st->pos = st->count;
+        undo_drop_history(st);
+        return;
+    }
+    memcpy(text, src, len);
     r->is_insert = is_insert;
     r->pos = pos;
     r->len = len;
     r->capacity = len;
-    r->text = malloc(len ? len : 1);
-    memcpy(r->text, src, len);
+    r->text = text;
+    r->group = st->open_group;
 }
 
 static void undo_push_insert(Editor *ed, size_t pos, const char *text, size_t len) {
@@ -177,9 +335,16 @@ static void undo_push_insert(Editor *ed, size_t pos, const char *text, size_t le
     ed->suppress_coalesce = 0;
     if (!blocked && st->pos > 0 && st->pos == st->count) {
         UndoRecord *last = &st->records[st->pos - 1];
-        if (last->is_insert && last->pos + last->len == pos && len == 1 &&
+        /* Genau EIN Zeichen (auch mehrbytig - "ae" sind 2 Bytes), nicht nur
+         * len == 1: sonst begann jeder Umlaut einen neuen Undo-Schritt, und
+         * Cmd+Z nahm deutsche Saetze in Bruchstuecken zurueck. */
+        if (last->is_insert && last->group == st->open_group && last->pos + last->len == pos &&
+            btn_utf8_char_len((const unsigned char *)text, len) == len &&
             text[0] != '\n' && (last->len == 0 || last->text[last->len - 1] != '\n')) {
-            record_grow(last, len);
+            if (!record_grow(last, len)) {
+                undo_drop_history(st);
+                return;
+            }
             memcpy(last->text + last->len, text, len);
             last->len += len;
             return;
@@ -192,11 +357,15 @@ static void undo_push_delete(Editor *ed, size_t pos, const char *deleted, size_t
     UndoStack *st = &ed->undo;
     int blocked = ed->suppress_coalesce;
     ed->suppress_coalesce = 0;
-    if (!blocked && st->pos > 0 && st->pos == st->count && len == 1 && deleted[0] != '\n') {
+    if (!blocked && st->pos > 0 && st->pos == st->count &&
+        btn_utf8_char_len((const unsigned char *)deleted, len) == len && deleted[0] != '\n') {
         UndoRecord *last = &st->records[st->pos - 1];
-        if (!last->is_insert) {
+        if (!last->is_insert && last->group == st->open_group) {
             if (backward && pos + len == last->pos) {
-                record_grow(last, len);
+                if (!record_grow(last, len)) {
+                    undo_drop_history(st);
+                    return;
+                }
                 memmove(last->text + len, last->text, last->len);
                 memcpy(last->text, deleted, len);
                 last->len += len;
@@ -204,7 +373,10 @@ static void undo_push_delete(Editor *ed, size_t pos, const char *deleted, size_t
                 return;
             }
             if (!backward && pos == last->pos) {
-                record_grow(last, len);
+                if (!record_grow(last, len)) {
+                    undo_drop_history(st);
+                    return;
+                }
                 memcpy(last->text + last->len, deleted, len);
                 last->len += len;
                 return;
@@ -226,7 +398,7 @@ void editor_init(Editor *ed) {
     ed->cursor = 0;
     ed->anchor = 0;
     ed->desired_col = UNSET_COL;
-    ed->edit_seq = 0;
+    reset_content_tracking(ed);
     ed->suppress_coalesce = 0;
     ed->single_line = 0;
     undo_stack_init(&ed->undo);
@@ -241,22 +413,22 @@ void editor_set_single_line(Editor *ed, int single_line) {
     ed->single_line = single_line;
 }
 
-/* Ersetzt '\n'/'\r'/'\t' durch ' ' in einer Kopie von text, falls ed
- * einzeilig ist - genutzt von editor_insert_text()/editor_set_text(), damit
- * KEIN Einfuegeweg (Tippen, Einfuegen aus der Zwischenablage, künftige Wege
- * wie Drag&Drop/IME) das einzeilig-Feld je mit einem echten Zeilenumbruch
- * oder Tab durcheinanderbringen kann - Tabs wuerden sonst render.c's rein
- * byte-basierte Cursor-/Selektions-Spaltenrechnung im Suchleisten-Feld
- * gegenueber CoreTexts eigener Tab-Stop-Darstellung verschieben (dort gibt
- * es anders als beim Hauptdokument keine expand_tabs_for_display()-
- * Vorverarbeitung). Gibt NULL zurueck, wenn keine Ersetzung noetig war
+/* Ersetzt '\n'/'\r' durch ' ' in einer Kopie von text, falls ed einzeilig
+ * ist - genutzt von editor_insert_text()/editor_set_text(), damit KEIN
+ * Einfuegeweg (Tippen, Einfuegen aus der Zwischenablage, künftige Wege wie
+ * Drag&Drop/IME) das einzeilige Feld je mit einem echten Zeilenumbruch
+ * durcheinanderbringen kann. Tabs bleiben: das Feld zeichnet und rechnet
+ * Spalten mit denselben Tabstopps (decode_row_for_display()/
+ * editor_visual_column_in_range() ab Spalte 0), und nur so findet die
+ * Suche nach einer vorbefuellten Selektion wie "a<Tab>b" den Tab im
+ * Dokument (vorher wurde daraus "a b" - "Nicht gefunden"). Gibt NULL zurueck, wenn keine Ersetzung noetig war
  * (Aufrufer nutzt dann weiter das Original); sonst einen neu allokierten,
  * gleich langen Puffer (Ersetzung ist immer 1:1, keine Laengenaenderung).
  */
 static char *sanitize_single_line(const char *text, size_t len) {
     int needs_sanitizing = 0;
     for (size_t i = 0; i < len; i++) {
-        if (text[i] == '\n' || text[i] == '\r' || text[i] == '\t') {
+        if (text[i] == '\n' || text[i] == '\r') {
             needs_sanitizing = 1;
             break;
         }
@@ -264,10 +436,10 @@ static char *sanitize_single_line(const char *text, size_t len) {
     if (!needs_sanitizing) {
         return NULL;
     }
-    char *out = malloc(len);
+    char *out = btn_xmalloc(len);
     for (size_t i = 0; i < len; i++) {
         char c = text[i];
-        out[i] = (c == '\n' || c == '\r' || c == '\t') ? ' ' : c;
+        out[i] = (c == '\n' || c == '\r') ? ' ' : c;
     }
     return out;
 }
@@ -285,7 +457,7 @@ void editor_set_text(Editor *ed, const char *text, size_t len) {
     ed->cursor = 0;
     ed->anchor = 0;
     ed->desired_col = UNSET_COL;
-    ed->edit_seq = 0;
+    reset_content_tracking(ed);
     ed->suppress_coalesce = 0;
 
     undo_stack_free(&ed->undo);
@@ -361,13 +533,16 @@ size_t editor_utf8_seq_start(Editor *ed, size_t pos) {
     if (pos >= len) {
         return pos;
     }
-    size_t start = pos;
+    size_t p = pos;
     size_t steps = 0;
-    while (steps < 3 && start > 0 && (((unsigned char)gb_char_at(&ed->buffer, start)) & 0xC0) == 0x80) {
-        start--;
+    while (steps < 3 && p > 0 && is_continuation_byte(ed, p)) {
+        p--;
         steps++;
     }
-    return start;
+    if (p < pos && editor_char_len(ed, p, len) > pos - p) {
+        return p;
+    }
+    return pos;
 }
 
 void editor_mark_cursor_moved(Editor *ed) {
@@ -382,10 +557,18 @@ size_t editor_tab_advance(size_t col) {
     return advance_tab_stop(col);
 }
 
+/* Zaehlt Zeichen nach btn_utf8_char_len(), nicht Bytes - jedes Zeichen ist
+ * genau EINE visuelle Spalte (Tab: bis zum naechsten Tabstopp), genau so,
+ * wie render.c's draw_row_line() es zeichnet. Sonst wuerde z.B. "ä"
+ * (2 Bytes) als 2 Spalten zaehlen und der Cursor bei jedem mehrbytigen
+ * Zeichen in derselben Zeile weiter vom gezeichneten Text weglaufen. */
 size_t editor_visual_column_in_range(Editor *ed, size_t range_start, size_t offset) {
     size_t col = 0;
-    for (size_t i = range_start; i < offset; i++) {
-        col = (gb_char_at(&ed->buffer, i) == '\t') ? advance_tab_stop(col) : col + 1;
+    size_t i = range_start;
+    while (i < offset) {
+        unsigned char c = (unsigned char)gb_char_at(&ed->buffer, i);
+        col = (c == '\t') ? advance_tab_stop(col) : col + 1;
+        i += (c < 0x80) ? 1 : editor_char_len(ed, i, offset);
     }
     return col;
 }
@@ -395,8 +578,14 @@ size_t editor_offset_for_column_in_range(Editor *ed, size_t range_start, size_t 
     size_t col = 0;
     size_t i = range_start;
     while (i < range_end && col < target_col) {
-        col = (gb_char_at(&ed->buffer, i) == '\t') ? advance_tab_stop(col) : col + 1;
-        i++;
+        char c = gb_char_at(&ed->buffer, i);
+        col = (c == '\t') ? advance_tab_stop(col) : col + 1;
+        /* Ganze Byte-Laenge des Zeichens ueberspringen (nicht nur 1 Byte),
+         * sonst wuerde i bei einem mehrbytigen Zeichen mitten in dessen
+         * Fortsetzungsbytes stehen bleiben, statt am Anfang des naechsten
+         * echten Zeichens - siehe editor_visual_column_in_range() oben fuer
+         * dasselbe Grundproblem in der jeweils anderen Richtung. */
+        i += utf8_forward_len(ed, i, range_end);
     }
     return i;
 }
@@ -573,7 +762,7 @@ void editor_delete_selection(Editor *ed) {
     ed->cursor = start;
     ed->anchor = start;
     ed->desired_col = UNSET_COL;
-    ed->edit_seq++;
+    mark_content_changed(ed, start);
 }
 
 void editor_insert_text(Editor *ed, const char *text, size_t len) {
@@ -596,7 +785,7 @@ void editor_insert_text(Editor *ed, const char *text, size_t len) {
     ed->cursor = pos + len;
     ed->anchor = ed->cursor;
     ed->desired_col = UNSET_COL;
-    ed->edit_seq++;
+    mark_content_changed(ed, pos);
     free(sanitized);
 }
 
@@ -609,12 +798,19 @@ void editor_insert_text(Editor *ed, const char *text, size_t len) {
  * ausgeschrieben. */
 static void wrap_selection_with(Editor *ed, char open_c, char close_c) {
     size_t start = editor_selection_start(ed);
+    /* Laenge aus den Selektionsgrenzen, nicht strlen(): eine Selektion in
+     * einer per "Trotzdem oeffnen" geladenen Binaerdatei kann NUL-Bytes
+     * enthalten - strlen() haette alles dahinter beim Wiedereinfuegen
+     * verschluckt. */
+    size_t sel_len = editor_selection_end(ed) - start;
     char *sel = editor_get_selection_text(ed);
-    size_t sel_len = strlen(sel);
+    /* Ein Undo-Schritt statt drei (Loeschen, Klammer, Text, Klammer). */
+    editor_begin_undo_group(ed);
     editor_delete_selection(ed);
     editor_insert_text(ed, &open_c, 1);
     editor_insert_text(ed, sel, sel_len);
     editor_insert_text(ed, &close_c, 1);
+    editor_end_undo_group(ed);
     free(sel);
     ed->anchor = start + 1;
     ed->cursor = start + 1 + sel_len;
@@ -713,7 +909,7 @@ void editor_delete_backward(Editor *ed) {
             ed->cursor = pos;
             ed->anchor = pos;
             ed->desired_col = UNSET_COL;
-            ed->edit_seq++;
+            mark_content_changed(ed, pos);
             return;
         }
     }
@@ -727,7 +923,7 @@ void editor_delete_backward(Editor *ed) {
     ed->cursor = pos;
     ed->anchor = pos;
     ed->desired_col = UNSET_COL;
-    ed->edit_seq++;
+    mark_content_changed(ed, pos);
 }
 
 void editor_delete_forward(Editor *ed) {
@@ -745,7 +941,7 @@ void editor_delete_forward(Editor *ed) {
     undo_push_delete(ed, ed->cursor, deleted, n, 0);
     free(deleted);
     ed->desired_col = UNSET_COL;
-    ed->edit_seq++;
+    mark_content_changed(ed, ed->cursor);
 }
 
 /* ---- Bewegung & Selektion ---- */
@@ -759,14 +955,20 @@ void editor_move(Editor *ed, BtnMove move, int extend) {
             if (!extend && editor_has_selection(ed)) {
                 new_pos = editor_selection_start(ed);
             } else if (new_pos > 0) {
-                new_pos--;
+                /* Ein ZEICHEN, nicht ein Byte - sonst landet der Cursor
+                 * mitten in einer UTF-8-Sequenz (bei "ä" zwischen C3 und
+                 * A4, gezeichnet an derselben Spalte, also unsichtbar), und
+                 * das naechste Tippen/Backspace zerreisst die Sequenz zu
+                 * ungueltigem UTF-8 in der Datei. Dieselben Helfer wie
+                 * Backspace/Entf. */
+                new_pos -= utf8_backward_len(ed, new_pos);
             }
             break;
         case BTN_MOVE_RIGHT:
             if (!extend && editor_has_selection(ed)) {
                 new_pos = editor_selection_end(ed);
             } else if (new_pos < len) {
-                new_pos++;
+                new_pos += utf8_forward_len(ed, new_pos, len);
             }
             break;
         case BTN_MOVE_WORD_LEFT:
@@ -879,7 +1081,7 @@ char *editor_copy_all(Editor *ed, size_t *out_len) {
 
 char *editor_get_selection_text(Editor *ed) {
     if (!editor_has_selection(ed)) {
-        char *empty = malloc(1);
+        char *empty = btn_xmalloc(1);
         empty[0] = '\0';
         return empty;
     }
@@ -890,24 +1092,43 @@ char *editor_get_selection_text(Editor *ed) {
 
 /* ---- Undo/Redo ---- */
 
+/* Wendet records[pos-1] rueckwaerts an (Undo) bzw. records[pos] vorwaerts
+ * (Redo) und setzt den Cursor ans Ende der wiederhergestellten Stelle. */
+static void undo_apply_one(Editor *ed, int undo) {
+    UndoStack *st = &ed->undo;
+    UndoRecord *r = undo ? &st->records[--st->pos] : &st->records[st->pos++];
+    if (r->is_insert == !undo) {
+        gb_insert(&ed->buffer, r->pos, r->text, r->len);
+        ed->cursor = r->pos + r->len;
+    } else {
+        gb_delete(&ed->buffer, r->pos, r->len);
+        ed->cursor = r->pos;
+    }
+    mark_content_changed(ed, r->pos);
+}
+
 void editor_undo(Editor *ed) {
     UndoStack *st = &ed->undo;
     if (st->pos == 0) {
         return;
     }
-    st->pos--;
-    UndoRecord *r = &st->records[st->pos];
-    if (r->is_insert) {
-        gb_delete(&ed->buffer, r->pos, r->len);
-        ed->cursor = r->pos;
-    } else {
-        gb_insert(&ed->buffer, r->pos, r->text, r->len);
-        ed->cursor = r->pos + r->len;
+    /* Eine ganze Gruppe (siehe editor_begin_undo_group()) auf einmal. Danach
+     * steht der Cursor am Anfang der fruehesten Aenderung - sonst landete er
+     * nach dem Rueckgaengigmachen von "Alles auswaehlen + Tab" oder "Alle
+     * ersetzen" am Ende des zuletzt wiederhergestellten Stuecks. */
+    unsigned long group = st->records[st->pos - 1].group;
+    size_t earliest = (size_t)-1;
+    do {
+        size_t p = st->records[st->pos - 1].pos;
+        earliest = p < earliest ? p : earliest;
+        undo_apply_one(ed, 1);
+    } while (group != 0 && st->pos > 0 && st->records[st->pos - 1].group == group);
+    if (group != 0) {
+        ed->cursor = earliest;
     }
     ed->anchor = ed->cursor;
     ed->desired_col = UNSET_COL;
     editor_mark_cursor_moved(ed);
-    ed->edit_seq++;
 }
 
 void editor_redo(Editor *ed) {
@@ -915,17 +1136,438 @@ void editor_redo(Editor *ed) {
     if (st->pos == st->count) {
         return;
     }
-    UndoRecord *r = &st->records[st->pos];
-    if (r->is_insert) {
-        gb_insert(&ed->buffer, r->pos, r->text, r->len);
-        ed->cursor = r->pos + r->len;
-    } else {
-        gb_delete(&ed->buffer, r->pos, r->len);
-        ed->cursor = r->pos;
-    }
-    st->pos++;
+    unsigned long group = st->records[st->pos].group;
+    do {
+        undo_apply_one(ed, 0);
+    } while (group != 0 && st->pos < st->count && st->records[st->pos].group == group);
     ed->anchor = ed->cursor;
     ed->desired_col = UNSET_COL;
     editor_mark_cursor_moved(ed);
-    ed->edit_seq++;
+}
+
+void editor_begin_undo_group(Editor *ed) {
+    UndoStack *st = &ed->undo;
+    if (st->group_depth++ == 0) {
+        st->open_group = ++st->last_group;
+    }
+}
+
+void editor_end_undo_group(Editor *ed) {
+    UndoStack *st = &ed->undo;
+    if (st->group_depth > 0 && --st->group_depth == 0) {
+        st->open_group = 0;
+        /* Naechster Tastendruck nicht in den letzten Record der Gruppe
+         * hineinfassen. */
+        ed->suppress_coalesce = 1;
+    }
+}
+
+/* ---- Einruecken ---- */
+
+/* Wie viel vom Dokumentanfang fuer die Stil-Erkennung gelesen wird - Tab
+ * soll auch bei einer 1-GB-Datei sofort reagieren. */
+#define BTN_INDENT_SAMPLE_LEN (1024 * 1024)
+
+static size_t line_start_at(Editor *ed, size_t pos) {
+    while (pos > 0 && gb_char_at(&ed->buffer, pos - 1) != '\n') {
+        pos--;
+    }
+    return pos;
+}
+
+int editor_indent_uses_spaces(Editor *ed) {
+    size_t len = editor_length(ed);
+    size_t limit = len < BTN_INDENT_SAMPLE_LEN ? len : BTN_INDENT_SAMPLE_LEN;
+    size_t tab_lines = 0, space_lines = 0;
+    int at_line_start = 1;
+    for (size_t i = 0; i < limit; i++) {
+        char c = gb_char_at(&ed->buffer, i);
+        if (at_line_start) {
+            if (c == '\t') {
+                tab_lines++;
+            } else if (c == ' ' && i + 1 < len && gb_char_at(&ed->buffer, i + 1) == ' ') {
+                /* mindestens zwei: " * " in Blockkommentaren ist keine Einrueckung */
+                space_lines++;
+            }
+        }
+        at_line_start = (c == '\n');
+    }
+    return space_lines > tab_lines;
+}
+
+/* Eine Einrueckstufe: '\t' oder BTN_TAB_WIDTH Leerzeichen. */
+static size_t indent_unit(Editor *ed, char *buf) {
+    if (editor_indent_uses_spaces(ed)) {
+        memset(buf, ' ', BTN_TAB_WIDTH);
+        return BTN_TAB_WIDTH;
+    }
+    buf[0] = '\t';
+    return 1;
+}
+
+void editor_insert_newline(Editor *ed) {
+    size_t start = editor_selection_start(ed);
+    size_t line = line_start_at(ed, start);
+    size_t n = 0;
+    while (line + n < start) {
+        char c = gb_char_at(&ed->buffer, line + n);
+        if (c != ' ' && c != '\t') {
+            break;
+        }
+        n++;
+    }
+    char *text = btn_xmalloc(n + 1);
+    text[0] = '\n';
+    for (size_t i = 0; i < n; i++) {
+        text[1 + i] = gb_char_at(&ed->buffer, line + i);
+    }
+    /* Selektion ersetzen + Umbruch + Einrueckung = ein Undo-Schritt */
+    editor_begin_undo_group(ed);
+    editor_insert_text(ed, text, ed->single_line ? 1 : n + 1);
+    editor_end_undo_group(ed);
+    free(text);
+}
+
+/* Ist die Zeile ab Offset i (im kopierten Bereich) leer oder nur Leerraum?
+ * '\r' vor '\n' bzw. am Ende zaehlt als Zeilenende (roh geladene
+ * gemischte Dateien, siehe eol.h) - sonst bekaeme eine leere CRLF-Zeile
+ * beim Einruecken Leerraum am Zeilenende. */
+static int blank_line_at(const char *t, size_t len, size_t i) {
+    while (i < len && (t[i] == ' ' || t[i] == '\t')) {
+        i++;
+    }
+    return i >= len || t[i] == '\n' || (t[i] == '\r' && (i + 1 >= len || t[i + 1] == '\n'));
+}
+
+/* Rueckt alle Zeilen ein bzw. aus, die die Selektion beruehrt (ohne
+ * Selektion: die Zeile des Cursors). Eine Zeile, auf deren Spalte 0 die
+ * Selektion nur endet, zaehlt nicht mit; leere und reine Leerraum-Zeilen
+ * werden nicht eingerueckt. Der betroffene Bereich wird einmal neu
+ * aufgebaut und als EIN Ersetzen angewendet - zwei Undo-Records statt einem
+ * pro Zeile (Alles auswaehlen + Tab bei 1 Mio. Zeilen kostete sonst ein
+ * Vielfaches der Dateigroesse). Anker und Cursor bleiben auf ihrem Text. */
+/* Die Zeilen, die die Selektion beruehrt (ohne Selektion: die des Cursors):
+ * [*first, *end) - *first am Zeilenanfang, *end auf dem '\n' der letzten
+ * Zeile bzw. am Textende. Eine Zeile, auf deren Spalte 0 die Selektion nur
+ * endet, zaehlt nicht mit. */
+static void selected_lines(Editor *ed, size_t *first, size_t *end) {
+    size_t s = editor_selection_start(ed), e = editor_selection_end(ed);
+    size_t len = editor_length(ed);
+    size_t last = e;
+    if (e > s && gb_char_at(&ed->buffer, e - 1) == '\n') {
+        last = e - 1;
+    }
+    *first = line_start_at(ed, s);
+    *end = last;
+    while (*end < len && gb_char_at(&ed->buffer, *end) != '\n') {
+        (*end)++;
+    }
+}
+
+/* Ersetzt [from, to) durch text als EIN Undo-Schritt und setzt danach Anker
+ * und Cursor. */
+static void replace_lines(Editor *ed, size_t from, size_t to, const char *text, size_t n, size_t anchor,
+                          size_t cursor) {
+    editor_begin_undo_group(ed);
+    editor_set_cursor(ed, from, 0);
+    editor_set_cursor(ed, to, 1);
+    if (n == 0) {
+        editor_delete_selection(ed);
+    } else {
+        editor_insert_text(ed, text, n);
+    }
+    editor_end_undo_group(ed);
+    editor_set_cursor(ed, anchor, 0);
+    editor_set_cursor(ed, cursor, 1);
+}
+
+static void indent_lines(Editor *ed, int outdent) {
+    size_t first, range_end;
+    selected_lines(ed, &first, &range_end);
+    size_t old_len = range_end - first;
+    char *old = gb_copy_range(&ed->buffer, first, old_len);
+
+    char unit[BTN_TAB_WIDTH];
+    size_t unit_len = outdent ? 0 : indent_unit(ed, unit);
+    /* Neuer Text: hoechstens eine Einheit pro Zeile mehr */
+    size_t lines = 1;
+    for (size_t i = 0; i < old_len; i++) {
+        lines += old[i] == '\n';
+    }
+    char *out = btn_xmalloc(old_len + btn_xmul(lines, unit_len) + 1);
+    size_t o = 0;
+
+    size_t pos[2] = { ed->anchor, ed->cursor };
+    long shift[2] = { 0, 0 };
+    for (size_t i = 0; i < old_len;) {
+        /* i steht auf einem Zeilenanfang (Originalkoordinate first + i) */
+        size_t line = first + i;
+        if (!outdent) {
+            if (!blank_line_at(old, old_len, i)) {
+                memcpy(out + o, unit, unit_len);
+                o += unit_len;
+                for (int j = 0; j < 2; j++) {
+                    shift[j] += (pos[j] > line) ? (long)unit_len : 0;
+                }
+            }
+        } else {
+            size_t n = 0;
+            if (old[i] == '\t') {
+                n = 1;
+            } else {
+                while (n < BTN_TAB_WIDTH && i + n < old_len && old[i + n] == ' ') {
+                    n++;
+                }
+            }
+            for (int j = 0; j < 2; j++) {
+                if (pos[j] > line) {
+                    shift[j] -= (long)((pos[j] < line + n ? pos[j] : line + n) - line);
+                }
+            }
+            i += n;
+        }
+        /* Rest der Zeile samt '\n' uebernehmen */
+        while (i < old_len && old[i] != '\n') {
+            out[o++] = old[i++];
+        }
+        if (i < old_len) {
+            out[o++] = old[i++];
+        }
+    }
+    if (o != old_len || memcmp(out, old, o) != 0) {
+        replace_lines(ed, first, range_end, out, o, (size_t)((long)pos[0] + shift[0]),
+                      (size_t)((long)pos[1] + shift[1]));
+    }
+    free(out);
+    free(old);
+}
+
+void editor_tab_key(Editor *ed, int outdent) {
+    if (outdent) {
+        indent_lines(ed, 1);
+        return;
+    }
+    size_t s = editor_selection_start(ed), e = editor_selection_end(ed);
+    for (size_t i = s; i < e; i++) {
+        if (gb_char_at(&ed->buffer, i) == '\n') {
+            indent_lines(ed, 0); /* Selektion ueber mehrere Zeilen */
+            return;
+        }
+    }
+    /* Selektion ersetzen + einfuegen = ein Undo-Schritt */
+    editor_begin_undo_group(ed);
+    if (editor_indent_uses_spaces(ed)) {
+        /* bis zum naechsten Tabstopp auffuellen, wie ein Tab aussaehe */
+        size_t col = editor_visual_column_in_range(ed, line_start_at(ed, s), s);
+        size_t n = editor_tab_advance(col) - col;
+        char spaces[BTN_TAB_WIDTH];
+        memset(spaces, ' ', sizeof spaces);
+        editor_insert_text(ed, spaces, n);
+    } else {
+        editor_insert_text(ed, "\t", 1);
+    }
+    editor_end_undo_group(ed);
+}
+
+/* ---- Zeilen-Befehle: Kommentar, Duplizieren, Verschieben ---- */
+
+/* Laenge des Leerraums (Leerzeichen/Tabs) am Anfang der Zeile ab t[i]. */
+static size_t leading_blank(const char *t, size_t len, size_t i) {
+    size_t n = 0;
+    while (i + n < len && (t[i + n] == ' ' || t[i + n] == '\t')) {
+        n++;
+    }
+    return n;
+}
+
+void editor_toggle_line_comment(Editor *ed, const char *prefix) {
+    size_t plen = prefix ? strlen(prefix) : 0;
+    if (plen == 0) {
+        return;
+    }
+    size_t first, end;
+    selected_lines(ed, &first, &end);
+    size_t old_len = end - first;
+    char *old = gb_copy_range(&ed->buffer, first, old_len);
+
+    /* Durchgang 1: sind alle nicht-leeren Zeilen schon kommentiert, und
+     * welchen Leerraum-Anfang haben sie gemeinsam? Gemeinsam in Bytes, nicht
+     * "geringste Einrueckung": bei gemischten Tabs/Leerzeichen landete das
+     * Zeichen sonst mitten in der Einrueckung einer anderen Zeile. */
+    int all = 1, any = 0;
+    size_t min_ind = (size_t)-1, ref = 0, lines = 1;
+    for (size_t i = 0;;) {
+        if (!blank_line_at(old, old_len, i)) {
+            size_t ind = leading_blank(old, old_len, i);
+            if (!any) {
+                ref = i;
+                min_ind = ind;
+            } else {
+                size_t k = 0;
+                while (k < min_ind && k < ind && old[i + k] == old[ref + k]) {
+                    k++;
+                }
+                min_ind = k;
+            }
+            any = 1;
+            if (i + ind + plen > old_len || memcmp(old + i + ind, prefix, plen) != 0) {
+                all = 0;
+            }
+        }
+        while (i < old_len && old[i] != '\n') {
+            i++;
+        }
+        if (i >= old_len) {
+            break;
+        }
+        i++;
+        lines++;
+    }
+    if (!any) {
+        free(old); /* nur leere Zeilen: nichts zu kommentieren */
+        return;
+    }
+
+    /* Durchgang 2: neu aufbauen. Kommentieren setzt "prefix " hinter den
+     * gemeinsamen Leerraum (die Spalte bleibt im Block einheitlich),
+     * Entkommentieren nimmt prefix und ein folgendes Leerzeichen weg. */
+    char *out = btn_xmalloc(old_len + btn_xmul(lines, plen + 1) + 1);
+    size_t o = 0;
+    size_t pos[2] = { ed->anchor, ed->cursor };
+    long shift[2] = { 0, 0 };
+    for (size_t i = 0;;) {
+        size_t line = first + i;
+        if (!blank_line_at(old, old_len, i)) {
+            if (all) {
+                size_t ind = leading_blank(old, old_len, i);
+                size_t n = plen + (i + ind + plen < old_len && old[i + ind + plen] == ' ');
+                memcpy(out + o, old + i, ind);
+                o += ind;
+                size_t at = line + ind;
+                for (int j = 0; j < 2; j++) {
+                    if (pos[j] > at) {
+                        shift[j] -= (long)((pos[j] < at + n ? pos[j] : at + n) - at);
+                    }
+                }
+                i += ind + n;
+            } else {
+                memcpy(out + o, old + i, min_ind);
+                o += min_ind;
+                memcpy(out + o, prefix, plen);
+                out[o + plen] = ' ';
+                o += plen + 1;
+                size_t at = line + min_ind;
+                for (int j = 0; j < 2; j++) {
+                    /* Am Zeilenanfang bleibt eine Position stehen (die
+                     * Selektion umfasst dann auch das neue Zeichen). */
+                    if (pos[j] > at || (pos[j] == at && at != line)) {
+                        shift[j] += (long)(plen + 1);
+                    }
+                }
+                i += min_ind;
+            }
+        }
+        while (i < old_len && old[i] != '\n') {
+            out[o++] = old[i++];
+        }
+        if (i < old_len) {
+            out[o++] = old[i++];
+        } else {
+            break;
+        }
+    }
+    replace_lines(ed, first, end, out, o, (size_t)((long)pos[0] + shift[0]), (size_t)((long)pos[1] + shift[1]));
+    free(out);
+    free(old);
+}
+
+void editor_duplicate_lines(Editor *ed) {
+    size_t first, end;
+    selected_lines(ed, &first, &end);
+    size_t len = editor_length(ed);
+    size_t block_len = end - first;
+    char *block = gb_copy_range(&ed->buffer, first, block_len);
+    char *text = btn_xmalloc(block_len + 3);
+    size_t at, term = 1;
+    if (end < len) {
+        /* "block\n" hinter das '\n' der letzten Zeile */
+        memcpy(text, block, block_len);
+        text[block_len] = '\n';
+        at = end + 1;
+    } else {
+        /* letzte Zeile ohne Zeilenende: "\nblock" ans Ende - mit dem
+         * Zeilenende der Zeile davor ("\r\n" in roh geladenen Dateien) */
+        int crlf = first >= 2 && gb_char_at(&ed->buffer, first - 2) == '\r';
+        term = crlf ? 2 : 1;
+        memcpy(text, crlf ? "\r\n" : "\n", term);
+        memcpy(text + term, block, block_len);
+        at = end;
+    }
+    free(block);
+    size_t delta = block_len + term;
+    size_t anchor = ed->anchor + delta, cursor = ed->cursor + delta;
+    replace_lines(ed, at, at, text, block_len + term, anchor, cursor);
+    free(text);
+}
+
+void editor_move_lines(Editor *ed, int down) {
+    size_t first, end;
+    selected_lines(ed, &first, &end);
+    size_t len = editor_length(ed);
+    size_t block_end = end < len ? end + 1 : end; /* samt '\n' */
+    size_t region_start, region_end, upper_len;
+    if (!down) {
+        if (first == 0) {
+            return;
+        }
+        region_start = line_start_at(ed, first - 1);
+        region_end = block_end;
+        upper_len = first - region_start; /* die Zeile darueber */
+    } else {
+        if (end >= len) {
+            return;
+        }
+        size_t next_end = end + 1;
+        while (next_end < len && gb_char_at(&ed->buffer, next_end) != '\n') {
+            next_end++;
+        }
+        region_start = first;
+        region_end = next_end < len ? next_end + 1 : next_end;
+        upper_len = block_end - first; /* der Block selbst */
+    }
+    size_t region_len = region_end - region_start;
+    char *r = gb_copy_range(&ed->buffer, region_start, region_len);
+    const char *upper = r, *lower = r + upper_len;
+    size_t lower_len = region_len - upper_len;
+    /* Hat die untere Zeile ein '\n'? Nicht, wenn sie die letzte ist - auch
+     * nicht, wenn sie leer ist (dann endet der Bereich mit dem '\n' von upper). */
+    int ends_nl = lower_len > 0 && lower[lower_len - 1] == '\n';
+
+    /* lower + Zeilenende (falls es die letzte Zeile ohne war) + upper, und
+     * ohne Zeilenende am Schluss, wenn der Bereich keins hatte. Das
+     * Zeilenende wandert von upper zu lower - "\r\n" in roh geladenen
+     * Dateien als Ganzes, sonst bliebe ein einzelnes '\r' zurueck. */
+    size_t term = upper_len >= 2 && upper[upper_len - 2] == '\r' ? 2 : 1;
+    char *out = btn_xmalloc(region_len + 3);
+    size_t o = 0;
+    memcpy(out, lower, lower_len);
+    o = lower_len;
+    size_t lower_nl_len = lower_len;
+    if (!ends_nl) {
+        memcpy(out + o, upper + upper_len - term, term);
+        o += term;
+        lower_nl_len += term;
+    }
+    memcpy(out + o, upper, upper_len);
+    o += upper_len;
+    if (!ends_nl) {
+        o -= term; /* das Zeilenende von upper */
+    }
+    /* Neue Lage des Blocks: oben am Bereichsanfang bzw. hinter lower */
+    size_t block_new = down ? region_start + lower_nl_len : region_start;
+    size_t anchor = block_new + (ed->anchor - first);
+    size_t cursor = block_new + (ed->cursor - first);
+    replace_lines(ed, region_start, region_end, out, o, anchor, cursor);
+    free(out);
+    free(r);
 }
