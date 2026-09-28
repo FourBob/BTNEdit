@@ -5,6 +5,7 @@
  * mappt die Bereiche auf die Anzeige-Koordinaten (Tabs, Wortumbruch).
  */
 #include "highlight.h"
+#include "editor.h" /* BTN_INDENT_* */
 
 #include <ctype.h>
 #include <string.h>
@@ -32,6 +33,7 @@ struct BtnLangSpec {
                                    * gleichzeitig als Kommentar akzeptieren. */
     const char *toggle_comment;  /* Zeichen fuer "Kommentar ein/aus", NULL =
                                    * keins (Signalton) */
+    int indent_rules;            /* BTN_INDENT_* fuer Return (editor.h) */
 };
 
 static const char *const C_KEYWORDS[] = {
@@ -46,7 +48,7 @@ static const char *const C_KEYWORDS[] = {
 };
 static const BtnLangSpec C_LANG = {
     .keywords = C_KEYWORDS, .line_comment_slash = 1, .block_comment = 1, .line_prefix_char = '#',
-    .toggle_comment = "//"
+    .toggle_comment = "//", .indent_rules = BTN_INDENT_BRACES
 };
 
 static const char *const PY_KEYWORDS[] = {
@@ -56,14 +58,19 @@ static const char *const PY_KEYWORDS[] = {
     "return", "try", "while", "with", "yield", "None", "True", "False", "self",
     NULL
 };
-static const BtnLangSpec PY_LANG = { .keywords = PY_KEYWORDS, .line_comment_hash = 1, .toggle_comment = "#" };
+static const BtnLangSpec PY_LANG = {
+    .keywords = PY_KEYWORDS, .line_comment_hash = 1, .toggle_comment = "#",
+    .indent_rules = BTN_INDENT_BRACES | BTN_INDENT_COLON
+};
 
 static const char *const SHELL_KEYWORDS[] = {
     "if", "then", "else", "elif", "fi", "for", "while", "do", "done", "case", "esac",
     "function", "return", "exit", "local", "export", "echo", "in",
     NULL
 };
-static const BtnLangSpec SHELL_LANG = { .keywords = SHELL_KEYWORDS, .line_comment_hash = 1, .toggle_comment = "#" };
+static const BtnLangSpec SHELL_LANG = {
+    .keywords = SHELL_KEYWORDS, .line_comment_hash = 1, .toggle_comment = "#", .indent_rules = BTN_INDENT_BRACES
+};
 
 static const char *const JS_KEYWORDS[] = {
     "break", "case", "catch", "class", "const", "continue", "debugger", "default",
@@ -74,7 +81,8 @@ static const char *const JS_KEYWORDS[] = {
     NULL
 };
 static const BtnLangSpec JS_LANG = {
-    .keywords = JS_KEYWORDS, .line_comment_slash = 1, .block_comment = 1, .toggle_comment = "//"
+    .keywords = JS_KEYWORDS, .line_comment_slash = 1, .block_comment = 1, .toggle_comment = "//",
+    .indent_rules = BTN_INDENT_BRACES
 };
 
 static const char *const SWIFT_KEYWORDS[] = {
@@ -88,7 +96,8 @@ static const char *const SWIFT_KEYWORDS[] = {
     NULL
 };
 static const BtnLangSpec SWIFT_LANG = {
-    .keywords = SWIFT_KEYWORDS, .line_comment_slash = 1, .block_comment = 1, .toggle_comment = "//"
+    .keywords = SWIFT_KEYWORDS, .line_comment_slash = 1, .block_comment = 1, .toggle_comment = "//",
+    .indent_rules = BTN_INDENT_BRACES
 };
 
 /* Kein eigener Tokenizer-Zustand fuer Markdown - reine Zweckentfremdung
@@ -209,6 +218,10 @@ const BtnLangSpec *btn_highlight_lang_for_path(const char *path) {
 
 const char *btn_highlight_line_comment(const BtnLangSpec *lang) {
     return lang ? lang->toggle_comment : NULL;
+}
+
+int btn_highlight_indent_rules(const BtnLangSpec *lang) {
+    return lang ? lang->indent_rules : 0;
 }
 
 static int is_keyword(const BtnLangSpec *lang, const char *word, size_t len) {

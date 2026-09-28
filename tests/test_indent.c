@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "editor.h"
+#include "highlight.h"
 
 static long fails = 0, checks = 0;
 #define CHECK(c, ...) do { checks++; if (!(c)) { if (fails < 25) { printf("FAIL: " __VA_ARGS__); printf("\n"); } fails++; } } while (0)
@@ -31,7 +32,7 @@ static void test_newline(void) {
 
     set(&ed, "    foo");
     sel(&ed, 7, 7);
-    editor_insert_newline(&ed);
+    editor_insert_newline(&ed, 0);
     CHECK(eq(&ed, "    foo\n    ") && ed.cursor == 12, "Return copies 4-space indent");
     type(&ed, "bar");
     CHECK(eq(&ed, "    foo\n    bar"), "typing continues on the indented line");
@@ -42,28 +43,28 @@ static void test_newline(void) {
 
     set(&ed, "\t\tx = 1;");
     sel(&ed, 8, 8);
-    editor_insert_newline(&ed);
+    editor_insert_newline(&ed, 0);
     CHECK(eq(&ed, "\t\tx = 1;\n\t\t"), "Return copies tabs");
 
     set(&ed, "    foo");
     sel(&ed, 2, 2); /* mitten in der Einrueckung */
-    editor_insert_newline(&ed);
+    editor_insert_newline(&ed, 0);
     CHECK(eq(&ed, "  \n    foo") && ed.cursor == 5, "indent copied only up to the cursor");
 
     set(&ed, "a\n  b\xC3\xA4" "c");
     sel(&ed, 4, 7); /* Selektion "b" + "ae" wird ersetzt */
-    editor_insert_newline(&ed);
+    editor_insert_newline(&ed, 0);
     CHECK(eq(&ed, "a\n  \n  c"), "Return replaces selection, indent from selection start's line");
     editor_undo(&ed);
     CHECK(eq(&ed, "a\n  b\xC3\xA4" "c"), "one undo restores the selection text");
 
     set(&ed, "no indent");
     sel(&ed, 9, 9);
-    editor_insert_newline(&ed);
+    editor_insert_newline(&ed, 0);
     CHECK(eq(&ed, "no indent\n"), "no indentation: plain newline");
 
     set(&ed, "");
-    editor_insert_newline(&ed);
+    editor_insert_newline(&ed, 0);
     CHECK(eq(&ed, "\n"), "empty document");
     editor_free(&ed);
 
@@ -71,7 +72,7 @@ static void test_newline(void) {
     editor_init(&field);
     editor_set_single_line(&field, 1);
     type(&field, "  x");
-    editor_insert_newline(&field);
+    editor_insert_newline(&field, 0);
     CHECK(eq(&field, "  x "), "single-line field: newline becomes one space, no indent");
     editor_free(&field);
 }
@@ -329,8 +330,136 @@ static void test_large(void) {
     free(doc);
 }
 
+/* Return nach '{' / ':' eine Stufe tiefer, Aufteilen von {}, '}' richtet
+ * sich nach der oeffnenden Klammer, Leerraum-Zeilen werden leer. */
+static void newline_at(Editor *ed, const char *text, size_t cursor, int rules) {
+    set(ed, text);
+    sel(ed, cursor, cursor);
+    editor_insert_newline(ed, rules);
+}
+
+static void test_smart(void) {
+    Editor ed;
+    editor_init(&ed);
+    const int B = BTN_INDENT_BRACES, PY = BTN_INDENT_BRACES | BTN_INDENT_COLON;
+
+    newline_at(&ed, "int f() {", 9, B);
+    CHECK(eq(&ed, "int f() {\n\t") && ed.cursor == 11, "after '{': one tab deeper (no indentation in the file yet)");
+    newline_at(&ed, "x\n    if (x) {", 14, B);
+    CHECK(eq(&ed, "x\n    if (x) {\n        ") && ed.cursor == 23, "spaces file: four spaces deeper");
+    newline_at(&ed, "\tcall(a,", 8, B);
+    CHECK(eq(&ed, "\tcall(a,\n\t"), "only when the opener is the last character");
+    newline_at(&ed, "\tcall(", 6, B);
+    CHECK(eq(&ed, "\tcall(\n\t\t"), "'(' opens too");
+    newline_at(&ed, "a = [  ", 7, B);
+    CHECK(eq(&ed, "a = [  \n\t"), "trailing spaces after the opener are skipped");
+    newline_at(&ed, "int f() {", 9, 0);
+    CHECK(eq(&ed, "int f() {\n"), "no rules (plain text): indentation only copied");
+
+    /* {} aufteilen */
+    newline_at(&ed, "void f() {}", 10, B);
+    CHECK(eq(&ed, "void f() {\n\t\n}") && ed.cursor == 12 && !editor_has_selection(&ed), "{|} split: cursor indented in the middle");
+    editor_undo(&ed);
+    CHECK(eq(&ed, "void f() {}") && ed.cursor == 10, "split is one undo step");
+    newline_at(&ed, "x\n    y = [  ]", 11, B);
+    CHECK(eq(&ed, "x\n    y = [\n        \n    ]") && ed.cursor == 20, "[  ] split, spaces in between dropped");
+    newline_at(&ed, "f(a)", 2, B);
+    CHECK(eq(&ed, "f(\n\ta)"), "not split when something else follows (only deeper)");
+    newline_at(&ed, "a{)", 2, B);
+    CHECK(eq(&ed, "a{\n\t)"), "not split for a different closer");
+
+    /* Python */
+    newline_at(&ed, "def f(x):", 9, PY);
+    CHECK(eq(&ed, "def f(x):\n\t"), "Python: deeper after ':'");
+    newline_at(&ed, "x\n    if a:  ", 13, PY);
+    CHECK(eq(&ed, "x\n    if a:  \n        "), "':' with trailing spaces");
+    newline_at(&ed, "case 1:", 7, B);
+    CHECK(eq(&ed, "case 1:\n"), "C: ':' does not indent");
+    newline_at(&ed, "d = {", 5, PY);
+    CHECK(eq(&ed, "d = {\n\t"), "Python: brackets too");
+
+    /* Leerraum-Zeile wird leer */
+    newline_at(&ed, "a\n    ", 6, 0);
+    CHECK(eq(&ed, "a\n\n    ") && ed.cursor == 7, "whitespace-only line: no trailing whitespace left behind");
+    editor_undo(&ed);
+    CHECK(eq(&ed, "a\n    "), "one undo step (cursor %zu)", ed.cursor);
+    newline_at(&ed, "a\n    \nb", 4, 0);
+    CHECK(eq(&ed, "a\n\n    \nb") && ed.cursor == 5, "cursor inside a whitespace-only line: before it cleared, the rest moves down");
+    newline_at(&ed, "a\n  x", 4, 0);
+    CHECK(eq(&ed, "a\n  \n  x"), "text after the cursor: the line keeps its indentation (unchanged behaviour)");
+
+    /* einzeiliges Feld: keine Regeln */
+    Editor field;
+    editor_init(&field);
+    editor_set_single_line(&field, 1);
+    type(&field, "a{}");
+    sel(&field, 2, 2);
+    editor_insert_newline(&field, B);
+    CHECK(eq(&field, "a{ }"), "single-line field: rules ignored, newline becomes a space");
+    editor_set_text(&field, "b{  }", 5);
+    sel(&field, 2, 2);
+    editor_insert_newline(&field, B);
+    CHECK(eq(&field, "b{   }"), "single-line field: spaces before the closer stay");
+    editor_free(&field);
+
+    /* '}' richtet sich aus */
+    set(&ed, "int f() {\n\t\t");
+    sel(&ed, 12, 12);
+    CHECK(editor_type_closing_bracket(&ed, '}', B) && eq(&ed, "int f() {\n}") && ed.cursor == 11, "'}' aligned with its '{' line");
+    editor_undo(&ed);
+    CHECK(eq(&ed, "int f() {\n\t\t"), "one undo step");
+    set(&ed, "{\n    {\n        x;\n        ");
+    sel(&ed, 28, 28);
+    CHECK(editor_type_closing_bracket(&ed, '}', B) && eq(&ed, "{\n    {\n        x;\n    }"), "nested: the inner '{'");
+    set(&ed, "{\n    a[{}];\n    ");
+    sel(&ed, 18, 18);
+    CHECK(editor_type_closing_bracket(&ed, '}', B) && eq(&ed, "{\n    a[{}];\n}"), "closed pairs in between are skipped");
+    set(&ed, "call(\n    a,\n    ");
+    sel(&ed, 17, 17);
+    CHECK(editor_type_closing_bracket(&ed, ')', B) && eq(&ed, "call(\n    a,\n)"), "')' too");
+    set(&ed, "x\n        ");
+    sel(&ed, 10, 10);
+    CHECK(editor_type_closing_bracket(&ed, '}', B) && eq(&ed, "x\n    }"), "no opener: one level less (spaces)");
+    set(&ed, "x\n\t\t");
+    sel(&ed, 4, 4);
+    CHECK(editor_type_closing_bracket(&ed, ']', B) && eq(&ed, "x\n\t]"), "no opener: one level less (tab)");
+    set(&ed, "    a\n    b\n\t\t");
+    sel(&ed, 14, 14);
+    CHECK(editor_type_closing_bracket(&ed, ']', B) && eq(&ed, "    a\n    b\n\t]"), "tab-indented line in a spaces file: one tab less");
+    set(&ed, "{\n  x }");
+    sel(&ed, 6, 6);
+    CHECK(!editor_type_closing_bracket(&ed, '}', B), "text before the cursor: not responsible");
+    set(&ed, "{\n    }");
+    sel(&ed, 6, 6);
+    CHECK(!editor_type_closing_bracket(&ed, '}', B), "same bracket right after the cursor: overtyping handles it");
+    set(&ed, "{\n    ");
+    sel(&ed, 6, 6);
+    CHECK(!editor_type_closing_bracket(&ed, '}', 0) && !editor_type_closing_bracket(&ed, 'x', B) && eq(&ed, "{\n    "),
+          "no rules / other characters: not responsible");
+    sel(&ed, 3, 6);
+    CHECK(!editor_type_closing_bracket(&ed, '}', B), "selection: not responsible");
+    set(&ed, "{");
+    sel(&ed, 1, 1);
+    CHECK(!editor_type_closing_bracket(&ed, '}', B), "at column 0 after text / no whitespace: not responsible");
+    editor_free(&ed);
+
+    /* Regeln je Sprache (highlight.c) */
+    CHECK(btn_highlight_indent_rules(btn_highlight_lang_for_path("a.c")) == B &&
+              btn_highlight_indent_rules(btn_highlight_lang_for_path("a.js")) == B &&
+              btn_highlight_indent_rules(btn_highlight_lang_for_path("a.swift")) == B &&
+              btn_highlight_indent_rules(btn_highlight_lang_for_path("a.sh")) == B,
+          "C/JS/Swift/Shell: brackets");
+    CHECK(btn_highlight_indent_rules(btn_highlight_lang_for_path("a.py")) == PY, "Python: brackets and ':'");
+    CHECK(btn_highlight_indent_rules(btn_highlight_lang_for_path("a.md")) == 0 &&
+              btn_highlight_indent_rules(btn_highlight_lang_for_path("a.ini")) == 0 &&
+              btn_highlight_indent_rules(btn_highlight_lang_for_path("a.txt")) == 0 &&
+              btn_highlight_indent_rules(NULL) == 0,
+          "Markdown/INI/text/none: only copy the indentation");
+}
+
 int main(void) {
     test_newline();
+    test_smart();
     test_tab();
     test_style();
     test_more_cases();

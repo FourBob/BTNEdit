@@ -1205,27 +1205,146 @@ static size_t indent_unit(Editor *ed, char *buf) {
     return 1;
 }
 
-void editor_insert_newline(Editor *ed) {
-    size_t start = editor_selection_start(ed);
-    size_t line = line_start_at(ed, start);
+/* Laenge des Leerraums ab line (hoechstens bis limit). */
+static size_t leading_ws(Editor *ed, size_t line, size_t limit) {
     size_t n = 0;
-    while (line + n < start) {
+    while (line + n < limit) {
         char c = gb_char_at(&ed->buffer, line + n);
         if (c != ' ' && c != '\t') {
             break;
         }
         n++;
     }
-    char *text = btn_xmalloc(n + 1);
-    text[0] = '\n';
+    return n;
+}
+
+static size_t line_end_at(Editor *ed, size_t pos) {
+    size_t len = editor_length(ed);
+    while (pos < len && gb_char_at(&ed->buffer, pos) != '\n') {
+        pos++;
+    }
+    return pos;
+}
+
+void editor_insert_newline(Editor *ed, int rules) {
+    size_t start = editor_selection_start(ed), end = editor_selection_end(ed);
+    size_t line = line_start_at(ed, start);
+    size_t n = leading_ws(ed, line, start);
+    if (ed->single_line) {
+        rules = 0;
+    }
+    /* Letztes Zeichen vor dem Cursor (Leerraum uebersprungen) oeffnet einen
+     * Block? */
+    size_t p = start;
+    while (p > line && (gb_char_at(&ed->buffer, p - 1) == ' ' || gb_char_at(&ed->buffer, p - 1) == '\t')) {
+        p--;
+    }
+    char opener = p > line ? gb_char_at(&ed->buffer, p - 1) : 0;
+    int deeper = ((rules & BTN_INDENT_BRACES) && opener && strchr("{[(", opener)) ||
+                 ((rules & BTN_INDENT_COLON) && opener == ':');
+    /* Direkt dahinter die passende schliessende Klammer: aufteilen */
+    size_t close_pos = end + leading_ws(ed, end, editor_length(ed));
+    char closer = deeper ? matching_close_for(opener) : 0; /* ':' hat keins */
+    int split = closer && close_pos < editor_length(ed) && gb_char_at(&ed->buffer, close_pos) == closer;
+    /* Nur Leerraum in der ganzen Zeile: der bleibt nicht am Zeilenende stehen */
+    size_t replace_from = start, replace_to = split ? close_pos : end;
+    if (start == end && !ed->single_line && n > 0 && line + n == start &&
+        line_end_at(ed, start) == start + leading_ws(ed, start, editor_length(ed))) {
+        replace_from = line;
+    }
+
+    char unit[BTN_TAB_WIDTH];
+    size_t ul = deeper ? indent_unit(ed, unit) : 0;
+    size_t cap = 2 + 2 * n + ul;
+    char *text = btn_xmalloc(cap);
+    size_t t = 0;
+    text[t++] = '\n';
     for (size_t i = 0; i < n; i++) {
-        text[1 + i] = gb_char_at(&ed->buffer, line + i);
+        text[t++] = gb_char_at(&ed->buffer, line + i);
+    }
+    memcpy(text + t, unit, ul);
+    t += ul;
+    size_t cursor_at = t; /* relativ zum Einfuegepunkt */
+    if (split) {
+        text[t++] = '\n';
+        for (size_t i = 0; i < n; i++) {
+            text[t++] = gb_char_at(&ed->buffer, line + i);
+        }
+    }
+    if (ed->single_line) {
+        t = 1;
+        cursor_at = 1;
     }
     /* Selektion ersetzen + Umbruch + Einrueckung = ein Undo-Schritt */
     editor_begin_undo_group(ed);
-    editor_insert_text(ed, text, ed->single_line ? 1 : n + 1);
+    if (replace_from != start || replace_to != end) {
+        editor_set_cursor(ed, replace_from, 0);
+        editor_set_cursor(ed, replace_to, 1);
+    }
+    editor_insert_text(ed, text, t);
+    editor_end_undo_group(ed);
+    if (cursor_at != t) {
+        editor_set_cursor(ed, replace_from + cursor_at, 0);
+    }
+    free(text);
+}
+
+int editor_type_closing_bracket(Editor *ed, char c, int rules) {
+    char open_c = c == '}' ? '{' : c == ']' ? '[' : c == ')' ? '(' : 0;
+    if (!open_c || !(rules & BTN_INDENT_BRACES) || ed->single_line || editor_has_selection(ed)) {
+        return 0;
+    }
+    size_t cur = ed->cursor, line = line_start_at(ed, cur);
+    if (cur == line || leading_ws(ed, line, cur) != cur - line) {
+        return 0; /* nicht nur Leerraum davor */
+    }
+    if (cur < editor_length(ed) && gb_char_at(&ed->buffer, cur) == c) {
+        return 0; /* Ueberschreiben der vorhandenen Klammer uebernimmt editor_handle_bracket_key() */
+    }
+    /* Passende oeffnende Klammer rueckwaerts suchen (gleiche Art, Tiefe) */
+    size_t depth = 0, pos = line, scanned = 0;
+    int found = 0;
+    while (pos > 0 && scanned < BTN_INDENT_SAMPLE_LEN) {
+        char b = gb_char_at(&ed->buffer, --pos);
+        scanned++;
+        if (b == c) {
+            depth++;
+        } else if (b == open_c) {
+            if (depth == 0) {
+                found = 1;
+                break;
+            }
+            depth--;
+        }
+    }
+    char *indent;
+    size_t il;
+    if (found) {
+        size_t ol = line_start_at(ed, pos);
+        il = leading_ws(ed, ol, pos);
+        indent = gb_copy_range(&ed->buffer, ol, il);
+    } else {
+        /* eine Stufe weniger */
+        char unit[BTN_TAB_WIDTH];
+        size_t ul = indent_unit(ed, unit);
+        size_t have = cur - line;
+        il = have >= ul ? have - ul : 0;
+        if (have > 0 && gb_char_at(&ed->buffer, cur - 1) == '\t') {
+            il = have - 1;
+        }
+        indent = gb_copy_range(&ed->buffer, line, il);
+    }
+    char *text = btn_xmalloc(il + 1);
+    memcpy(text, indent, il);
+    text[il] = c;
+    editor_begin_undo_group(ed);
+    editor_set_cursor(ed, line, 0);
+    editor_set_cursor(ed, cur, 1);
+    editor_insert_text(ed, text, il + 1);
     editor_end_undo_group(ed);
     free(text);
+    free(indent);
+    return 1;
 }
 
 /* Ist die Zeile ab Offset i (im kopierten Bereich) leer oder nur Leerraum?

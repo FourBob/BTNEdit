@@ -3332,8 +3332,16 @@ static void handle_find_bar_key(const char *characters, unsigned short keycode, 
  * Typdurchlauf fuer Klammern UND Anfuehrungszeichen ab (siehe editor.c) -
  * aber nur fuer genau ein Zeichen: eine Eingabemethode kann mehrere auf
  * einmal liefern ("(abc"), dann wurde vorher nur die Klammer eingefuegt. */
+/* Einrueck-Regeln der Sprache des aktiven Dokuments (Dateiendung). */
+static int active_indent_rules(void) {
+    return btn_highlight_indent_rules(btn_highlight_lang_for_path(active_doc()->path));
+}
+
 static void insert_typed_chars(Editor *ed, const char *chars) {
     size_t n = strlen(chars);
+    if (n == 1 && editor_type_closing_bracket(ed, chars[0], active_indent_rules())) {
+        return; /* '}' auf einer leeren Zeile: an die oeffnende Klammer ausgerichtet */
+    }
     if (n != 1 || !editor_handle_bracket_key(ed, chars[0])) {
         editor_insert_text(ed, chars, n);
     }
@@ -3475,7 +3483,7 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
     int had_ghost = ghost_visible();
     size_t c0 = ed->cursor, l0 = editor_length(ed);
     if (c == '\r') {
-        editor_insert_newline(ed); /* mit Einrueckung der aktuellen Zeile */
+        editor_insert_newline(ed, active_indent_rules()); /* Einrueckung der Zeile, nach '{' eine mehr */
     } else if (c == 0x7F) {
         editor_delete_backward(ed);
     } else if (c >= 0x20) {

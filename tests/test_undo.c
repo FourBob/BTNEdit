@@ -161,7 +161,7 @@ static void fuzz(unsigned permille, int iters, unsigned long seed) {
         case 11: editor_handle_bracket_key(&ed, "([{\"'"[rnd(5)]); what = "bracket"; break;
         case 12: editor_tab_key(&ed, 0); what = "tab"; break;
         case 13: editor_tab_key(&ed, 1); what = "shift-tab"; break;
-        case 14: editor_insert_newline(&ed); what = "newline"; break;
+        case 14: editor_insert_newline(&ed, 0); what = "newline"; break;
         }
         check_history(&ed, what);
     }

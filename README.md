@@ -51,9 +51,13 @@ Klammern, Suchen/Ersetzen, Zeilen-Befehle) ist reine C-Logik und wird selbst
 
 - Undo/Redo mit Zusammenfassen aufeinanderfolgender Tastendrücke; Befehle
   wie "Alle ersetzen", Einrücken oder Zeilen verschieben sind je ein Schritt
-- Einrücken: Return übernimmt die Einrückung der aktuellen Zeile; Tab und
-  ⇧Tab rücken alle Zeilen einer Auswahl ein bzw. aus - mit Tab oder vier
-  Leerzeichen, je nachdem, was die Datei überwiegend nutzt
+- Einrücken: Return übernimmt die Einrückung der aktuellen Zeile, nach `{`,
+  `[` oder `(` (C/C++/ObjC/Java, JS/TS, Swift, Shell, Python) und nach `:`
+  (Python) eine Stufe mehr; zwischen `{` und `}` teilt Return auf drei Zeilen
+  auf, ein `}` auf sonst leerer Zeile rückt zu seiner `{`-Zeile zurück, und
+  eine Zeile nur aus Leerraum wird beim Return leer. Tab und ⇧Tab rücken
+  alle Zeilen einer Auswahl ein bzw. aus - mit Tab oder vier Leerzeichen, je
+  nachdem, was die Datei überwiegend nutzt
 - Zeilen-Befehle für alle Zeilen der Auswahl: Kommentar ein/aus (`⌘/`, mit
   `//`, `#` bzw. `;` je nach Sprache, hinter der gemeinsamen Einrückung),
   Zeilen duplizieren (`⇧⌘D`), Zeilen nach oben/unten verschieben
@@ -324,7 +328,7 @@ diesen Tests Stubs.
 | `test_regex_replace`, `test_tab_search`, `test_regex_budget` | Suchen/Ersetzen, Rückreferenzen, `\t`, Komplexitätsdeckel der Live-Suche |
 | `test_layout_cache`, `test_layout_cache_lang` | Layout- und Kommentar-Cache gegen einen frischen Aufbau |
 | `test_undo` | Undo-Gruppen und Fuzzing mit simulierten Allokationsfehlern |
-| `test_indent` | Auto-Indent bei Return, Tab/⇧Tab über mehrere Zeilen, Tab vs. Leerzeichen, Fuzz: Ausrücken nach Einrücken = Original |
+| `test_indent` | Auto-Indent bei Return (nach `{`/`:`, Aufteilen von `{}`, `}` rückt zurück, Regeln je Sprache), Tab/⇧Tab über mehrere Zeilen, Tab vs. Leerzeichen, Fuzz: Ausrücken nach Einrücken = Original |
 | `test_lines` | Kommentar ein/aus (Einrückung, Leerzeilen, `#`/`;`, Selektion, Undo), Duplizieren, Verschieben (Ränder, letzte Zeile ohne Umbruch, CRLF), Fuzz-Rückwege; Markierungen für unsichtbare Zeichen gegen die Spaltenregel; Menü-Verdrahtung aus `main.c` |
 | `test_textinput` | Eingabemethoden: UTF-16-Umrechnung, nachgestellte Abläufe (Tottaste, Pinyin, Akzent-Menü, Emoji, Suchfeld) mit dem Code aus `main.c` |
 | `test_shortcuts` | Weitersuchen, Auswahl für Suche (auch mit NUL-Byte), Tab-Wechsel mit Umlauf |

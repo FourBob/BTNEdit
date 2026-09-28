@@ -215,14 +215,28 @@ void editor_undo(Editor *ed);
 void editor_redo(Editor *ed);
 
 /* Einruecken. editor_insert_newline(): Return - neue Zeile mit der
- * Einrueckung (Leerzeichen/Tabs) der aktuellen Zeile bis zum Cursor.
+ * Einrueckung (Leerzeichen/Tabs) der aktuellen Zeile bis zum Cursor; eine
+ * Zeile nur aus Leerraum wird dabei leer (kein Leerraum am Zeilenende).
+ * rules (BTN_INDENT_*, je Sprache, 0 = nur uebernehmen):
+ *   BTN_INDENT_BRACES: nach '{', '[' oder '(' eine Stufe mehr; steht direkt
+ *     dahinter (nur Leerraum dazwischen) die passende schliessende Klammer,
+ *     wird aufgeteilt: Cursor eingerueckt in der Mitte, die Klammer auf
+ *     eigener Zeile mit der alten Einrueckung.
+ *   BTN_INDENT_COLON: nach ':' eine Stufe mehr (Python).
+ * editor_type_closing_bracket(): '}', ']' oder ')' in einer Zeile, die bis
+ *   zum Cursor nur Leerraum enthaelt (BTN_INDENT_BRACES): die Zeile bekommt
+ *   die Einrueckung der Zeile mit der passenden oeffnenden Klammer (ohne
+ *   sie: eine Stufe weniger), dann das Zeichen - ein Undo-Schritt. 0 = nicht
+ *   zustaendig (der Aufrufer tippt normal).
  * editor_tab_key(): Tab bzw. Shift+Tab (outdent=1). Mit einer Selektion
  * ueber mehrere Zeilen (oder bei Shift+Tab immer) werden alle beruehrten
  * Zeilen um eine Stufe ein- bzw. ausgerueckt, sonst wird ein Tab
  * eingefuegt - in einer Datei, die ueberwiegend mit Leerzeichen einrueckt,
  * als Leerzeichen bis zum naechsten Tabstopp. Jeweils ein Undo-Schritt.
  * editor_indent_uses_spaces(): diese Stil-Erkennung (erstes MB der Datei). */
-void editor_insert_newline(Editor *ed);
+enum { BTN_INDENT_BRACES = 1, BTN_INDENT_COLON = 2 };
+void editor_insert_newline(Editor *ed, int rules);
+int editor_type_closing_bracket(Editor *ed, char c, int rules);
 void editor_tab_key(Editor *ed, int outdent);
 int editor_indent_uses_spaces(Editor *ed);
 

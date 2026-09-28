@@ -35,6 +35,11 @@ const BtnLangSpec *btn_highlight_lang_for_path(const char *path);
  * Sprache keins hat (oder lang == NULL, z.B. .config - oft XML). */
 const char *btn_highlight_line_comment(const BtnLangSpec *lang);
 
+/* Einrueck-Regeln fuer Return/schliessende Klammern (BTN_INDENT_* aus
+ * editor.h): C/JS/Swift/Shell Klammern, Python zusaetzlich ':'; 0 fuer
+ * alles andere (auch lang == NULL). */
+int btn_highlight_indent_rules(const BtnLangSpec *lang);
+
 /* Tokenisiert eine einzelne logische Zeile. starts_in_comment gibt an, ob
  * die Zeile bereits innerhalb eines mehrzeiligen Blockkommentars beginnt
  * (vom vorherigen Aufruf/derselben Funktion fuer die vorherige Zeile

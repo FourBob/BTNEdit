@@ -86,12 +86,12 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
   öffnet (macOS-Standard) das Akzent-Menü statt die Taste zu wiederholen;
   wer Wiederholung will: `defaults write <bundle-id> ApplePressAndHoldEnabled
   -bool false`.
-- Einrücken: Return übernimmt nur die vorhandene Einrückung - kein
-  zusätzliches Einrücken nach `{` oder `:` und kein Aufteilen von `{}` auf
-  drei Zeilen (bräuchte Sprachwissen aus highlight.c). Drückt man Return auf
-  einer Zeile, die nur aus Einrückung besteht, bleibt diese Einrückung als
-  Leerraum am Zeilenende stehen. Die Stil-Erkennung (Tab oder Leerzeichen)
-  liest nur das erste MB der Datei.
+- Einrücken: Die Klammern vor dem Cursor werden ohne Sprachwissen gezählt -
+  eine `{` in einem String oder Kommentar rückt beim Return ebenfalls ein,
+  und ein `}` sucht seine `{` auch durch Strings/Kommentare (höchstens 1 MB
+  zurück). Python rückt nach `return`/`pass` nicht automatisch aus, `else:`
+  und `except:` rücken nicht automatisch zurück. Die Stil-Erkennung (Tab
+  oder Leerzeichen) liest nur das erste MB der Datei.
 - Zeilenenden: Dateien mit gemischten Zeilenenden (z.B. Logs mit
   Fortschrittszeilen, Patches mit einzelnen CRLF-Zeilen) und Binärdateien
   bleiben Byte für Byte, wie sie sind - ein `\r` darin wird dann wie bisher
