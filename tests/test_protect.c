@@ -337,7 +337,11 @@ static void test_external_changes(void) {
     struct stat before;
     stat(a, &before);
     write_raw(a, "SAME\nmine");
+#ifdef __APPLE__
+    struct timespec back[2] = { before.st_atimespec, before.st_mtimespec };
+#else
     struct timespec back[2] = { before.st_atim, before.st_mtim };
+#endif
     utimensat(AT_FDCWD, a, back, 0);
     answers(1, 1);
     CHECK(check_doc_on_disk(0, 1) == 1 && g_choice_count == 1, "same size, mtime restored, other content: asked");
