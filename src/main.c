@@ -75,6 +75,7 @@ typedef struct {
     BtnFileStamp disk;
     uint64_t disk_hash;   /* Pruefsumme dieses Stands (filestamp.h) */
     int disk_hash_valid;  /* 0 = unbekannt (wiederhergestellt, verschwunden) */
+    BtnFileStamp changed; /* zuletzt als echte Aenderung erkannter Stand (nicht neu lesen) */
     int missing_on_disk;
     unsigned recovery_id;
     char *recovery_file;
@@ -649,6 +650,7 @@ static int add_tab(void) {
     d->scroll_accum = 0.0;
     d->label_cache_valid = 0;
     memset(&d->disk, 0, sizeof(d->disk));
+    memset(&d->changed, 0, sizeof(d->changed));
     d->disk_hash_valid = 0;
     d->missing_on_disk = 0;
     d->recovery_id = g_next_recovery_id++;
@@ -2106,8 +2108,8 @@ static void open_file_path(Document *d, const char *path) {
             free(contents);
             return;
         }
+        d->disk_hash = btn_hash_bytes(BTN_HASH_SEED, contents, len); /* vor dem Laden: das wandelt Zeilenenden */
         load_doc_contents(d, contents, len, binary);
-        d->disk_hash = btn_hash_bytes(BTN_HASH_SEED, contents, len);
         free(contents);
         set_doc_path(d, path);
         mark_doc_saved(d);
@@ -2182,7 +2184,15 @@ static int disk_content_changed(Document *d, const BtnFileStamp *now) {
         return 1;
     }
     d->disk = *now;
+    d->missing_on_disk = 0; /* wieder lesbar, derselbe Inhalt */
     return 0;
+}
+
+/* Pruefsumme der Datei genau im Stand *stamp - aendert sie sich waehrend
+ * des Lesens, gilt sie als unbekannt (0). */
+static int hash_for_stamp(const char *path, const BtnFileStamp *stamp, uint64_t *out) {
+    BtnFileStamp after;
+    return btn_file_hash(path, out) && btn_file_stamp(path, &after) && btn_file_stamp_equal(&after, stamp);
 }
 
 /* force_save_as: immer den Sichern-Dialog zeigen, auch wenn schon ein Pfad
@@ -2231,7 +2241,7 @@ static int perform_save_doc(Document *d, int force_save_as) {
         contents = btn_eol_encode_segments(seg_a, len_a, seg_b, len_b, d->eol, &len);
     }
     int ok = write_file_contents(path, contents, len);
-    uint64_t hash = btn_hash_bytes(BTN_HASH_SEED, contents, len);
+    uint64_t hash = ok ? btn_hash_bytes(BTN_HASH_SEED, contents, len) : 0;
     free(contents);
 
     if (ok) {
@@ -2414,8 +2424,8 @@ static void reload_doc(Document *d) {
         return;
     }
     size_t cursor = d->editor.cursor, anchor = d->editor.anchor;
+    d->disk_hash = btn_hash_bytes(BTN_HASH_SEED, contents, len); /* vor dem Laden: das wandelt Zeilenenden */
     load_doc_contents(d, contents, len, looks_binary(contents, len));
-    d->disk_hash = btn_hash_bytes(BTN_HASH_SEED, contents, len);
     free(contents);
     editor_set_cursor(&d->editor, editor_utf8_seq_start(&d->editor, anchor), 0);
     editor_set_cursor(&d->editor, editor_utf8_seq_start(&d->editor, cursor), 1);
@@ -2448,9 +2458,13 @@ static int check_doc_on_disk(int idx, int ask) {
         d->missing_on_disk = 1;
         return 1;
     }
-    if (!disk_content_changed(d, &now)) {
+    /* Schon als Aenderung erkannt (Timer, eigene Aenderungen, noch nicht
+     * gefragt): nicht bei jedem Tick die ganze Datei neu lesen */
+    int known = d->changed.valid && btn_file_stamp_equal(&now, &d->changed);
+    if (!known && !disk_content_changed(d, &now)) {
         return 0; /* nur Metadaten/Zeiten: kein Neuladen, keine Frage */
     }
+    d->changed = now;
     if (!doc_has_edits(d)) {
         reload_doc(d);
         return 1;
@@ -2462,6 +2476,11 @@ static int check_doc_on_disk(int idx, int ask) {
         switch_to_tab(idx);
         btn_app_request_redraw();
     }
+    /* Die Pruefsumme des Stands, nach dem gefragt wird - VOR dem Dialog:
+     * aendert ein Programm die Datei, waehrend er offen ist, fragt die
+     * naechste Pruefung erneut, statt die neue Fassung still zu uebernehmen. */
+    uint64_t now_hash;
+    int now_hash_ok = hash_for_stamp(d->path, &now, &now_hash);
     char title[512];
     snprintf(title, sizeof(title), btn_tr(BTN_STR_FILE_CHANGED_TITLE_FMT), doc_display_name(d));
     /* Kein Escape: der einzige Weg, die eigenen Aenderungen zu verwerfen,
@@ -2471,7 +2490,8 @@ static int check_doc_on_disk(int idx, int ask) {
         /* Behalten: erst die naechste Aenderung fragt wieder, Sichern
          * ueberschreibt ohne weitere Rueckfrage. */
         d->disk = now;
-        d->disk_hash_valid = btn_file_hash(d->path, &d->disk_hash);
+        d->disk_hash = now_hash;
+        d->disk_hash_valid = now_hash_ok;
         d->missing_on_disk = 0;
     } else {
         reload_doc(d);

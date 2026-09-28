@@ -61,8 +61,15 @@ const char *btn_tr(BtnStringId id) {
             return "%s";
     }
 }
+/* Anderes Programm schreibt, waehrend der Dialog offen ist */
+static const char *g_dialog_write_path = NULL, *g_dialog_write_text = NULL;
+static void write_raw(const char *path, const char *text);
 static int btn_show_choice_alert(const char *title, const char *info, const char *a, const char *b, int esc) {
     (void)info; (void)a; (void)b;
+    if (g_dialog_write_path) {
+        write_raw(g_dialog_write_path, g_dialog_write_text);
+        g_dialog_write_path = NULL;
+    }
     g_last_escape = esc;
     snprintf(g_last_choice_title, sizeof g_last_choice_title, "%s", title);
     g_choice_count++;
@@ -344,7 +351,59 @@ static void test_external_changes(void) {
               (h1 = btn_hash_bytes(BTN_HASH_SEED, "SAME\nmine", 9)) && btn_file_hash(a, &fh) && fh == h1,
           "hash: chunked = whole, file = its bytes");
     CHECK(!btn_file_hash(NULL, &fh) && !btn_file_hash("/nonexistent/x", &fh), "hash: missing file");
+    BtnFileStamp cur, stale;
+    btn_file_stamp(a, &cur);
+    stale = cur;
+    stale.mtime_ns -= 1000000000LL;
+    CHECK(hash_for_stamp(a, &cur, &fh) && fh == h1 && !hash_for_stamp(a, &stale, &fh),
+          "hash for a stamp: only valid while the file still has that stamp");
+    /* Aenderung waehrend der Dialog offen ist: nach "Behalten" fragt die
+     * naechste Pruefung wieder (vorher: still uebernommen, Sichern
+     * ueberschrieb sie ohne Rueckfrage) */
+    write_raw(a, "SAME\nMINE");
+    g_dialog_write_path = a;
+    g_dialog_write_text = "same\nMINE";
+    answers(1, 1);
+    CHECK(check_doc_on_disk(0, 1) == 1 && g_choice_count == 1, "asked about change 1");
+    CHECK(check_doc_on_disk(0, 1) == 1 && g_choice_count == 2, "change 2 (while the dialog was open): asked again");
+    /* bekannte Aenderung: der Timer liest die Datei nicht bei jedem Tick neu */
+    type_text(d, "?");
+    external_replace(a, "zzzz\nMINE");
+    CHECK(check_doc_on_disk(0, 0) == 0, "timer: edits + change, no dialog");
+    BtnFileStamp pending;
+    btn_file_stamp(a, &pending);
+    CHECK(btn_file_stamp_equal(&pending, &d->changed), "change remembered for the next ticks");
+    answers(1, 1);
+    check_doc_on_disk(0, 1);
+    /* wieder lesbar mit demselben Inhalt: nicht mehr "fehlt" */
+    d->missing_on_disk = 1;
+    chmod(a, 0600);
+    CHECK(check_doc_on_disk(0, 0) == 0 && !d->missing_on_disk, "same content again: no longer missing");
+    /* CRLF-Datei: die Pruefsumme gilt fuer die Bytes auf der Platte */
+    reset_docs();
+    d = &g_docs[0];
+    write_raw(a, "one\r\ntwo\r\n");
+    open_file_path(d, a);
+    type_text(d, "x");
+    chmod(a, 0644);
+    answers(0, 0);
+    CHECK(check_doc_on_disk(0, 1) == 0 && g_choice_count == 0, "CRLF file, only attributes: no dialog");
+    reset_docs();
+    d = &g_docs[0];
+    write_raw(a, "one\rtwo\r");
+    open_file_path(d, a);
+    editor_set_cursor(&d->editor, 0, 0);
+    size_t before_seq = d->editor.edit_seq;
+    chmod(a, 0600);
+    CHECK(check_doc_on_disk(0, 0) == 0 && d->editor.edit_seq == before_seq, "CR file, clean: not reloaded");
+    external_replace(a, "one\rTWO\r");
+    CHECK(check_doc_on_disk(0, 0) == 1 && doc_text_is(d, "one\nTWO\n"), "real change still reloads");
+    chmod(a, 0644);
+    before_seq = d->editor.edit_seq;
+    CHECK(check_doc_on_disk(0, 0) == 0 && d->editor.edit_seq == before_seq, "after a reload: hash of the new bytes");
+
     /* Stand ohne bekannte Pruefsumme (wiederhergestellt): jede Abweichung zaehlt */
+    type_text(d, "~");
     d->disk_hash_valid = 0;
     chmod(a, 0600);
     answers(1, 1);
