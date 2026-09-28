@@ -38,7 +38,10 @@ Klammern, Suchen/Ersetzen, Zeilen-Befehle) ist reine C-Logik und wird selbst
 
 - Ändert ein anderes Programm eine offene Datei, lädt BTNEdit sie still neu
   (ohne eigene Änderungen) oder fragt "Meine Version behalten" / "Neu
-  laden"; ein Log, das weiterwächst, wird alle paar Sekunden nachgeladen
+  laden"; ein Log, das weiterwächst, wird alle paar Sekunden nachgeladen.
+  Maßgeblich ist der Inhalt: Ändern sich nur Zeiten oder Attribute (macOS
+  setzt beim Öffnen z.B. "zuletzt benutzt", `touch`, Backup-Programme),
+  passiert nichts
 - Sichern warnt, bevor es eine Datei überschreibt, die sich seit dem Laden,
   dem letzten Sichern oder - bei wiederhergestellten Dokumenten - seit dem
   Absturz geändert hat; eine gelöschte Datei macht den Tab ungesichert

@@ -52,7 +52,10 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
 - Schutz der Arbeit: Änderungen von außen werden beim Aktivieren der App
   (nicht, solange ein Dialog offen ist), alle paar Sekunden (nur Tabs ohne
   eigene Änderungen, still; große Dateien seltener) und vor dem Sichern
-  erkannt - nicht sofort per Dateisystem-Benachrichtigung (FSEvents). Die
+  erkannt - nicht sofort per Dateisystem-Benachrichtigung (FSEvents). Weicht
+  nur der Datei-Stempel ab (Zeiten, Attribute), liest BTNEdit die Datei
+  einmal ganz, um den Inhalt zu vergleichen (bei sehr großen Dateien kurz
+  spürbar). Die
   Wiederherstellungsdatei wird im 5-Sekunden-Takt geschrieben und ist bis
   zu etwa 10 Sekunden alt (große Dokumente seltener: pro 20 MB eine Sekunde
   mehr Abstand); was danach getippt wurde, fehlt nach einem Absturz.

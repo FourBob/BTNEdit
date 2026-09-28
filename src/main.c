@@ -73,6 +73,8 @@ typedef struct {
      * Wiederherstellungsdatei (recovery.h) dieses Dokuments, NULL = keine;
      * mit welchem Inhaltsstand und wann zuletzt geschrieben. */
     BtnFileStamp disk;
+    uint64_t disk_hash;   /* Pruefsumme dieses Stands (filestamp.h) */
+    int disk_hash_valid;  /* 0 = unbekannt (wiederhergestellt, verschwunden) */
     int missing_on_disk;
     unsigned recovery_id;
     char *recovery_file;
@@ -647,6 +649,7 @@ static int add_tab(void) {
     d->scroll_accum = 0.0;
     d->label_cache_valid = 0;
     memset(&d->disk, 0, sizeof(d->disk));
+    d->disk_hash_valid = 0;
     d->missing_on_disk = 0;
     d->recovery_id = g_next_recovery_id++;
     d->recovery_file = NULL;
@@ -2104,10 +2107,12 @@ static void open_file_path(Document *d, const char *path) {
             return;
         }
         load_doc_contents(d, contents, len, binary);
+        d->disk_hash = btn_hash_bytes(BTN_HASH_SEED, contents, len);
         free(contents);
         set_doc_path(d, path);
         mark_doc_saved(d);
         d->disk = stamp;
+        d->disk_hash_valid = 1;
         /* d->path statt path: set_doc_path() dupliziert path selbst dann
          * sauber, wenn path zufaellig mit dem *alten* d->path identisch war
          * (und dieser Speicher dabei freigegeben wird) - path waere in dem
@@ -2165,6 +2170,21 @@ static void open_path_in_tab(const char *path) {
     open_file_path(active_doc(), path);
 }
 
+/* Der Stempel der Datei weicht von d->disk ab - hat sich auch der Inhalt
+ * geaendert? Gleiche Groesse und gleiche Pruefsumme wie beim letzten
+ * Laden/Sichern: nein (macOS setzt beim Oeffnen Attribute und aendert damit
+ * die ctime, touch/Backups aendern Zeiten) - dann wird nur der Stempel
+ * nachgefuehrt. Ohne bekannte Pruefsumme zaehlt jede Abweichung. */
+static int disk_content_changed(Document *d, const BtnFileStamp *now) {
+    uint64_t hash;
+    if (!d->disk_hash_valid || !d->disk.valid || now->size != d->disk.size || !btn_file_hash(d->path, &hash) ||
+        hash != d->disk_hash) {
+        return 1;
+    }
+    d->disk = *now;
+    return 0;
+}
+
 /* force_save_as: immer den Sichern-Dialog zeigen, auch wenn schon ein Pfad
  * bekannt ist. Rueckgabe: 1 = gesichert, 0 = abgebrochen/fehlgeschlagen.
  * Nimmt bewusst ein Document*, nicht implizit den aktiven Tab: confirm_
@@ -2187,7 +2207,7 @@ static int perform_save_doc(Document *d, int force_save_as) {
          * gewaehlt), wuerde Sichern das still ueberschreiben. Eine
          * verschwundene Datei wird einfach neu angelegt. */
         BtnFileStamp now;
-        if (btn_file_stamp(path, &now) && !btn_file_stamp_equal(&now, &d->disk)) {
+        if (btn_file_stamp(path, &now) && !btn_file_stamp_equal(&now, &d->disk) && disk_content_changed(d, &now)) {
             char title[512];
             snprintf(title, sizeof(title), btn_tr(BTN_STR_SAVE_CONFLICT_TITLE_FMT), doc_display_name(d));
             if (!btn_show_choice_alert(title, btn_tr(BTN_STR_SAVE_CONFLICT_INFO), btn_tr(BTN_STR_BTN_SAVE_ANYWAY),
@@ -2211,12 +2231,15 @@ static int perform_save_doc(Document *d, int force_save_as) {
         contents = btn_eol_encode_segments(seg_a, len_a, seg_b, len_b, d->eol, &len);
     }
     int ok = write_file_contents(path, contents, len);
+    uint64_t hash = btn_hash_bytes(BTN_HASH_SEED, contents, len);
     free(contents);
 
     if (ok) {
         set_doc_path(d, path);
         mark_doc_saved(d);
         btn_file_stamp(d->path, &d->disk);
+        d->disk_hash = hash;
+        d->disk_hash_valid = 1;
         discard_recovery(d);
         /* d->path statt path: siehe Begruendung in open_file_path(). */
         add_recent_file(d->path);
@@ -2392,11 +2415,13 @@ static void reload_doc(Document *d) {
     }
     size_t cursor = d->editor.cursor, anchor = d->editor.anchor;
     load_doc_contents(d, contents, len, looks_binary(contents, len));
+    d->disk_hash = btn_hash_bytes(BTN_HASH_SEED, contents, len);
     free(contents);
     editor_set_cursor(&d->editor, editor_utf8_seq_start(&d->editor, anchor), 0);
     editor_set_cursor(&d->editor, editor_utf8_seq_start(&d->editor, cursor), 1);
     mark_doc_saved(d);
     d->disk = stamp;
+    d->disk_hash_valid = 1;
     discard_recovery(d);
 }
 
@@ -2419,8 +2444,12 @@ static int check_doc_on_disk(int idx, int ask) {
         /* Geloescht oder verschoben: der Text existiert nur noch hier.
          * Taucht die Datei wieder auf, ist das wieder eine Aenderung. */
         d->disk = now;
+        d->disk_hash_valid = 0;
         d->missing_on_disk = 1;
         return 1;
+    }
+    if (!disk_content_changed(d, &now)) {
+        return 0; /* nur Metadaten/Zeiten: kein Neuladen, keine Frage */
     }
     if (!doc_has_edits(d)) {
         reload_doc(d);
@@ -2442,6 +2471,7 @@ static int check_doc_on_disk(int idx, int ask) {
         /* Behalten: erst die naechste Aenderung fragt wieder, Sichern
          * ueberschreibt ohne weitere Rueckfrage. */
         d->disk = now;
+        d->disk_hash_valid = btn_file_hash(d->path, &d->disk_hash);
         d->missing_on_disk = 0;
     } else {
         reload_doc(d);
@@ -2587,6 +2617,7 @@ static int restore_into_tab(BtnRecovered *r) {
     /* Der Stand, auf den sich die Aenderungen beziehen: hat sich die Datei
      * seitdem geaendert (git pull nach dem Absturz), fragt Sichern nach. */
     d->disk = r->disk;
+    d->disk_hash_valid = 0; /* Inhalt dieses Stands unbekannt: jede Abweichung zaehlt */
     return idx + 1;
 }
 

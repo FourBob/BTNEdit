@@ -52,7 +52,7 @@ HEADERS = {
         "typedef:BtnReadResult", "#BTN_MAX_FILE_MB", "#BTN_MAX_FILE_SIZE", "basename_of", "looks_binary",
         "write_stream_checked", "write_file_atomic", "write_file_contents", "read_file_contents",
         "show_file_error", "set_doc_line_ending", "load_doc_contents", "discard_recovery", "open_file_path",
-        "perform_save_doc"]),
+        "disk_content_changed", "perform_save_doc"]),
     "render_pure_extracted.h": ("render.c", [
         "rows_push", "layout_build", "struct:g_layout", "btn_layout_get",
         "btn_layout_row_for_offset", "btn_row_offset_for_column", "first_row_of_line",
@@ -87,7 +87,7 @@ HEADERS = {
         "typedef:BtnReadResult", "monotonic_seconds", "active_doc", "discard_recovery", "basename_of", "doc_display_name", "set_doc_path",
         "doc_is_blank", "add_tab", "find_tab_for_path", "read_file_contents", "show_file_error",
         "write_stream_checked", "write_file_atomic", "write_file_contents", "looks_binary", "load_doc_contents",
-        "open_file_path", "perform_save_doc", "reload_doc", "check_doc_on_disk", "autosave_recovery", "on_timer",
+        "open_file_path", "disk_content_changed", "perform_save_doc", "reload_doc", "check_doc_on_disk", "autosave_recovery", "on_timer",
         "on_activate", "restore_into_tab", "restore_recovered_documents"]),
     "mouse_extracted.h": ("main.c", [
         "content_bounds", "visible_line_capacity", "build_current_rows",

@@ -153,6 +153,11 @@ static int doc_text_is(Document *d, const char *text) {
     return ok;
 }
 
+static void sleep_ns(long ns) {
+    struct timespec t = { 0, ns };
+    nanosleep(&t, NULL);
+}
+
 static void type_text(Document *d, const char *text) {
     editor_set_cursor(&d->editor, editor_length(&d->editor), 0);
     editor_insert_text(&d->editor, text, strlen(text));
@@ -291,6 +296,59 @@ static void test_external_changes(void) {
         check_doc_on_disk(0, 0);
         CHECK(doc_text_is(d, "small again") && !doc_is_dirty(d), "readable again: reloaded on the next check");
     }
+
+    /* Nur Metadaten/Zeiten geaendert (macOS setzt beim Oeffnen Attribute,
+     * die ctime aendern; touch): keine Frage, kein Neuladen */
+    reset_docs();
+    d = &g_docs[0];
+    write_raw(a, "same\n");
+    open_file_path(d, a);
+    type_text(d, "mine");
+    sleep_ns(20000000);
+    chmod(a, 0600);  /* aendert die ctime */
+    struct timespec later[2] = { { 0, UTIME_OMIT }, { time(NULL) + 5, 0 } };
+    utimensat(AT_FDCWD, a, later, 0); /* und die mtime (wie touch) */
+    BtnFileStamp touched;
+    btn_file_stamp(a, &touched);
+    CHECK(!btn_file_stamp_equal(&touched, &d->disk), "stamp really differs");
+    answers(0, 0);
+    CHECK(check_doc_on_disk(0, 1) == 0 && g_choice_count == 0 && doc_text_is(d, "same\nmine"),
+          "unsaved edits, only times/attributes changed: no dialog");
+    CHECK(btn_file_stamp_equal(&touched, &d->disk), "stamp caught up");
+    chmod(a, 0644);
+    CHECK(perform_save_doc(d, 0) == 1 && g_choice_count == 0 && file_is(a, "same\nmine"), "save: no conflict dialog either");
+    chmod(a, 0600);
+    CHECK(check_doc_on_disk(0, 1) == 0 && g_choice_count == 0, "after saving: the hash of the written text counts");
+    /* ohne eigene Aenderungen: kein stilles Neuladen (Undo bleibt) */
+    editor_undo(&d->editor);
+    editor_redo(&d->editor);
+    size_t seq = d->editor.edit_seq;
+    chmod(a, 0644);
+    CHECK(check_doc_on_disk(0, 0) == 0 && d->editor.edit_seq == seq, "clean tab, only attributes: not reloaded");
+    /* gleiche Groesse, andere Bytes, Zeiten zurueckgesetzt: erkannt */
+    type_text(d, "!");
+    struct stat before;
+    stat(a, &before);
+    write_raw(a, "SAME\nmine");
+    struct timespec back[2] = { before.st_atim, before.st_mtim };
+    utimensat(AT_FDCWD, a, back, 0);
+    answers(1, 1);
+    CHECK(check_doc_on_disk(0, 1) == 1 && g_choice_count == 1, "same size, mtime restored, other content: asked");
+    CHECK(check_doc_on_disk(0, 1) == 0 && g_choice_count == 1, "keep mine: the new content is the reference");
+    chmod(a, 0644);
+    CHECK(check_doc_on_disk(0, 1) == 0 && g_choice_count == 1, "keep mine, then only attributes: no dialog");
+    /* Pruefsumme: Reihenfolge zaehlt, in Stuecken gleich wie am Stueck, Datei = Bytes */
+    uint64_t h1, fh;
+    CHECK(btn_hash_bytes(BTN_HASH_SEED, "ab", 2) != btn_hash_bytes(BTN_HASH_SEED, "ba", 2), "hash: order matters");
+    CHECK(btn_hash_bytes(btn_hash_bytes(BTN_HASH_SEED, "SAME\n", 5), "mine", 4) ==
+              (h1 = btn_hash_bytes(BTN_HASH_SEED, "SAME\nmine", 9)) && btn_file_hash(a, &fh) && fh == h1,
+          "hash: chunked = whole, file = its bytes");
+    CHECK(!btn_file_hash(NULL, &fh) && !btn_file_hash("/nonexistent/x", &fh), "hash: missing file");
+    /* Stand ohne bekannte Pruefsumme (wiederhergestellt): jede Abweichung zaehlt */
+    d->disk_hash_valid = 0;
+    chmod(a, 0600);
+    answers(1, 1);
+    CHECK(check_doc_on_disk(0, 1) == 1 && g_choice_count == 1, "unknown hash: asks as before");
 
     /* Hintergrund-Tab wird vor der Frage sichtbar */
     write_raw(b, "bee\n");

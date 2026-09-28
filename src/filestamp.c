@@ -1,5 +1,6 @@
 #include "filestamp.h"
 
+#include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 
@@ -37,4 +38,31 @@ int btn_file_stamp_equal(const BtnFileStamp *a, const BtnFileStamp *b) {
     }
     return a->dev == b->dev && a->ino == b->ino && a->size == b->size && a->mtime_ns == b->mtime_ns &&
            a->ctime_ns == b->ctime_ns;
+}
+
+uint64_t btn_hash_bytes(uint64_t h, const void *data, size_t len) {
+    const unsigned char *p = data;
+    for (size_t i = 0; i < len; i++) {
+        h = (h ^ p[i]) * 1099511628211ULL;
+    }
+    return h;
+}
+
+int btn_file_hash(const char *path, uint64_t *out) {
+    FILE *f = path ? fopen(path, "rb") : NULL;
+    if (!f) {
+        return 0;
+    }
+    uint64_t h = BTN_HASH_SEED;
+    unsigned char buf[65536];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+        h = btn_hash_bytes(h, buf, n);
+    }
+    int ok = !ferror(f);
+    fclose(f);
+    if (ok) {
+        *out = h;
+    }
+    return ok;
 }
