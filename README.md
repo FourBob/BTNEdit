@@ -82,9 +82,9 @@ Klammern, Suchen/Ersetzen, Zeilen-Befehle) ist reine C-Logik und wird selbst
   Suche verwenden (`⌘E`), Gehe zu Zeile (`⌘L`)
 - Suche über alle Tabs (Umschalter `⧉` in der Suchleiste): Weitersuchen
   springt am Ende eines Tabs in den nächsten (rückwärts: vorigen) Tab mit
-  Treffer, der Status zählt alle Tabs ("Treffer 2 von 5 · 12 in allen
-  Tabs"), "Alle ersetzen" ersetzt in allen Tabs - je Tab ein Undo-Schritt,
-  als Binärdatei geöffnete Tabs im Hintergrund bleiben unberührt. Die
+  Treffer, der Status zählt alle Tabs ("Treffer 2 von 5 · 12 gesamt"),
+  "Alle ersetzen" ersetzt in allen Tabs - je Tab ein Undo-Schritt; als
+  Binärdatei geöffnete Tabs im Hintergrund bleiben dabei ganz außen vor. Die
   Live-Suche beim Tippen bleibt im aktuellen Tab
 
 ### Darstellung

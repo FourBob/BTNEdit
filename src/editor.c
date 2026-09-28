@@ -1218,14 +1218,6 @@ static size_t leading_ws(Editor *ed, size_t line, size_t limit) {
     return n;
 }
 
-static size_t line_end_at(Editor *ed, size_t pos) {
-    size_t len = editor_length(ed);
-    while (pos < len && gb_char_at(&ed->buffer, pos) != '\n') {
-        pos++;
-    }
-    return pos;
-}
-
 void editor_insert_newline(Editor *ed, int rules) {
     size_t start = editor_selection_start(ed), end = editor_selection_end(ed);
     size_t line = line_start_at(ed, start);
@@ -1246,10 +1238,13 @@ void editor_insert_newline(Editor *ed, int rules) {
     size_t close_pos = end + leading_ws(ed, end, editor_length(ed));
     char closer = deeper ? matching_close_for(opener) : 0; /* ':' hat keins */
     int split = closer && close_pos < editor_length(ed) && gb_char_at(&ed->buffer, close_pos) == closer;
-    /* Nur Leerraum in der ganzen Zeile: der bleibt nicht am Zeilenende stehen */
+    /* Code-Datei, Zeile nur aus Leerraum: der bleibt nicht am Zeilenende
+     * stehen ('\r' vor '\n' zaehlt als Zeilenende, roh geladene Dateien) */
     size_t replace_from = start, replace_to = split ? close_pos : end;
-    if (start == end && !ed->single_line && n > 0 && line + n == start &&
-        line_end_at(ed, start) == start + leading_ws(ed, start, editor_length(ed))) {
+    size_t len = editor_length(ed), after = start + leading_ws(ed, start, len);
+    int blank_after = after == len || gb_char_at(&ed->buffer, after) == '\n' ||
+                      (gb_char_at(&ed->buffer, after) == '\r' && (after + 1 == len || gb_char_at(&ed->buffer, after + 1) == '\n'));
+    if (rules && start == end && n > 0 && line + n == start && blank_after) {
         replace_from = line;
     }
 
@@ -1294,9 +1289,14 @@ int editor_type_closing_bracket(Editor *ed, char c, int rules) {
     if (!open_c || !(rules & BTN_INDENT_BRACES) || ed->single_line || editor_has_selection(ed)) {
         return 0;
     }
-    size_t cur = ed->cursor, line = line_start_at(ed, cur);
-    if (cur == line || leading_ws(ed, line, cur) != cur - line) {
-        return 0; /* nicht nur Leerraum davor */
+    /* Nur Leerraum zwischen Zeilenanfang und Cursor - rueckwaerts nur ueber
+     * den Leerraum, nicht ueber die ganze (evtl. riesige) Zeile */
+    size_t cur = ed->cursor, line = cur;
+    while (line > 0 && (gb_char_at(&ed->buffer, line - 1) == ' ' || gb_char_at(&ed->buffer, line - 1) == '\t')) {
+        line--;
+    }
+    if (line == cur || (line > 0 && gb_char_at(&ed->buffer, line - 1) != '\n')) {
+        return 0;
     }
     if (cur < editor_length(ed) && gb_char_at(&ed->buffer, cur) == c) {
         return 0; /* Ueberschreiben der vorhandenen Klammer uebernimmt editor_handle_bracket_key() */

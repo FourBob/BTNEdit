@@ -379,13 +379,17 @@ static void test_smart(void) {
     CHECK(eq(&ed, "d = {\n\t"), "Python: brackets too");
 
     /* Leerraum-Zeile wird leer */
-    newline_at(&ed, "a\n    ", 6, 0);
+    newline_at(&ed, "a\n    ", 6, B);
     CHECK(eq(&ed, "a\n\n    ") && ed.cursor == 7, "whitespace-only line: no trailing whitespace left behind");
     editor_undo(&ed);
     CHECK(eq(&ed, "a\n    "), "one undo step (cursor %zu)", ed.cursor);
-    newline_at(&ed, "a\n    \nb", 4, 0);
+    newline_at(&ed, "a\n    \nb", 4, B);
     CHECK(eq(&ed, "a\n\n    \nb") && ed.cursor == 5, "cursor inside a whitespace-only line: before it cleared, the rest moves down");
-    newline_at(&ed, "a\n  x", 4, 0);
+    newline_at(&ed, "a\n    \r\nb", 6, B);
+    CHECK(eq(&ed, "a\n\n    \r\nb"), "raw CRLF line: '\\r' counts as the line end");
+    newline_at(&ed, "a\n    ", 6, 0);
+    CHECK(eq(&ed, "a\n    \n    "), "plain text (no rules): whitespace is left alone");
+    newline_at(&ed, "a\n  x", 4, B);
     CHECK(eq(&ed, "a\n  \n  x"), "text after the cursor: the line keeps its indentation (unchanged behaviour)");
 
     /* einzeiliges Feld: keine Regeln */
@@ -429,6 +433,9 @@ static void test_smart(void) {
     set(&ed, "{\n  x }");
     sel(&ed, 6, 6);
     CHECK(!editor_type_closing_bracket(&ed, '}', B), "text before the cursor: not responsible");
+    set(&ed, "{\n  x ");
+    sel(&ed, 6, 6);
+    CHECK(!editor_type_closing_bracket(&ed, '}', B) && eq(&ed, "{\n  x "), "text, then spaces before the cursor: not responsible");
     set(&ed, "{\n    }");
     sel(&ed, 6, 6);
     CHECK(!editor_type_closing_bracket(&ed, '}', B), "same bracket right after the cursor: overtyping handles it");

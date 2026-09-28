@@ -169,9 +169,13 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
 - Alert-Titel mit einem Dateinamen ohne gültiges UTF-8 fallen als Ganzes auf
   Latin-1 zurück - die übersetzten Anführungszeichen erscheinen dann als
   `â€œ`. Nur bei Dateinamen von SMB/NFS/FAT-Volumes.
-- Suche über alle Tabs: nur offene Tabs (kein Ordner/Projekt), die Summe
-  im Status lässt bei der Live-Suche Tabs über 2 MB aus; der Umschalter
-  wird nicht über Neustarts gemerkt. Treffer werden nur im aktiven Tab
+- Suche über alle Tabs: nur offene Tabs (kein Ordner/Projekt). Die Summe
+  im Status zeigt die Live-Suche nur, solange die anderen Tabs zusammen
+  höchstens 2 MB haben (sonst erst nach Return); das erste Return mit einem
+  neuen Suchbegriff kopiert und durchsucht alle Tabs (danach gemerkt, bis
+  sich Begriff oder Tab ändern). Wie im einzelnen Tab zählen und erreicht
+  die Navigation höchstens die ersten 5000 Treffer je Tab. Der Umschalter
+  wird nicht über Neustarts gemerkt; Treffer werden nur im aktiven Tab
   hervorgehoben.
 - Suchen-/Ersetzen-Felder scrollen nicht horizontal: sehr langer Text läuft
   über das 200pt-Feld hinaus in die Umschalter.

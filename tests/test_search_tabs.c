@@ -31,6 +31,13 @@ static size_t g_match_starts[BTN_MAX_SEARCH_MATCHES_], g_match_ends[BTN_MAX_SEAR
 static size_t g_other_starts[BTN_MAX_SEARCH_MATCHES_], g_other_ends[BTN_MAX_SEARCH_MATCHES_];
 static size_t g_match_count = 0, g_match_edit_seq = 0, g_search_anchor = 0;
 static int g_switches = 0, g_keep_find = -1, g_redraws = 0;
+static struct {
+    unsigned id;
+    size_t seq, count;
+} g_tab_counts[MAX_TABS];
+static int g_tab_counts_n = 0;
+static char *g_tab_counts_key = NULL;
+static size_t g_tab_counts_key_len = 0;
 static Document *active_doc(void) { return &g_docs[g_active_doc]; }
 static void switch_to_tab_ex(int idx, int keep_find) { g_switches++; g_keep_find = keep_find; g_active_doc = idx; }
 static void sync_scroll_to_cursor(void) {}
@@ -62,6 +69,7 @@ int main(void) {
     editor_set_single_line(&g_replace_editor, 1);
     for (int i = 0; i < MAX_TABS; i++) {
         editor_init(&g_docs[i].editor);
+        g_docs[i].recovery_id = (unsigned)i + 1;
     }
     g_doc_count = 4;
     set_text(0, "foo bar foo");
@@ -80,7 +88,7 @@ int main(void) {
     g_search_all_tabs = 1;
     CHECK(perform_find(1) && sel_is(8, 11) && g_active_doc == 0, "on: still the next match in this tab first");
     char want[128];
-    snprintf(want, sizeof want, "Match 2 of 2%s", " · 6 in all tabs");
+    snprintf(want, sizeof want, "Match 2 of 2%s", " · 6 total");
     CHECK(strcmp(g_search_status, want) == 0, "status counts all tabs (%s)", g_search_status);
     CHECK(perform_find(1) && g_active_doc == 2 && g_keep_find == 1 && sel_is(2, 5), "end of tab: jumps to the next tab with a match, keeps the find bar");
     CHECK(g_match_count == 1 && g_match_starts[0] == 2, "match list belongs to the new tab");
@@ -103,7 +111,7 @@ int main(void) {
     int switches = g_switches;
     CHECK(perform_find(1) && g_active_doc == 1 && sel_is(0, 7) && g_switches == switches, "matches only here: wraps within the tab");
     set_query("zzz");
-    CHECK(!perform_find(1) && g_active_doc == 1 && strcmp(g_search_status, "Not found · 0 in all tabs") == 0,
+    CHECK(!perform_find(1) && g_active_doc == 1 && strcmp(g_search_status, "Not found · 0 total") == 0,
           "nowhere: not found (%s)", g_search_status);
 
     /* ein Tab: keine Summe, kein Wechsel */
@@ -119,8 +127,36 @@ int main(void) {
     switches = g_switches;
     set_query("foo");
     perform_live_search();
-    CHECK(g_active_doc == 1 && g_switches == switches && strcmp(g_search_status, "Not found · 6 in all tabs") == 0,
+    CHECK(g_active_doc == 1 && g_switches == switches && strcmp(g_search_status, "Not found · 6 total") == 0,
           "live search: stays, shows where else (%s)", g_search_status);
+
+    /* Aenderung in einem Hintergrund-Tab: gemerkte Trefferzahl gilt nicht mehr */
+    set_text(2, "a foo foo");
+    perform_live_search();
+    CHECK(strcmp(g_search_status, "Not found · 7 total") == 0, "background tab edited: counted again (%s)", g_search_status);
+    set_text(2, "a foo");
+    /* Live-Suche: andere Tabs zusammen ueber 2 MB -> ohne Summe */
+    size_t big = BTN_LIVE_SEARCH_MAX_DOC_LEN + 1;
+    char *huge = malloc(big + 1);
+    memset(huge, 'x', big);
+    huge[big] = 0;
+    set_text(4, huge);
+    g_doc_count = 5;
+    perform_live_search();
+    CHECK(strcmp(g_search_status, "Not found") == 0, "live search: no total when the other tabs are too big (%s)", g_search_status);
+    editor_set_cursor(&g_docs[1].editor, 0, 0);
+    g_active_doc = 1;
+    perform_find(1);
+    CHECK(strstr(g_search_status, " · 6 total") != NULL, "Return still shows it (%s)", g_search_status);
+    g_doc_count = 4;
+    free(huge);
+    /* Binaer-Tab im Hintergrund: weder angesprungen noch gezaehlt */
+    g_docs[2].binary = 1;
+    g_active_doc = 1;
+    editor_set_cursor(&g_docs[1].editor, 0, 0);
+    CHECK(perform_find(1) && g_active_doc == 3 && strstr(g_search_status, " · 5 total"),
+          "binary background tab skipped and not counted (%s)", g_search_status);
+    g_docs[2].binary = 0;
 
     /* Ersetzen + Weiter: der Treffer liegt in einem anderen Tab */
     editor_set_text(&g_replace_editor, "X", 1);

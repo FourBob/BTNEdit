@@ -1061,25 +1061,95 @@ static void set_match_count_status(size_t match_start) {
 /* ---- Suche ueber alle Tabs ---- */
 static size_t g_other_starts[BTN_MAX_SEARCH_MATCHES], g_other_ends[BTN_MAX_SEARCH_MATCHES];
 
+/* Trefferzahl je Tab fuer den aktuellen Suchbegriff, damit Return/Cmd+G
+ * mit unveraendertem Begriff nicht jedes Mal alle Tabs kopiert und
+ * durchsucht. Schluessel: Suchtext + Umschalter; je Dokument recovery_id
+ * (bleibt, wenn Tabs nachruecken) und edit_seq (global eindeutig). */
+static struct {
+    unsigned id;
+    size_t seq, count;
+} g_tab_counts[MAX_TABS];
+static int g_tab_counts_n = 0;
+static char *g_tab_counts_key = NULL;
+static size_t g_tab_counts_key_len = 0;
+
+/* Vor einer Runde ueber die Tabs: anderer Suchbegriff -> alles vergessen. */
+static void tab_counts_check_key(void) {
+    size_t qlen;
+    char *q = editor_copy_all(&g_search_editor, &qlen);
+    char flags[3] = { (char)('0' + g_search_regex), (char)('0' + g_search_case_sensitive),
+                      (char)('0' + g_search_whole_word) };
+    char *key = malloc(qlen + sizeof(flags));
+    if (key) {
+        memcpy(key, q, qlen);
+        memcpy(key + qlen, flags, sizeof(flags));
+    }
+    free(q);
+    size_t klen = qlen + sizeof(flags);
+    if (key && g_tab_counts_key && g_tab_counts_key_len == klen && memcmp(key, g_tab_counts_key, klen) == 0) {
+        free(key);
+        return;
+    }
+    free(g_tab_counts_key);
+    g_tab_counts_key = key;
+    g_tab_counts_key_len = key ? klen : 0;
+    g_tab_counts_n = 0;
+}
+
 /* Treffer im Dokument d (hoechstens BTN_MAX_SEARCH_MATCHES) - ohne die
  * Trefferliste des aktiven Dokuments (g_match_*) anzufassen. */
 static size_t doc_match_count(Document *d) {
+    int slot = -1;
+    for (int i = 0; i < g_tab_counts_n; i++) {
+        if (g_tab_counts[i].id == d->recovery_id) {
+            if (g_tab_counts[i].seq == d->editor.edit_seq) {
+                return g_tab_counts[i].count;
+            }
+            slot = i;
+        }
+    }
     size_t len;
     char *text = editor_copy_all(&d->editor, &len);
     size_t n = collect_all_matches(text, len, g_other_starts, g_other_ends, BTN_MAX_SEARCH_MATCHES);
     free(text);
+    if (slot < 0) {
+        if (g_tab_counts_n == MAX_TABS) {
+            g_tab_counts_n = 0; /* voll (geschlossene Tabs): neu anfangen */
+        }
+        slot = g_tab_counts_n++;
+    }
+    g_tab_counts[slot].id = d->recovery_id;
+    g_tab_counts[slot].seq = d->editor.edit_seq;
+    g_tab_counts[slot].count = n;
     return n;
 }
 
-/* Hinter den Status die Summe ueber alle Tabs. live: andere Dokumente ueber
- * BTN_LIVE_SEARCH_MAX_DOC_LEN auslassen (wie die Live-Suche selbst). */
+/* Andere Tabs, die die Suche ueber alle Tabs einbezieht: als Binaerdatei
+ * geoeffnete bleiben aussen vor (wie bei "Alle ersetzen"). */
+static int searchable_other_tab(int i) {
+    return i != g_active_doc && !g_docs[i].binary;
+}
+
+/* Hinter den Status die Summe ueber alle Tabs. live (bei jedem Tastendruck):
+ * nur, wenn die anderen Tabs zusammen hoechstens BTN_LIVE_SEARCH_MAX_DOC_LEN
+ * gross sind - sonst ohne Summe, Return zeigt sie. */
 static void append_all_tabs_status(int live) {
     if (!g_search_all_tabs || g_doc_count < 2) {
         return;
     }
+    if (live) {
+        size_t others = 0;
+        for (int i = 0; i < g_doc_count; i++) {
+            others += searchable_other_tab(i) ? editor_length(&g_docs[i].editor) : 0;
+        }
+        if (others > BTN_LIVE_SEARCH_MAX_DOC_LEN) {
+            return;
+        }
+    }
+    tab_counts_check_key();
     size_t total = g_match_count;
     for (int i = 0; i < g_doc_count; i++) {
-        if (i != g_active_doc && !(live && editor_length(&g_docs[i].editor) > BTN_LIVE_SEARCH_MAX_DOC_LEN)) {
+        if (searchable_other_tab(i)) {
             total += doc_match_count(&g_docs[i]);
         }
     }
@@ -1090,10 +1160,11 @@ static void append_all_tabs_status(int live) {
 /* Naechster (forward) bzw. voriger Tab mit Treffer, im Kreis ab dem aktiven;
  * -1 = keiner. */
 static int next_tab_with_match(int forward) {
+    tab_counts_check_key();
     int i = g_active_doc;
     for (int k = 1; k < g_doc_count; k++) {
         i = next_tab_index(i, g_doc_count, forward ? 1 : -1);
-        if (doc_match_count(&g_docs[i]) > 0) {
+        if (searchable_other_tab(i) && doc_match_count(&g_docs[i]) > 0) {
             return i;
         }
     }
@@ -1692,7 +1763,7 @@ static void perform_replace_all(void) {
     int tabs = count > 0;
     if (g_search_all_tabs) {
         for (int i = 0; i < g_doc_count; i++) {
-            if (i != g_active_doc && !g_docs[i].binary) {
+            if (searchable_other_tab(i)) {
                 size_t n = replace_all_in_editor(&g_docs[i].editor);
                 count += n;
                 tabs += n > 0;

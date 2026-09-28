@@ -1045,10 +1045,10 @@ void btn_app_run(void) {
                                                   backing:NSBackingStoreBuffered
                                                     defer:NO];
         [g_window setTitle:trs(BTN_STR_UNTITLED)];
-        /* Breite 1080 statt z.B. 400: Felder, die drei Umschalter
-         * (".*"/"Aa"/"\b") und der "Alle ersetzen"-Knopf der Suchen/Ersetzen-
-         * Leiste (render.c) reichen bis x = 840pt, dahinter beginnt der
-         * Statustext. Bei 1080pt bleiben ihm gut 230pt; laengere Meldungen
+        /* Breite 1080 statt z.B. 400: Felder, die vier Umschalter
+         * (".*"/"Aa"/"\b"/"⧉") und der "Alle ersetzen"-Knopf der Suchen/
+         * Ersetzen-Leiste (render.c) reichen bis x = 874pt, dahinter beginnt
+         * der Statustext. Bei 1080pt bleiben ihm knapp 200pt; laengere Meldungen
          * kuerzt render.c mit "..." (btn_render_find_bar()). Bei einer
          * kleineren Mindestbreite waere der Knopf selbst abgeschnitten.
          * shim.m kennt render.h's Layout-Konstanten bewusst nicht (reine

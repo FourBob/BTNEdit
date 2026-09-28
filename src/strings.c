@@ -96,7 +96,7 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "For prose (.txt, .md, untitled)",
         "Same as code",
         " (The model has no fill-in-the-middle: BTNEdit sends only the text before the cursor.)",
-        " · %d in all tabs",
+        " · %d total",
         "%d replaced in %d tabs"
     },
     /* BTN_LANG_DE */
@@ -186,7 +186,7 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Für Fließtext (.txt, .md, unbenannt)",
         "Wie Code",
         " (Das Modell kann kein Fill-in-the-Middle: BTNEdit schickt nur den Text vor dem Cursor.)",
-        " · %d in allen Tabs",
+        " · %d gesamt",
         "%d ersetzt in %d Tabs"
     },
     /* BTN_LANG_FR */
@@ -276,7 +276,7 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Pour le texte (.txt, .md, sans titre)",
         "Comme le code",
         " (Le modèle ne gère pas le fill-in-the-middle : BTNEdit n’envoie que le texte avant le curseur.)",
-        " · %d dans tous les onglets",
+        " · %d au total",
         "%d remplacement(s) dans %d onglets"
     },
     /* BTN_LANG_ES */
@@ -366,7 +366,7 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Para texto (.txt, .md, sin título)",
         "Igual que código",
         " (El modelo no admite fill-in-the-middle: BTNEdit solo envía el texto antes del cursor.)",
-        " · %d en todas las pestañas",
+        " · %d en total",
         "%d reemplazos en %d pestañas"
     },
     /* BTN_LANG_ZH (Simplified) */
@@ -459,7 +459,7 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "用于文本（.txt、.md、未命名）",
         "与代码相同",
         "（该模型不支持中间填充：BTNEdit 只发送光标前的文本。）",
-        " · 所有标签页共 %d 个",
+        " · 共 %d 个",
         "已替换 %d 处（%d 个标签页）"
     }
 };
