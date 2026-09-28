@@ -977,22 +977,15 @@ void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labe
      * keine Freigabe hier. */
 }
 
-/* x-Positionen der Suchleiste - gemeinsam fuer Zeichnen, Mausklick-Tests
- * in main.c (dieselben Konstanten) und das Cursor-Rechteck fuer
- * Eingabemethoden (btn_render_find_caret_rect()). */
-typedef struct {
-    double search_label_x, search_field_x, regex_x, case_x, word_x;
-    double replace_label_x, replace_field_x, replace_all_x, status_x;
-} FindBarGeometry;
-
-static FindBarGeometry find_bar_geometry(void) {
-    FindBarGeometry g;
+BtnFindBarGeometry btn_find_bar_geometry(void) {
+    BtnFindBarGeometry g;
     g.search_label_x = BTN_FIND_BAR_PADDING;
     g.search_field_x = g.search_label_x + BTN_FIND_LABEL_WIDTH;
     g.regex_x = g.search_field_x + BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING;
     g.case_x = g.regex_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING;
     g.word_x = g.case_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING;
-    g.replace_label_x = g.word_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING * 2.0;
+    g.all_tabs_x = g.word_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING;
+    g.replace_label_x = g.all_tabs_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING * 2.0;
     g.replace_field_x = g.replace_label_x + BTN_FIND_LABEL_WIDTH;
     g.replace_all_x = g.replace_field_x + BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING;
     g.status_x = g.replace_all_x + BTN_FIND_REPLACE_ALL_WIDTH + BTN_FIND_BAR_PADDING * 2.0;
@@ -1185,7 +1178,7 @@ static void draw_find_field(CGContextRef ctx, Editor *ed, double field_x, double
     }
 }
 
-/* Zeichnet einen der drei kurzen Umschalter-Knoepfe (".*"/"Aa"/"\b") an
+/* Zeichnet einen der kurzen Umschalter-Knoepfe (".*"/"Aa"/"\b"/"⧉") an
  * derselben Position, die main.c beim Mausklick testet (siehe
  * handle_find_bar_click()) - gemeinsamer Helfer statt dreifacher
  * Kopie, da alle drei bis auf Position/Beschriftung/Zustand identisch
@@ -1201,7 +1194,7 @@ static void draw_toggle_button(CGContextRef ctx, double x, double bar_top, doubl
 void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_label, Editor *search_ed,
                           const char *replace_label, Editor *replace_ed,
                           const char *replace_all_label,
-                          int regex_mode, int case_sensitive, int whole_word,
+                          int regex_mode, int case_sensitive, int whole_word, int all_tabs,
                           int focus_field, const char *status) {
     double bar_top = bounds.size.height - BTN_TAB_BAR_HEIGHT - BTN_FIND_BAR_HEIGHT;
     double text_y = bar_top + (BTN_FIND_BAR_HEIGHT - g_font_size) / 2.0 + 3.0;
@@ -1214,9 +1207,9 @@ void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_lab
     CFDictionaryRef dimAttrs = get_dim_attrs();
     CFDictionaryRef accentAttrs = get_accent_attrs();
 
-    FindBarGeometry g = find_bar_geometry();
+    BtnFindBarGeometry g = btn_find_bar_geometry();
     double search_label_x = g.search_label_x, search_field_x = g.search_field_x;
-    double regex_x = g.regex_x, case_x = g.case_x, word_x = g.word_x;
+    double regex_x = g.regex_x, case_x = g.case_x, word_x = g.word_x, all_tabs_x = g.all_tabs_x;
     double replace_label_x = g.replace_label_x, replace_field_x = g.replace_field_x;
     double replace_all_x = g.replace_all_x, status_x = g.status_x;
 
@@ -1230,6 +1223,7 @@ void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_lab
     draw_toggle_button(ctx, regex_x, bar_top, text_y, ".*", regex_mode, dimAttrs, accentAttrs);
     draw_toggle_button(ctx, case_x, bar_top, text_y, "Aa", case_sensitive, dimAttrs, accentAttrs);
     draw_toggle_button(ctx, word_x, bar_top, text_y, "\\b", whole_word, dimAttrs, accentAttrs);
+    draw_toggle_button(ctx, all_tabs_x, bar_top, text_y, "\xE2\xA7\x89", all_tabs, dimAttrs, accentAttrs); /* ⧉ alle Tabs */
 
     draw_text_at(ctx, replace_label, replace_label_x, text_y, dimAttrs);
     draw_find_field(ctx, replace_ed, replace_field_x, text_y, bar_top, attrs, char_width, focus_field == 2,
@@ -1573,7 +1567,7 @@ int btn_text_cursor_rects(CGRect window, CGRect content, int find_bar_visible, i
     }
     if (find_bar_visible) {
         /* Wie draw_find_field()/btn_render_find_caret_rect() */
-        FindBarGeometry g = find_bar_geometry();
+        BtnFindBarGeometry g = btn_find_bar_geometry();
         double y = window.size.height - BTN_TAB_BAR_HEIGHT - BTN_FIND_BAR_HEIGHT + 4.0;
         out[n++] = CGRectMake(g.search_field_x, y, BTN_FIND_FIELD_WIDTH, BTN_FIND_BAR_HEIGHT - 8.0);
         out[n++] = CGRectMake(g.replace_field_x, y, BTN_FIND_FIELD_WIDTH, BTN_FIND_BAR_HEIGHT - 8.0);
@@ -1842,7 +1836,7 @@ CGRect btn_render_caret_rect(Editor *ed, CGRect bounds, long scroll_row, size_t 
 }
 
 CGRect btn_render_find_caret_rect(CGRect bounds, Editor *field, int replace_field, size_t offset) {
-    FindBarGeometry g = find_bar_geometry();
+    BtnFindBarGeometry g = btn_find_bar_geometry();
     double bar_top = bounds.size.height - BTN_TAB_BAR_HEIGHT - BTN_FIND_BAR_HEIGHT;
     double field_x = replace_field ? g.replace_field_x : g.search_field_x;
     size_t col = editor_visual_column_in_range(field, 0, offset);

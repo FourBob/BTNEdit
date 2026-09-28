@@ -178,6 +178,9 @@ static int g_search_case_sensitive = 0;
 /* Default 0 (Teiltreffer erlaubt) - der "\b"-Umschalter grenzt Treffer auf
  * ganze Woerter ein (siehe compile_search_regex()). */
 static int g_search_whole_word = 0;
+/* "⧉"-Umschalter: Weitersuchen springt in den naechsten Tab mit Treffer,
+ * "Alle ersetzen" ersetzt in allen Tabs, der Status zaehlt alle Tabs. */
+static int g_search_all_tabs = 0;
 static char g_search_status[128] = "";
 
 /* Alle Fundstellen der aktuellen Suchanfrage im aktiven Dokument, nach Start
@@ -598,15 +601,26 @@ static void open_find_bar(void) {
  * Fenstergroessenaenderung angepasst haben kann. Schliesst nebenbei eine
  * offene Suchen-Leiste - deren Zustand (Selektion als aktueller Treffer)
  * bezieht sich sonst auf ein Dokument, das gerade nicht mehr sichtbar ist. */
-static void switch_to_tab(int idx) {
+/* Tabwechsel; keep_find: die Suchleiste bleibt offen (Suche ueber alle
+ * Tabs springt zum naechsten Treffer), ihre Treffer gehoeren dann aber
+ * nicht mehr zum aktiven Dokument. */
+static void switch_to_tab_ex(int idx, int keep_find) {
     commit_marked();
     stop_mouse_drag(); /* ein Ziehen gehoerte zum bisherigen Dokument */
     ai_cancel();       /* eine Tipp-Pause auch */
-    close_find_bar();
+    if (keep_find) {
+        g_match_count = 0;
+    } else {
+        close_find_bar();
+    }
     g_active_doc = idx;
     btn_set_window_title(doc_display_name(active_doc()));
     sync_window_state();
     sync_scroll_to_cursor();
+}
+
+static void switch_to_tab(int idx) {
+    switch_to_tab_ex(idx, 0);
 }
 
 static void doc_free(Document *d) {
@@ -1016,6 +1030,15 @@ static int pick_match_for_navigation(const size_t *starts, size_t count, size_t 
     return 1;
 }
 
+/* Index des Tabs delta Schritte weiter, mit Umlauf (Fenster > Naechster/
+ * Vorheriger Tab, Ctrl+Tab / Ctrl+Shift+Tab). */
+static int next_tab_index(int current, int count, int delta) {
+    if (count <= 0) {
+        return 0;
+    }
+    return ((current + delta) % count + count) % count;
+}
+
 /* Baut den Trefferzaehler-Status ("3 von 12 Treffern") fuer den Treffer bei
  * match_start in der zuletzt via collect_all_matches() befuellten
  * g_match_starts/g_match_count. Falls match_start dort nicht vorkommt (nur
@@ -1033,6 +1056,48 @@ static void set_match_count_status(size_t match_start) {
     }
     snprintf(g_search_status, sizeof(g_search_status), btn_tr(BTN_STR_FIND_COUNT_FMT),
              (int)(idx + 1), (int)g_match_count);
+}
+
+/* ---- Suche ueber alle Tabs ---- */
+static size_t g_other_starts[BTN_MAX_SEARCH_MATCHES], g_other_ends[BTN_MAX_SEARCH_MATCHES];
+
+/* Treffer im Dokument d (hoechstens BTN_MAX_SEARCH_MATCHES) - ohne die
+ * Trefferliste des aktiven Dokuments (g_match_*) anzufassen. */
+static size_t doc_match_count(Document *d) {
+    size_t len;
+    char *text = editor_copy_all(&d->editor, &len);
+    size_t n = collect_all_matches(text, len, g_other_starts, g_other_ends, BTN_MAX_SEARCH_MATCHES);
+    free(text);
+    return n;
+}
+
+/* Hinter den Status die Summe ueber alle Tabs. live: andere Dokumente ueber
+ * BTN_LIVE_SEARCH_MAX_DOC_LEN auslassen (wie die Live-Suche selbst). */
+static void append_all_tabs_status(int live) {
+    if (!g_search_all_tabs || g_doc_count < 2) {
+        return;
+    }
+    size_t total = g_match_count;
+    for (int i = 0; i < g_doc_count; i++) {
+        if (i != g_active_doc && !(live && editor_length(&g_docs[i].editor) > BTN_LIVE_SEARCH_MAX_DOC_LEN)) {
+            total += doc_match_count(&g_docs[i]);
+        }
+    }
+    size_t l = strlen(g_search_status);
+    snprintf(g_search_status + l, sizeof(g_search_status) - l, btn_tr(BTN_STR_FIND_ALL_TABS_FMT), (int)total);
+}
+
+/* Naechster (forward) bzw. voriger Tab mit Treffer, im Kreis ab dem aktiven;
+ * -1 = keiner. */
+static int next_tab_with_match(int forward) {
+    int i = g_active_doc;
+    for (int k = 1; k < g_doc_count; k++) {
+        i = next_tab_index(i, g_doc_count, forward ? 1 : -1);
+        if (doc_match_count(&g_docs[i]) > 0) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 /* Live-Suche: wird bei JEDER Aenderung des Suchtexts aufgerufen (Tippen,
@@ -1198,6 +1263,7 @@ static void perform_live_search(void) {
     } else {
         snprintf(g_search_status, sizeof(g_search_status), "%s", btn_tr(BTN_STR_FIND_NOT_FOUND));
     }
+    append_all_tabs_status(1); /* Tippen wechselt nie den Tab, zeigt aber, wo es noch Treffer gibt */
     free(text);
     btn_app_request_redraw();
 }
@@ -1228,6 +1294,22 @@ static int perform_find(int forward) {
 
     size_t idx;
     int found = pick_match_for_navigation(g_match_starts, g_match_count, from, forward, &idx);
+    /* Alle Tabs: am Ende dieses Dokuments nicht herumlaufen, sondern in den
+     * naechsten (vorigen) Tab mit Treffer, dort auf den ersten (letzten). */
+    int wrapped = found && (forward ? g_match_starts[idx] < from : g_match_starts[idx] >= from);
+    if (g_search_all_tabs && (!found || wrapped)) {
+        int tab = next_tab_with_match(forward);
+        if (tab >= 0) {
+            switch_to_tab_ex(tab, 1);
+            ed = &active_doc()->editor;
+            text = editor_copy_all(ed, &len);
+            g_match_count = collect_all_matches(text, len, g_match_starts, g_match_ends, BTN_MAX_SEARCH_MATCHES);
+            g_match_edit_seq = ed->edit_seq;
+            free(text);
+            found = g_match_count > 0;
+            idx = forward ? 0 : g_match_count - 1;
+        }
+    }
 
     if (found) {
         size_t match_start = g_match_starts[idx];
@@ -1239,6 +1321,7 @@ static int perform_find(int forward) {
     } else {
         snprintf(g_search_status, sizeof(g_search_status), "%s", btn_tr(BTN_STR_FIND_NOT_FOUND));
     }
+    append_all_tabs_status(0);
     sync_scroll_to_cursor();
     btn_app_request_redraw();
     return found;
@@ -1272,15 +1355,6 @@ static void use_selection_for_find(void) {
         editor_select_all(&g_search_editor);
         perform_live_search();
     }
-}
-
-/* Index des Tabs delta Schritte weiter, mit Umlauf (Fenster > Naechster/
- * Vorheriger Tab, Ctrl+Tab / Ctrl+Shift+Tab). */
-static int next_tab_index(int current, int count, int delta) {
-    if (count <= 0) {
-        return 0;
-    }
-    return ((current + delta) % count + count) % count;
 }
 
 /* Wechselt delta Tabs weiter; bei nur einem Tab nichts (switch_to_tab()
@@ -1504,6 +1578,7 @@ static void perform_replace_current(void) {
         if (!perform_find(1)) {
             return;
         }
+        ed = &active_doc()->editor; /* alle Tabs: der Treffer kann in einem anderen Tab liegen */
     }
     size_t doc_len;
     char *doc_text = editor_copy_all(ed, &doc_len);
@@ -1525,12 +1600,8 @@ static void perform_replace_current(void) {
     btn_app_request_redraw();
 }
 
-static void perform_replace_all(void) {
-    Document *d = active_doc();
-    Editor *ed = &d->editor;
-    if (editor_length(&g_search_editor) == 0) {
-        return;
-    }
+/* Alle Treffer in ed ersetzen (ein Undo-Schritt), Rueckgabe: Anzahl. */
+static size_t replace_all_in_editor(Editor *ed) {
 
     /* Nur wenn der Ersetzungstext tatsaechlich Rueckreferenzen oder Escapes
      * enthaelt (siehe replacement_needs_expansion()), unterscheidet sich der
@@ -1602,11 +1673,32 @@ static void perform_replace_all(void) {
         }
     }
     editor_end_undo_group(ed);
-    int count = (int)match_count;
     free(starts);
     free(ends);
     free(orig_text);
     free(fixed_replace_text); /* NULL-sicher, No-Op wenn per_match_expansion galt */
+    return match_count;
+}
+
+/* "Alle ersetzen": im aktiven Dokument, mit dem "⧉"-Umschalter in allen
+ * Tabs (je Tab ein Undo-Schritt; als Binaerdatei geoeffnete Hintergrund-Tabs
+ * bleiben unberuehrt). */
+static void perform_replace_all(void) {
+    Editor *ed = &active_doc()->editor;
+    if (editor_length(&g_search_editor) == 0) {
+        return;
+    }
+    size_t count = replace_all_in_editor(ed);
+    int tabs = count > 0;
+    if (g_search_all_tabs) {
+        for (int i = 0; i < g_doc_count; i++) {
+            if (i != g_active_doc && !g_docs[i].binary) {
+                size_t n = replace_all_in_editor(&g_docs[i].editor);
+                count += n;
+                tabs += n > 0;
+            }
+        }
+    }
 
     /* Trefferliste nach dem Ersetzen neu aufbauen - der bisherige Stand
      * (aus der Live-Suche vor diesem Befehl) bezieht sich auf Byte-Offsets
@@ -1618,7 +1710,11 @@ static void perform_replace_all(void) {
     g_match_edit_seq = ed->edit_seq;
     free(text);
 
-    snprintf(g_search_status, sizeof(g_search_status), btn_tr(BTN_STR_FIND_REPLACED_FMT), count);
+    if (g_search_all_tabs && g_doc_count > 1) {
+        snprintf(g_search_status, sizeof(g_search_status), btn_tr(BTN_STR_FIND_REPLACED_TABS_FMT), (int)count, tabs);
+    } else {
+        snprintf(g_search_status, sizeof(g_search_status), btn_tr(BTN_STR_FIND_REPLACED_FMT), (int)count);
+    }
     sync_window_state();
     sync_scroll_to_cursor();
     btn_app_request_redraw();
@@ -3117,7 +3213,7 @@ static void on_draw(CGContextRef ctx, CGRect bounds) {
         btn_render_find_bar(ctx, bounds, btn_tr(BTN_STR_FIND_SEARCH_LABEL), &g_search_editor,
                              btn_tr(BTN_STR_FIND_REPLACE_LABEL), &g_replace_editor,
                              btn_tr(BTN_STR_REPLACE_ALL_BUTTON),
-                             g_search_regex, g_search_case_sensitive, g_search_whole_word,
+                             g_search_regex, g_search_case_sensitive, g_search_whole_word, g_search_all_tabs,
                              focus_field, g_search_status);
     }
 
@@ -3193,13 +3289,9 @@ static void handle_tab_bar_click(double x) {
  * btn_render_find_bar()'s Zeichnung in render.c, aus denselben render.h-
  * Konstanten berechnet. */
 static void handle_find_bar_click(double x) {
-    double search_field_x = BTN_FIND_BAR_PADDING + BTN_FIND_LABEL_WIDTH;
-    double regex_x = search_field_x + BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING;
-    double case_x = regex_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING;
-    double word_x = case_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING;
-    double replace_label_x = word_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING * 2.0;
-    double replace_field_x = replace_label_x + BTN_FIND_LABEL_WIDTH;
-    double replace_all_x = replace_field_x + BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING;
+    BtnFindBarGeometry g = btn_find_bar_geometry();
+    double search_field_x = g.search_field_x, regex_x = g.regex_x, case_x = g.case_x, word_x = g.word_x;
+    double replace_field_x = g.replace_field_x, replace_all_x = g.replace_all_x;
 
     if (x >= regex_x && x < regex_x + BTN_FIND_REGEX_WIDTH) {
         g_search_regex = !g_search_regex;
@@ -3213,6 +3305,9 @@ static void handle_find_bar_click(double x) {
     } else if (x >= word_x && x < word_x + BTN_FIND_REGEX_WIDTH) {
         g_search_whole_word = !g_search_whole_word;
         perform_live_search();
+    } else if (x >= g.all_tabs_x && x < g.all_tabs_x + BTN_FIND_REGEX_WIDTH) {
+        g_search_all_tabs = !g_search_all_tabs;
+        perform_live_search(); /* Status mit bzw. ohne Summe ueber alle Tabs */
     } else if (x >= search_field_x && x < regex_x) {
         g_focus = BTN_FOCUS_SEARCH;
     } else if (x >= replace_all_x && x < replace_all_x + BTN_FIND_REPLACE_ALL_WIDTH) {

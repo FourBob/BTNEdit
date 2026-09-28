@@ -42,6 +42,16 @@ extern "C" {
  * 150pt laesst auf beiden Seiten noch sichtbaren Rand. */
 #define BTN_FIND_REPLACE_ALL_WIDTH 150.0
 
+/* x-Positionen der Suchleiste - eine Quelle fuer Zeichnen (render.c),
+ * Mausklick-Tests (main.c) und das Cursor-Rechteck fuer Eingabemethoden.
+ * Umschalter (je BTN_FIND_REGEX_WIDTH breit): Regex, Gross/klein, ganzes
+ * Wort, alle Tabs. */
+typedef struct {
+    double search_label_x, search_field_x, regex_x, case_x, word_x, all_tabs_x;
+    double replace_label_x, replace_field_x, replace_all_x, status_x;
+} BtnFindBarGeometry;
+BtnFindBarGeometry btn_find_bar_geometry(void);
+
 /* Eine visuelle Zeile (Row) nach Wortumbruch: [start, start+len) im
  * Puffer. logical_line ist die zugehoerige "echte" Zeile (fuer die
  * Gutter-Nummerierung); is_continuation markiert Folge-Rows einer per
@@ -148,9 +158,9 @@ void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labe
  * deshalb genuegt hier reine Byte-Spalten-Mathematik ohne Wortumbruch/
  * Zeilen-Konzept. focus_field: 0 = keins der beiden Felder fokussiert (nur
  * Inhalt zeigen, kein Cursor), 1 = Suchfeld, 2 = Ersetzen-Feld.
- * regex_mode/case_sensitive/whole_word steuern die drei Umschalter-Knoepfe
- * (".*"/"Aa"/"\b") direkt rechts vom Suchfeld, in genau dieser Reihenfolge -
- * main.c's handle_find_bar_click() testet dieselben drei Positionen. Der
+ * regex_mode/case_sensitive/whole_word/all_tabs steuern die vier Umschalter-
+ * Knoepfe (".*"/"Aa"/"\b"/"⧉") direkt rechts vom Suchfeld, in genau dieser
+ * Reihenfolge (Positionen: btn_find_bar_geometry()). Der
  * "Alle ersetzen"-Knopf sitzt bei derselben x-Position (replace_field_x +
  * BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING, Breite
  * BTN_FIND_REPLACE_ALL_WIDTH), die main.c beim Mausklick testet (siehe
@@ -158,7 +168,7 @@ void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labe
 void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_label, Editor *search_ed,
                           const char *replace_label, Editor *replace_ed,
                           const char *replace_all_label,
-                          int regex_mode, int case_sensitive, int whole_word,
+                          int regex_mode, int case_sensitive, int whole_word, int all_tabs,
                           int focus_field, const char *status);
 
 /* Zeichnet einen Frame: Hintergrund, Suchtreffer-Hervorhebung, Selektion,

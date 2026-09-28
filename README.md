@@ -80,6 +80,12 @@ Klammern, Suchen/Ersetzen, Zeilen-Befehle) ist reine C-Logik und wird selbst
   (`$1`/`\1`, `$0` für den ganzen Treffer) und `\t` für einen Tabulator
 - Weitersuchen (`⌘G`/`⇧⌘G`) auch bei geschlossener Suchleiste, Auswahl für
   Suche verwenden (`⌘E`), Gehe zu Zeile (`⌘L`)
+- Suche über alle Tabs (Umschalter `⧉` in der Suchleiste): Weitersuchen
+  springt am Ende eines Tabs in den nächsten (rückwärts: vorigen) Tab mit
+  Treffer, der Status zählt alle Tabs ("Treffer 2 von 5 · 12 in allen
+  Tabs"), "Alle ersetzen" ersetzt in allen Tabs - je Tab ein Undo-Schritt,
+  als Binärdatei geöffnete Tabs im Hintergrund bleiben unberührt. Die
+  Live-Suche beim Tippen bleibt im aktuellen Tab
 
 ### Darstellung
 
@@ -328,6 +334,7 @@ diesen Tests Stubs.
 | `test_regex_replace`, `test_tab_search`, `test_regex_budget` | Suchen/Ersetzen, Rückreferenzen, `\t`, Komplexitätsdeckel der Live-Suche |
 | `test_layout_cache`, `test_layout_cache_lang` | Layout- und Kommentar-Cache gegen einen frischen Aufbau |
 | `test_undo` | Undo-Gruppen und Fuzzing mit simulierten Allokationsfehlern |
+| `test_search_tabs` | Suche über alle Tabs: Tabwechsel vor-/rückwärts, Summe im Status, Live-Suche bleibt im Tab, Ersetzen + Weiter im richtigen Tab, Alle ersetzen in allen Tabs (ohne Binär-Tabs), je Tab ein Undo-Schritt |
 | `test_indent` | Auto-Indent bei Return (nach `{`/`:`, Aufteilen von `{}`, `}` rückt zurück, Regeln je Sprache), Tab/⇧Tab über mehrere Zeilen, Tab vs. Leerzeichen, Fuzz: Ausrücken nach Einrücken = Original |
 | `test_lines` | Kommentar ein/aus (Einrückung, Leerzeilen, `#`/`;`, Selektion, Undo), Duplizieren, Verschieben (Ränder, letzte Zeile ohne Umbruch, CRLF), Fuzz-Rückwege; Markierungen für unsichtbare Zeichen gegen die Spaltenregel; Menü-Verdrahtung aus `main.c` |
 | `test_textinput` | Eingabemethoden: UTF-16-Umrechnung, nachgestellte Abläufe (Tottaste, Pinyin, Akzent-Menü, Emoji, Suchfeld) mit dem Code aus `main.c` |

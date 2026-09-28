@@ -35,6 +35,7 @@ TESTS=(
     "test_char_boundaries|$EDITOR_SRC|"
     "test_regex_replace|$EDITOR_SRC|"
     "test_tab_search|$EDITOR_SRC|"
+    "test_search_tabs|$EDITOR_SRC src/strings.c|"
     "test_layout_cache|$EDITOR_SRC|"
     "test_layout_cache_lang|$EDITOR_SRC|"
     "test_gapbuffer|src/gapbuffer.c|"

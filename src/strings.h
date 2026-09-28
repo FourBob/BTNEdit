@@ -165,6 +165,10 @@ typedef enum {
     BTN_STR_AI_MODEL_FOR_TEXT,
     BTN_STR_AI_TEXT_SAME,
     BTN_STR_AI_TEST_NO_FIM,
+    /* Suche ueber alle Tabs: Anhang an den Status ("%d" Summe) und Meldung
+     * nach "Alle ersetzen" ("%d" Ersetzungen, "%d" Tabs) */
+    BTN_STR_FIND_ALL_TABS_FMT,
+    BTN_STR_FIND_REPLACED_TABS_FMT,
     BTN_STR_COUNT
 } BtnStringId;
 

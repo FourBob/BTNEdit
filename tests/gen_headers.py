@@ -34,6 +34,11 @@ HEADERS = {
     "expensive_extracted.h": ("main.c", ["#BTN_LIVE_REGEX_MAX_COPIES",
                                          "regex_too_expensive_for_live_search"]),
     "replsel_extracted.h": ("main.c", ["replace_selection"]),
+    "search_tabs_extracted.h": ("main.c", [
+        "#BTN_MAX_SEARCH_MATCHES", "#BTN_LIVE_SEARCH_MAX_DOC_LEN", "pick_current_match", "pick_match_for_navigation",
+        "next_tab_index", "set_match_count_status", "doc_match_count", "append_all_tabs_status",
+        "next_tab_with_match", "perform_live_search", "perform_find", "selection_is_current_match",
+        "perform_replace_current", "replace_all_in_editor", "perform_replace_all"]),
     "doc_extracted.h": ("main.c", ["typedef:Document", "doc_has_edits", "doc_is_dirty", "mark_doc_saved"]),
     "focus_extracted.h": ("main.c", ["typedef:BtnFocus"]),
     "shortcuts_extracted.h": ("main.c", [
@@ -61,8 +66,8 @@ HEADERS = {
         "#GUTTER_WIDTH", "#LINE_HEIGHT", "#LEFT_PADDING", "#TOP_PADDING", "chars_per_row_for",
         "btn_layout_text_width", "btn_hit_test", "btn_visible_row_capacity", "btn_text_rows_extent",
         "#SCROLLBAR_INSET", "#SCROLLBAR_KNOB_WIDTH", "typedef:ScrollbarTrack", "scrollbar_track",
-        "btn_scrollbar_knob", "btn_scrollbar_row_for_knob_top", "typedef:FindBarGeometry",
-        "find_bar_geometry", "btn_text_cursor_rects"]),
+        "btn_scrollbar_knob", "btn_scrollbar_row_for_knob_top",
+        "btn_find_bar_geometry", "btn_text_cursor_rects"]),
     "drag_type_extracted.h": ("main.c", ["typedef:BtnDrag"]),
     "invisibles_extracted.h": ("render.c", ["build_invisibles"]),
     "linecmd_extracted.h": ("main.c", ["perform_line_command"]),
