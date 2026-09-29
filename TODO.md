@@ -5,11 +5,19 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
 
 ## Fehlende Features (nach Priorität)
 
-1. **Code-Editor-Funktionen.** Wortumbruch an/aus, Kodierung beim
-   Öffnen/Sichern wählen (heute: Bytes unverändert, Anzeige als UTF-8 mit
-   Latin-1-Fallback).
+1. **Code-Editor-Funktionen.** Wortumbruch an/aus.
 
 ## Bekannte Einschränkungen (bewusst zurückgestellt, kein akuter Bug)
+
+- Kodierung: nur UTF-8 (mit/ohne BOM), UTF-16 LE/BE, ISO-8859-1 und
+  Windows-1252 - kein Mac Roman, kein ISO-8859-15, keine osteuropäischen
+  oder asiatischen Kodierungen (Shift-JIS, GB18030, ...). Erkannt wird nur
+  per BOM, gültigem UTF-8 und sonst Windows-1252: UTF-16 ohne BOM gilt als
+  Binärdatei (Neu öffnen als UTF-16 hilft), ISO-8859-1 wird als
+  Windows-1252 erkannt (für Texte ohne die Steuerzeichen 0x80-0x9F
+  dasselbe). Umwandeln beim Öffnen und Sichern kostet eine zusätzliche
+  Kopie des Dokuments (nicht bei UTF-8). Kaputtes UTF-16 wird roh wie eine
+  Binärdatei geöffnet.
 
 - KI-Vervollständigung: Vorschläge sind einzeilig und kommen nur, wenn
   rechts vom Cursor höchstens Leerraum oder Schließendes steht. Der

@@ -26,6 +26,18 @@ Klammern, Suchen/Ersetzen, Zeilen-Befehle) ist reine C-Logik und wird selbst
   Ablage > Zeilenenden. Eingefügter Text wird angepasst. Dateien mit
   gemischten Zeilenenden bleiben Byte für Byte unverändert, bis man ein
   Format wählt
+- Zeichenkodierung: UTF-8, UTF-8 mit BOM, UTF-16 LE/BE (mit BOM),
+  ISO-8859-1 (Latin-1) und Windows-1252 werden beim Öffnen erkannt (BOM,
+  sonst gültiges UTF-8, sonst Windows-1252) und beim Sichern beibehalten;
+  im Editor steht immer UTF-8 - Suche, Regex und KI arbeiten auch in alten
+  Latin-1-Dateien richtig, ein getipptes „ä“ landet dort als ein Byte.
+  Ablage > Kodierung stellt um, womit gesichert wird; „Neu öffnen als“
+  liest die Datei mit einer anderen Kodierung neu, wenn die Erkennung
+  danebenlag. Kann die Kodierung ein Zeichen nicht darstellen (z.B. „€“ in
+  Latin-1), fragt Sichern, ob als UTF-8 gesichert werden soll - nichts geht
+  still verloren. Unveränderte Dateien werden Byte für Byte so gesichert,
+  wie sie geladen wurden; UTF-8 mit einzelnen ungültigen Bytes (z.B. Logs)
+  bleibt wie bisher unangetastet
 - Atomares Sichern (Tempdatei + `rename`), Symlinks werden aufgelöst,
   schreibgeschützte Dateien nicht überschrieben
 - Dateien bis 1 GB; Warnung vor dem Öffnen einer vermutlich binären Datei
@@ -93,7 +105,7 @@ Klammern, Suchen/Ersetzen, Zeilen-Befehle) ist reine C-Logik und wird selbst
 ### Darstellung
 
 - Wortumbruch, Zeilennummern, Statuszeile (Position, Zeilen/Wörter/Zeichen,
-  Zeilenende-Format)
+  Kodierung und Zeilenende-Format, z.B. „UTF-8 · LF“)
 - Syntax-Highlighting: C/C++/Objective-C/Java, Python, Shell,
   JavaScript/TypeScript, Swift, Markdown, STL (ASCII), INI/Config, SVG,
   DXF (ASCII)
@@ -301,6 +313,7 @@ make BTN_SDK=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
 | `src/highlight.c`/`.h` | Reiner Tokenizer für Syntax-Highlighting und das Kommentarzeichen je Sprache, unabhängig von Editor/Core Text. |
 | `src/textinput.c`/`.h` | Eingabemethoden: UTF-16 ↔ Bytes nach der Zeichenregel, vorläufiger Text, Bereiche relativ zum Cursor. `shim.m` übersetzt nur `NSTextInputClient`. |
 | `src/eol.c`/`.h` | Zeilenenden erkennen, im Puffer auf `\n` vereinheitlichen und beim Sichern zurückwandeln. |
+| `src/encoding.c`/`.h` | Zeichenkodierung erkennen (BOM, UTF-8, Windows-1252), nach UTF-8 lesen und beim Sichern zurückwandeln; nicht darstellbare Zeichen melden. |
 | `src/filestamp.c`/`.h` | Fingerabdruck einer Datei (Gerät, Inode, Größe, mtime und ctime in ns), um Änderungen durch andere Programme zu erkennen. |
 | `src/recovery.c`/`.h` | Wiederherstellungsdateien schreiben/lesen (binärsicher, atomar) und die abgestürzter Läufe finden (Sperrdatei je Lauf). |
 | `src/ai.c`/`.h` | KI-Vervollständigung ohne Netzwerk: Einstellungen, JSON der Anfrage (Ollama/llama-server), Antwort auswerten, Vorschlag bereinigen. |
@@ -344,10 +357,11 @@ diesen Tests Stubs.
 | `test_shortcuts` | Weitersuchen, Auswahl für Suche (auch mit NUL-Byte), Tab-Wechsel mit Umlauf |
 | `test_mouse` | Scrollbalken-Geometrie samt Umkehrung, I-Beam-Flächen, Autoscroll-Tempo; `on_mouse()` aus `main.c` mit echtem Layout: Markieren mit Autoscroll-Takt, Knopf ziehen, Seite blättern |
 | `test_eol` | Zeilenenden: Erkennung, bytegenauer Round-Trip LF/CRLF/CR, Umwandeln aus zwei Pufferhälften |
-| `test_eol_glue` | Laden/Sichern/Menü aus `main.c` mit echten Dateien: gemischte und Binärdateien bleiben bytegleich |
+| `test_eol_glue` | Laden/Sichern/Menü aus `main.c` mit echten Dateien: gemischte und Binärdateien bleiben bytegleich; Kodierungen (Latin-1/Windows-1252, UTF-16, BOM, gemischt) bytegleich, nicht darstellbare Zeichen, Kodierung umstellen, Neu öffnen als, Neuladen mit gewählter Kodierung |
+| `test_encoding` | Kodierungen: Erkennung, alle 256 Bytes Latin-1/Windows-1252 im Rundlauf, UTF-16 mit Surrogatpaaren und kaputten Einheiten, nicht darstellbare Zeichen, Fuzz-Rundlauf |
 | `test_save_atomic`, `test_save_links_perms`, `test_file_io` | atomares Sichern, Symlinks, Schreibschutz, Laden, Recent-Liste |
 | `test_close_flow` | Schließen/Beenden verliert nie ungesicherte Änderungen |
-| `test_recovery` | Datei-Fingerabdruck (gleiche Größe, 1 ns, `rename`, ctime), Wiederherstellungsdateien: Round-Trip, beschädigte Dateien, Sperren und verwaiste Dateien abgestürzter Läufe |
+| `test_recovery` | Datei-Fingerabdruck (gleiche Größe, 1 ns, `rename`, ctime), Wiederherstellungsdateien: Round-Trip samt Kodierung, altes Format 2, beschädigte Dateien, Sperren und verwaiste Dateien abgestürzter Läufe |
 | `test_protect` | Schutz der Arbeit aus `main.c` mit echten Dateien: still neu laden, Nachfrage, Behalten, Konflikt beim Sichern, gelöschte Datei, Schreiben während des Lesens, volle Platte, wann Wiederherstellungsdateien entstehen/verschwinden, nachgestellter Absturz |
 | `test_ai` | KI: Einstellungsdatei, JSON-Rundlauf (auch kaputtes UTF-8, Steuerzeichen), Antworten (Escapes, Surrogatpaare, verschachtelte Werte, kaputtes JSON), Vorschlag bereinigen, Modellliste lesen und Code-Modell wählen, Fließtext (Dateityp, Anfrage, Satzende) |
 | `test_ai_glue` | KI-Ablauf aus `main.c`: wann gefragt wird, Kontextgrenzen, veraltete/fehlerhafte Antworten, Geistertext, Tab als eigener Undo-Schritt, Weitertippen, Abbrechen, Einstellungsdatei, Modellliste (fehlendes Modell ersetzen, Server nicht erreichbar, kein Code-Modell), Verbindungstest, Fließtext-Modus (eigenes Modell, Rückfall ohne Fill-in-the-Middle, Test in zwei Stufen, Menü) |

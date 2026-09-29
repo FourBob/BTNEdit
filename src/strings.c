@@ -97,7 +97,17 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Same as code",
         " (The model has no fill-in-the-middle: BTNEdit sends only the text before the cursor.)",
         " · %d total",
-        "%d replaced in %d tabs"
+        "%d replaced in %d tabs",
+        "Text Encoding",
+        "Reopen as:",
+        "“%s” can’t be saved as %s",
+        "The text contains characters that %s can’t represent, e.g. “%s”. Saving as UTF-8 keeps everything.",
+        "Save as UTF-8",
+        "Reopen “%s” as %s?",
+        "Your unsaved changes will be lost.",
+        "Reopen",
+        "“%s” is not valid %s",
+        "The file stays open as before."
     },
     /* BTN_LANG_DE */
     {
@@ -187,7 +197,17 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Wie Code",
         " (Das Modell kann kein Fill-in-the-Middle: BTNEdit schickt nur den Text vor dem Cursor.)",
         " · %d gesamt",
-        "%d ersetzt in %d Tabs"
+        "%d ersetzt in %d Tabs",
+        "Kodierung",
+        "Neu öffnen als:",
+        "„%s“ lässt sich nicht als %s sichern",
+        "Der Text enthält Zeichen, die %s nicht darstellen kann, z.B. „%s“. Als UTF-8 sichern verliert nichts.",
+        "Als UTF-8 sichern",
+        "„%s“ als %s neu öffnen?",
+        "Deine ungesicherten Änderungen gehen dabei verloren.",
+        "Neu öffnen",
+        "„%s“ ist kein gültiges %s",
+        "Die Datei bleibt so geöffnet wie bisher."
     },
     /* BTN_LANG_FR */
     {
@@ -277,7 +297,17 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Comme le code",
         " (Le modèle ne gère pas le fill-in-the-middle : BTNEdit n’envoie que le texte avant le curseur.)",
         " · %d au total",
-        "%d remplacement(s) dans %d onglets"
+        "%d remplacement(s) dans %d onglets",
+        "Encodage",
+        "Rouvrir en :",
+        "Impossible d’enregistrer « %s » en %s",
+        "Le texte contient des caractères que %s ne peut pas représenter, p. ex. « %s ». L’enregistrement en UTF-8 conserve tout.",
+        "Enregistrer en UTF-8",
+        "Rouvrir « %s » en %s ?",
+        "Vos modifications non enregistrées seront perdues.",
+        "Rouvrir",
+        "« %s » n’est pas un %s valide",
+        "Le fichier reste ouvert comme avant."
     },
     /* BTN_LANG_ES */
     {
@@ -367,7 +397,17 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "Igual que código",
         " (El modelo no admite fill-in-the-middle: BTNEdit solo envía el texto antes del cursor.)",
         " · %d en total",
-        "%d reemplazos en %d pestañas"
+        "%d reemplazos en %d pestañas",
+        "Codificación",
+        "Reabrir como:",
+        "No se puede guardar «%s» como %s",
+        "El texto contiene caracteres que %s no puede representar, p. ej. «%s». Guardar como UTF-8 no pierde nada.",
+        "Guardar como UTF-8",
+        "¿Reabrir «%s» como %s?",
+        "Se perderán los cambios no guardados.",
+        "Reabrir",
+        "«%s» no es %s válido",
+        "El archivo sigue abierto como antes."
     },
     /* BTN_LANG_ZH (Simplified) */
     {
@@ -460,7 +500,17 @@ static const char *const g_strings[BTN_LANG_COUNT][BTN_STR_COUNT] = {
         "与代码相同",
         "（该模型不支持中间填充：BTNEdit 只发送光标前的文本。）",
         " · 共 %d 个",
-        "已替换 %d 处（%d 个标签页）"
+        "已替换 %d 处（%d 个标签页）",
+        "文本编码",
+        "重新打开为：",
+        "无法将“%s”存储为 %s",
+        "文本包含 %s 无法表示的字符，例如“%s”。存储为 UTF-8 不会丢失任何内容。",
+        "存储为 UTF-8",
+        "重新打开“%s”（%s）？",
+        "未存储的更改将会丢失。",
+        "重新打开",
+        "“%s”不是有效的 %s",
+        "文件保持原样打开。"
     }
 };
 

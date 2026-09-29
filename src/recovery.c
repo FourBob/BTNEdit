@@ -1,4 +1,5 @@
 #include "recovery.h"
+#include "encoding.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -11,7 +12,8 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-#define RECOVERY_MAGIC "BTNEdit-Recovery 2\n"
+#define RECOVERY_MAGIC "BTNEdit-Recovery 3\n"
+#define RECOVERY_MAGIC_V2 "BTNEdit-Recovery 2\n" /* ohne Kodierung: noch lesbar */
 #define RECOVERY_SUFFIX ".btnrecovery"
 #define LOCK_SUFFIX ".lock"
 #define RECOVERY_MAX_PATH ((size_t)1 << 16)
@@ -100,7 +102,7 @@ static int write_all(FILE *f, const char *data, size_t len) {
     return len == 0 || fwrite(data, 1, len, f) == len;
 }
 
-int btn_recovery_write(const char *file, const char *orig_path, int eol, int raw, int binary,
+int btn_recovery_write(const char *file, const char *orig_path, int eol, int raw, int binary, int enc,
                        const BtnFileStamp *disk, const char *a, size_t alen, const char *b, size_t blen) {
     BtnFileStamp none = { 0 };
     if (!disk) {
@@ -123,8 +125,8 @@ int btn_recovery_write(const char *file, const char *orig_path, int eol, int raw
         free(tmp);
         return 0;
     }
-    int ok = fprintf(f, RECOVERY_MAGIC "%d %d %d %zu %zu %d %llu %llu %lld %lld %lld\n", eol, raw, binary, path_len,
-                     alen + blen, disk->valid, (unsigned long long)disk->dev, (unsigned long long)disk->ino,
+    int ok = fprintf(f, RECOVERY_MAGIC "%d %d %d %d %zu %zu %d %llu %llu %lld %lld %lld\n", eol, raw, binary, enc,
+                     path_len, alen + blen, disk->valid, (unsigned long long)disk->dev, (unsigned long long)disk->ino,
                      (long long)disk->size, disk->mtime_ns, disk->ctime_ns) > 0 &&
              write_all(f, orig_path, path_len) && write_all(f, a, alen) && write_all(f, b, blen) &&
              fflush(f) == 0 && fsync(fileno(f)) == 0;
@@ -150,18 +152,22 @@ int btn_recovery_read(const char *file, BtnRecovered *out) {
     struct stat st;
     char magic[sizeof(RECOVERY_MAGIC)];
     char line[256];
-    int eol, raw, binary, valid;
+    int eol, raw, binary, valid, enc = BTN_ENC_UTF8;
     size_t path_len, text_len;
     unsigned long long dev, ino;
     long long size, mtime_ns, ctime_ns;
+    _Static_assert(sizeof(RECOVERY_MAGIC) == sizeof(RECOVERY_MAGIC_V2), "gleich lange Kennungen");
     int ok = fstat(fileno(f), &st) == 0 && S_ISREG(st.st_mode) &&
-             fread(magic, 1, sizeof(RECOVERY_MAGIC) - 1, f) == sizeof(RECOVERY_MAGIC) - 1 &&
-             memcmp(magic, RECOVERY_MAGIC, sizeof(RECOVERY_MAGIC) - 1) == 0 &&
-             fgets(line, sizeof(line), f) && strchr(line, '\n') &&
-             sscanf(line, "%d %d %d %zu %zu %d %llu %llu %lld %lld %lld", &eol, &raw, &binary, &path_len, &text_len,
-                    &valid, &dev, &ino, &size, &mtime_ns, &ctime_ns) == 11 &&
-             eol >= 0 && eol <= 2 && (raw == 0 || raw == 1) && (binary == 0 || binary == 1) && (valid == 0 || valid == 1) &&
-             path_len < RECOVERY_MAX_PATH;
+             fread(magic, 1, sizeof(RECOVERY_MAGIC) - 1, f) == sizeof(RECOVERY_MAGIC) - 1;
+    int v3 = ok && memcmp(magic, RECOVERY_MAGIC, sizeof(RECOVERY_MAGIC) - 1) == 0;
+    ok = (v3 || (ok && memcmp(magic, RECOVERY_MAGIC_V2, sizeof(RECOVERY_MAGIC_V2) - 1) == 0)) &&
+         fgets(line, sizeof(line), f) && strchr(line, '\n') &&
+         (v3 ? sscanf(line, "%d %d %d %d %zu %zu %d %llu %llu %lld %lld %lld", &eol, &raw, &binary, &enc, &path_len,
+                      &text_len, &valid, &dev, &ino, &size, &mtime_ns, &ctime_ns) == 12
+             : sscanf(line, "%d %d %d %zu %zu %d %llu %llu %lld %lld %lld", &eol, &raw, &binary, &path_len, &text_len,
+                      &valid, &dev, &ino, &size, &mtime_ns, &ctime_ns) == 11) &&
+         eol >= 0 && eol <= 2 && (raw == 0 || raw == 1) && (binary == 0 || binary == 1) && (valid == 0 || valid == 1) &&
+         enc >= 0 && enc < BTN_ENC_COUNT && path_len < RECOVERY_MAX_PATH;
     /* Genau Kopf + Pfad + Text, nicht mehr und nicht weniger (abgeschnitten
      * oder angehaengt = beschaedigt). */
     if (ok) {
@@ -190,6 +196,7 @@ int btn_recovery_read(const char *file, BtnRecovered *out) {
     out->eol = eol;
     out->raw = raw;
     out->binary = binary;
+    out->enc = enc;
     if (valid) {
         out->disk.valid = 1;
         out->disk.dev = (dev_t)dev;

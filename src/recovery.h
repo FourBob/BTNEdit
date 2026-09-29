@@ -11,15 +11,17 @@
  * gilt auch, wenn nach einem Neustart ein anderer Prozess dieselbe pid hat.
  *
  * Dateiformat (binaersicher - Pfade duerfen '\n', Texte NUL enthalten):
- *   "BTNEdit-Recovery 2\n"
- *   "<eol> <raw> <binary> <pfadlaenge> <textlaenge> <stempel: valid dev ino
- *    size mtime_ns ctime_ns>\n"
+ *   "BTNEdit-Recovery 3\n"
+ *   "<eol> <raw> <binary> <kodierung> <pfadlaenge> <textlaenge> <stempel:
+ *    valid dev ino size mtime_ns ctime_ns>\n"
  *   <pfad-bytes><text-bytes>
  * Pfadlaenge 0 = unbenanntes Dokument. Der Text ist der Pufferinhalt (bei
  * raw = 0 mit '\n' als Zeilenende, eol ist das Format der Datei). Der
  * Stempel ist der Stand der Datei, auf den sich die Aenderungen beziehen -
  * hat sie sich danach geaendert (git pull nach dem Absturz), fragt Sichern
- * nach. */
+ * nach. Kodierung: BtnEncoding der Datei (der Text selbst ist UTF-8 wie im
+ * Puffer). Version 2 (ohne Kodierung, von vor deren Einfuehrung) wird noch
+ * gelesen: dann UTF-8, die Bytes unveraendert wie damals. */
 
 #include <stddef.h>
 #include "filestamp.h"
@@ -28,6 +30,7 @@ typedef struct {
     int eol;      /* BtnEol */
     int raw;
     int binary;
+    int enc;      /* BtnEncoding */
     char *path;   /* malloc, NULL = unbenannt */
     char *text;   /* malloc, NUL-terminiert (darf NUL enthalten, siehe len) */
     size_t len;
@@ -51,7 +54,7 @@ char *btn_recovery_file_name(const char *dir, const char *run, unsigned id);
 /* Schreibt atomar (Tempdatei + rename()): der Text ist a[0..alen) +
  * b[0..blen) - direkt die beiden Haelften des Gap-Buffers. disk darf NULL
  * sein (kein Stand bekannt). 1 = geschrieben. */
-int btn_recovery_write(const char *file, const char *orig_path, int eol, int raw, int binary,
+int btn_recovery_write(const char *file, const char *orig_path, int eol, int raw, int binary, int enc,
                        const BtnFileStamp *disk, const char *a, size_t alen, const char *b, size_t blen);
 
 /* 1 = gelesen und vollstaendig (out muss mit btn_recovery_free() freigegeben

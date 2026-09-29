@@ -40,7 +40,7 @@ HEADERS = {
         "doc_match_count", "searchable_other_tab", "append_all_tabs_status",
         "next_tab_with_match", "perform_live_search", "perform_find", "selection_is_current_match",
         "perform_replace_current", "replace_all_in_editor", "perform_replace_all"]),
-    "doc_extracted.h": ("main.c", ["typedef:Document", "doc_has_edits", "doc_is_dirty", "mark_doc_saved"]),
+    "doc_extracted.h": ("main.c", ["include:encoding.h", "typedef:Document", "doc_has_edits", "doc_is_dirty", "mark_doc_saved"]),
     "focus_extracted.h": ("main.c", ["typedef:BtnFocus"]),
     "shortcuts_extracted.h": ("main.c", [
         "take_selection_as_search_text", "find_next_from_menu", "use_selection_for_find", "next_tab_index",
@@ -51,8 +51,9 @@ HEADERS = {
     "eol_glue_extracted.h": ("main.c", [
         "typedef:BtnReadResult", "#BTN_MAX_FILE_MB", "#BTN_MAX_FILE_SIZE", "basename_of", "looks_binary",
         "write_stream_checked", "write_file_atomic", "write_file_contents", "read_file_contents",
-        "show_file_error", "set_doc_line_ending", "load_doc_contents", "discard_recovery", "open_file_path",
-        "disk_content_changed", "perform_save_doc"]),
+        "show_file_error", "set_doc_line_ending", "typedef:DecodedFile", "decode_file_bytes", "load_doc_contents",
+        "discard_recovery", "open_file_path", "disk_content_changed", "confirm_save_as_utf8", "perform_save_doc",
+        "reload_doc_as", "reload_doc", "set_doc_encoding", "reopen_doc_as"]),
     "render_pure_extracted.h": ("render.c", [
         "rows_push", "layout_build", "struct:g_layout", "btn_layout_get",
         "btn_layout_row_for_offset", "btn_row_offset_for_column", "first_row_of_line",
@@ -86,8 +87,9 @@ HEADERS = {
         "#BTN_RECOVERY_INTERVAL", "#BTN_RECOVERY_BYTES_PER_SECOND", "#BTN_MAX_FILE_MB", "#BTN_MAX_FILE_SIZE",
         "typedef:BtnReadResult", "monotonic_seconds", "active_doc", "discard_recovery", "basename_of", "doc_display_name", "set_doc_path",
         "doc_is_blank", "add_tab", "find_tab_for_path", "read_file_contents", "show_file_error",
-        "write_stream_checked", "write_file_atomic", "write_file_contents", "looks_binary", "load_doc_contents",
-        "open_file_path", "disk_content_changed", "hash_for_stamp", "perform_save_doc", "reload_doc", "check_doc_on_disk", "autosave_recovery", "on_timer",
+        "write_stream_checked", "write_file_atomic", "write_file_contents", "looks_binary", "typedef:DecodedFile",
+        "decode_file_bytes", "load_doc_contents", "open_file_path", "disk_content_changed", "hash_for_stamp",
+        "confirm_save_as_utf8", "perform_save_doc", "reload_doc_as", "reload_doc", "check_doc_on_disk", "autosave_recovery", "on_timer",
         "on_activate", "restore_into_tab", "restore_recovered_documents"]),
     "mouse_extracted.h": ("main.c", [
         "content_bounds", "visible_line_capacity", "build_current_rows",
@@ -97,6 +99,8 @@ HEADERS = {
 
 
 def extract(src, spec, path):
+    if spec.startswith("include:"):  # Header, den der erzeugte Text braucht
+        return '#include "' + spec[len("include:"):] + '"'
     if spec.startswith("#"):
         m = re.search(r"^#define " + re.escape(spec[1:]) + r"\b.*$", src, re.M)
         if not m:

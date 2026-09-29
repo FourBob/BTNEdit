@@ -521,6 +521,13 @@ static void test_autosave(void) {
     CHECK(btn_recovery_read(d->recovery_file, &r) && r.eol == BTN_EOL_LF, "line-ending change rewrites");
     btn_recovery_free(&r);
     d->eol = BTN_EOL_CRLF;
+    autosave_recovery(3000 + BTN_RECOVERY_INTERVAL);
+    /* ... ebenso die Kodierung */
+    d->enc = BTN_ENC_LATIN1;
+    autosave_recovery(3000 + 2 * BTN_RECOVERY_INTERVAL);
+    CHECK(btn_recovery_read(d->recovery_file, &r) && r.enc == BTN_ENC_LATIN1, "encoding change rewrites, encoding stored");
+    btn_recovery_free(&r);
+    d->enc = BTN_ENC_UTF8;
 
     /* Wieder sauber ohne Sichern (z.B. "Nicht sichern"): Datei weg */
     char *file = strdup(d->recovery_file);
@@ -607,6 +614,7 @@ static void test_restore(void) {
     reset_docs();
     open_file_path(&g_docs[0], a);
     type_text(&g_docs[0], "lost?");
+    g_docs[0].enc = BTN_ENC_WIN1252; /* Kodierung ueberlebt den Absturz */
     int idx = add_tab();
     type_text(&g_docs[idx], "untitled \0text");
     editor_insert_text(&g_docs[idx].editor, "\0!", 2);
@@ -621,8 +629,8 @@ static void test_restore(void) {
     CHECK(g_choice_count == 1 && g_last_escape == 0, "asked once, Escape does not discard");
     CHECK(g_doc_count == 2, "two tabs restored (%d)", g_doc_count);
     CHECK(g_docs[0].path && strcmp(g_docs[0].path, a) == 0 && doc_text_is(&g_docs[0], "on disk\nlost?") &&
-              doc_is_dirty(&g_docs[0]),
-          "titled doc: path, text, unsaved");
+              doc_is_dirty(&g_docs[0]) && g_docs[0].enc == BTN_ENC_WIN1252 && g_docs[1].enc == BTN_ENC_UTF8,
+          "titled doc: path, text, encoding, unsaved");
     size_t len;
     char *t = editor_copy_all(&g_docs[1].editor, &len);
     CHECK(g_docs[1].path == NULL && len == 11 && memcmp(t, "untitled \0!", 11) == 0 && doc_is_dirty(&g_docs[1]),

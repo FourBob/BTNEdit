@@ -407,6 +407,25 @@ int main(void) {
         CHECK([[modelMenu itemAtIndex:8] state] == NSControlStateValueOn && [[modelMenu itemAtIndex:11] state] == NSControlStateValueOff,
               "'same as code' checked when no prose model is set");
         btn_app_set_ai_model_menu(NULL, NULL, 0, -1, -1);
+
+        /* Ablage > Kodierung: 6 Kodierungen, Trenner, Titel, 6 zum Neu oeffnen */
+        NSMenu *encMenu = nil;
+        for (NSMenuItem *m in [[[menubar itemAtIndex:1] submenu] itemArray]) {
+            if ([m submenu] && [[m submenu] numberOfItems] > 0 && [[[m submenu] itemAtIndex:0] tag] == BTN_MENU_ENC_BASE) {
+                encMenu = [m submenu];
+            }
+        }
+        CHECK(encMenu && [encMenu numberOfItems] == 2 * BTN_MENU_ENC_COUNT + 2 &&
+                  [[encMenu itemAtIndex:BTN_MENU_ENC_COUNT + 2] tag] == BTN_MENU_REOPEN_ENC_BASE &&
+                  [[[encMenu itemAtIndex:5] title] isEqualToString:@"Windows-1252"],
+              "File menu: encoding submenu (%ld items)", (long)[encMenu numberOfItems]);
+        btn_app_set_encoding_menu(4, 1, 0);
+        [encMenu update];
+        CHECK([[encMenu itemAtIndex:4] state] == NSControlStateValueOn && [[encMenu itemAtIndex:0] state] == NSControlStateValueOff,
+              "encoding checkmark");
+        btn_app_set_encoding_menu(0, 1, 1);
+        CHECK([[encMenu itemAtIndex:0] state] == NSControlStateValueOn && [[encMenu itemAtIndex:4] state] == NSControlStateValueOff,
+              "checkmark moves");
         CHECK([modelMenu numberOfItems] == 2, "no status, no models: only refresh and test");
 
         /* ---- Dateien ins Fenster ziehen ---- */

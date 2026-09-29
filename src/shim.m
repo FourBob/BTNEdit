@@ -8,6 +8,7 @@
  */
 #import <Cocoa/Cocoa.h>
 #include "shim.h"
+#include "encoding.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,6 +32,8 @@ static NSMenu *g_recentMenu = nil;
  * Haekchen per btn_app_set_line_ending_menu(). */
 static NSMenuItem *g_eolItems[3];
 static BOOL g_eolMenuEnabled = YES;
+static NSMenuItem *g_encItems[BTN_MENU_ENC_COUNT];
+static BOOL g_encMenuEnabled = YES, g_reopenEncEnabled = NO;
 static NSMenuItem *g_invisiblesItem = nil;
 static BOOL g_invisiblesOn = NO; /* auch vor dem Menuebau gesetzt (Einstellung) */
 static NSMenuItem *g_aiItem = nil;
@@ -519,6 +522,12 @@ static void btn_activate_and_focus_window(void) {
     if (tag >= BTN_MENU_EOL_LF && tag <= BTN_MENU_EOL_CR) {
         return g_eolMenuEnabled;
     }
+    if (tag >= BTN_MENU_ENC_BASE && tag < BTN_MENU_ENC_BASE + BTN_MENU_ENC_COUNT) {
+        return g_encMenuEnabled;
+    }
+    if (tag >= BTN_MENU_REOPEN_ENC_BASE && tag < BTN_MENU_REOPEN_ENC_BASE + BTN_MENU_ENC_COUNT) {
+        return g_reopenEncEnabled;
+    }
     return YES;
 }
 
@@ -740,6 +749,20 @@ void btn_app_build_menu(void) {
         }
         NSMenuItem *eolItem = [fileMenu addItemWithTitle:trs(BTN_STR_LINE_ENDINGS) action:nil keyEquivalent:@""];
         [eolItem setSubmenu:eolMenu];
+        /* Kodierung: oben, womit gesichert wird (Haekchen); darunter die
+         * Datei mit einer anderen Kodierung neu lesen. */
+        NSMenu *encMenu = [[NSMenu alloc] initWithTitle:trs(BTN_STR_ENCODING)];
+        for (int i = 0; i < BTN_MENU_ENC_COUNT; i++) {
+            g_encItems[i] = add_item(encMenu, ns_from_c(btn_enc_name((BtnEncoding)i)), @"", BTN_MENU_ENC_BASE + i);
+        }
+        [encMenu addItem:[NSMenuItem separatorItem]];
+        [encMenu addItemWithTitle:trs(BTN_STR_REOPEN_AS) action:nil keyEquivalent:@""]; /* grau: Abschnittstitel */
+        for (int i = 0; i < BTN_MENU_ENC_COUNT; i++) {
+            NSMenuItem *item = add_item(encMenu, ns_from_c(btn_enc_name((BtnEncoding)i)), @"", BTN_MENU_REOPEN_ENC_BASE + i);
+            [item setIndentationLevel:1];
+        }
+        NSMenuItem *encItem = [fileMenu addItemWithTitle:trs(BTN_STR_ENCODING) action:nil keyEquivalent:@""];
+        [encItem setSubmenu:encMenu];
         [fileMenu addItem:[NSMenuItem separatorItem]];
         add_item(fileMenu, trs(BTN_STR_CLOSE), @"w", BTN_MENU_CLOSE);
         [fileMenu addItem:[NSMenuItem separatorItem]];
@@ -1014,6 +1037,14 @@ void btn_app_restart_idle_timer(double seconds, btn_void_callback cb) {
 void btn_app_set_show_invisibles_menu(int on) {
     g_invisiblesOn = on ? YES : NO;
     [g_invisiblesItem setState:on ? NSControlStateValueOn : NSControlStateValueOff];
+}
+
+void btn_app_set_encoding_menu(int index, int enabled, int can_reopen) {
+    g_encMenuEnabled = enabled ? YES : NO;
+    g_reopenEncEnabled = can_reopen ? YES : NO;
+    for (int i = 0; i < BTN_MENU_ENC_COUNT; i++) {
+        [g_encItems[i] setState:(i == index) ? NSControlStateValueOn : NSControlStateValueOff];
+    }
 }
 
 void btn_app_set_line_ending_menu(int index, int enabled) {

@@ -169,6 +169,20 @@ typedef enum {
      * nach "Alle ersetzen" ("%d" Ersetzungen, "%d" Tabs) */
     BTN_STR_FIND_ALL_TABS_FMT,
     BTN_STR_FIND_REPLACED_TABS_FMT,
+    /* Ablage > Kodierung: Menue, "Neu oeffnen als"-Abschnitt; nicht
+     * darstellbare Zeichen beim Sichern ("%s" Dateiname/Kodierung bzw.
+     * Kodierung/Beispielzeichen); Neu oeffnen mit ungesicherten
+     * Aenderungen; Datei passt nicht zur gewaehlten Kodierung */
+    BTN_STR_ENCODING,
+    BTN_STR_REOPEN_AS,
+    BTN_STR_ENC_UNREPRESENTABLE_TITLE_FMT,
+    BTN_STR_ENC_UNREPRESENTABLE_INFO_FMT,
+    BTN_STR_BTN_SAVE_AS_UTF8,
+    BTN_STR_REOPEN_TITLE_FMT,
+    BTN_STR_REOPEN_INFO,
+    BTN_STR_BTN_REOPEN,
+    BTN_STR_ENC_INVALID_TITLE_FMT,
+    BTN_STR_ENC_INVALID_INFO,
     BTN_STR_COUNT
 } BtnStringId;
 

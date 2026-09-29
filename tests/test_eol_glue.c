@@ -34,9 +34,13 @@ static void set_doc_path(Document *d, const char *path) {
 }
 static void add_recent_file(const char *path) { (void)path; }
 static const char *doc_display_name(Document *d) { (void)d; return "doc"; }
+/* Konflikt beim Sichern: trotzdem sichern (eigener Test: test_protect);
+ * Kodierung: g_choice_answer (1 = erster Knopf), gezaehlt */
+static int g_choice_answer = 1, g_choices = 0;
 static int btn_show_choice_alert(const char *t, const char *i, const char *a, const char *b, int esc) {
     (void)t; (void)i; (void)a; (void)b; (void)esc;
-    return 1; /* Konflikt beim Sichern: trotzdem sichern (eigener Test: test_protect) */
+    g_choices++;
+    return g_choice_answer;
 }
 
 #include "eol_glue_extracted.h"
@@ -234,10 +238,123 @@ static void test_convert_mixed(void) {
     doc_done(&d);
 }
 
+/* ---- Zeichenkodierung ---- */
+static void test_encodings(void) {
+    char p[512];
+    Document d;
+    /* Latin-1-Datei: als Windows-1252 erkannt, im Puffer UTF-8, bytegleich zurueck */
+    path_for(p, "latin.txt");
+    write_bytes(p, "gr\xFC\xDF\r\n\x80\r\n", 9);
+    doc_init(&d);
+    open_file_path(&d, p);
+    CHECK(d.enc == BTN_ENC_WIN1252 && !d.binary && d.eol == BTN_EOL_CRLF && !doc_is_dirty(&d), "Latin-1 bytes: Windows-1252, CRLF");
+    CHECK(buffer_is(&d, "gr\xC3\xBC\xC3\x9F\n\xE2\x82\xAC\n", 11), "buffer is UTF-8 (grüß, €)");
+    CHECK(perform_save_doc(&d, 0) == 1 && file_is(p, "gr\xFC\xDF\r\n\x80\r\n", 9), "unchanged: byte-identical");
+    /* getipptes ä landet als 0xE4, nicht als UTF-8 */
+    editor_set_cursor(&d.editor, editor_length(&d.editor), 0);
+    editor_insert_text(&d.editor, "\xC3\xA4", 2);
+    CHECK(perform_save_doc(&d, 0) == 1 && file_is(p, "gr\xFC\xDF\r\n\x80\r\n\xE4", 10), "typed ä saved as one Windows-1252 byte");
+    /* Kodierung umstellen: ungesichert; Latin-1 kennt € nicht -> Frage */
+    set_doc_encoding(&d, BTN_ENC_LATIN1);
+    CHECK(doc_is_dirty(&d), "switching the encoding is an unsaved change");
+    g_choice_answer = 0;
+    g_choices = 0;
+    CHECK(perform_save_doc(&d, 0) == 0 && g_choices == 1 && file_is(p, "gr\xFC\xDF\r\n\x80\r\n\xE4", 10) && doc_is_dirty(&d),
+          "€ not in Latin-1: asked, cancel keeps the file");
+    g_choice_answer = 1;
+    CHECK(perform_save_doc(&d, 0) == 1 && d.enc == BTN_ENC_UTF8 && !doc_is_dirty(&d) &&
+              file_is(p, "gr\xC3\xBC\xC3\x9F\r\n\xE2\x82\xAC\r\n\xC3\xA4", 15),
+          "'save as UTF-8': everything kept, encoding now UTF-8");
+    doc_done(&d);
+
+    /* UTF-16 LE mit BOM: kein Binaer-Alarm, Zeilenenden erkannt, bytegleich */
+    static const char u16[] = "\xFF\xFE" "a\0\r\0\n\0\xE4\0";
+    path_for(p, "u16.txt");
+    write_bytes(p, u16, 10);
+    int warnings = g_binary_warnings;
+    doc_init(&d);
+    open_file_path(&d, p);
+    CHECK(d.enc == BTN_ENC_UTF16LE && !d.binary && g_binary_warnings == warnings && d.eol == BTN_EOL_CRLF &&
+              buffer_is(&d, "a\n\xC3\xA4", 4),
+          "UTF-16 LE: decoded, not binary, CRLF");
+    CHECK(perform_save_doc(&d, 0) == 1 && file_is(p, u16, 10), "UTF-16 LE: byte-identical");
+    editor_insert_text(&d.editor, "\xF0\x9F\x98\x80", 4);
+    CHECK(perform_save_doc(&d, 0) == 1 && file_is(p, "\xFF\xFE\x3D\xD8\x00\xDE" "a\0\r\0\n\0\xE4\0", 14), "emoji as a surrogate pair");
+    doc_done(&d);
+    /* kaputtes UTF-16 mit BOM: roh wie eine Binaerdatei */
+    path_for(p, "bad16.txt");
+    write_bytes(p, "\xFF\xFE\x00\xD8", 4);
+    doc_init(&d);
+    open_file_path(&d, p);
+    CHECK(d.binary && d.enc == BTN_ENC_UTF8 && buffer_is(&d, "\xFF\xFE\x00\xD8", 4), "broken UTF-16: raw bytes, binary");
+    CHECK(perform_save_doc(&d, 0) == 1 && file_is(p, "\xFF\xFE\x00\xD8", 4), "and saved unchanged");
+    set_doc_encoding(&d, BTN_ENC_LATIN1);
+    CHECK(d.enc == BTN_ENC_UTF8 && !doc_is_dirty(&d), "binary: encoding cannot be switched");
+    doc_done(&d);
+    /* UTF-8 mit BOM, gemischtes UTF-8 */
+    path_for(p, "bom.txt");
+    write_bytes(p, "\xEF\xBB\xBFx\n", 5);
+    doc_init(&d);
+    open_file_path(&d, p);
+    CHECK(d.enc == BTN_ENC_UTF8_BOM && buffer_is(&d, "x\n", 2), "UTF-8 BOM: BOM not in the buffer");
+    CHECK(perform_save_doc(&d, 0) == 1 && file_is(p, "\xEF\xBB\xBFx\n", 5), "BOM written again");
+    doc_done(&d);
+    path_for(p, "mixed.txt");
+    write_bytes(p, "\xC3\xA4 \xFF\n", 5);
+    doc_init(&d);
+    open_file_path(&d, p);
+    CHECK(d.enc == BTN_ENC_UTF8 && buffer_is(&d, "\xC3\xA4 \xFF\n", 5), "mixed UTF-8: bytes as they are");
+    CHECK(perform_save_doc(&d, 0) == 1 && file_is(p, "\xC3\xA4 \xFF\n", 5), "and saved unchanged");
+    doc_done(&d);
+
+    /* Neu oeffnen als: die Erkennung lag daneben */
+    path_for(p, "reopen.txt");
+    write_bytes(p, "\xC3\xA4\n", 3);
+    doc_init(&d);
+    open_file_path(&d, p);
+    CHECK(d.enc == BTN_ENC_UTF8, "UTF-8 detected");
+    g_choices = 0;
+    reopen_doc_as(&d, BTN_ENC_LATIN1);
+    CHECK(g_choices == 0 && d.enc == BTN_ENC_LATIN1 && d.enc_chosen && buffer_is(&d, "\xC3\x83\xC2\xA4\n", 5) && !doc_is_dirty(&d),
+          "reopened as Latin-1: no question without edits, clean");
+    write_bytes(p, "\xC3\xA4\xC3\xA4\n", 5);
+    reload_doc(&d);
+    CHECK(d.enc == BTN_ENC_LATIN1 && buffer_is(&d, "\xC3\x83\xC2\xA4\xC3\x83\xC2\xA4\n", 9), "reload keeps the chosen encoding");
+    write_bytes(p, "\xFF\xFE" "a\0", 4);
+    d.enc = BTN_ENC_UTF16LE; /* gewaehlt, Datei passt */
+    reload_doc(&d);
+    CHECK(d.enc == BTN_ENC_UTF16LE && d.enc_chosen && buffer_is(&d, "a", 1), "chosen UTF-16 still fits: kept");
+    write_bytes(p, "\xC3\xA4\xC3\xA4\n", 5);
+    reload_doc(&d);
+    CHECK(d.enc == BTN_ENC_UTF8 && !d.enc_chosen && buffer_is(&d, "\xC3\xA4\xC3\xA4\n", 5),
+          "chosen encoding no longer fits (odd length for UTF-16): detected again");
+    reopen_doc_as(&d, BTN_ENC_LATIN1);
+    editor_insert_text(&d.editor, "x", 1);
+    g_choice_answer = 0;
+    reopen_doc_as(&d, BTN_ENC_UTF8);
+    CHECK(g_choices == 1 && d.enc == BTN_ENC_LATIN1 && doc_is_dirty(&d), "unsaved edits: asked, cancel changes nothing");
+    g_choice_answer = 1;
+    reopen_doc_as(&d, BTN_ENC_UTF8);
+    CHECK(g_choices == 2 && d.enc == BTN_ENC_UTF8 && buffer_is(&d, "\xC3\xA4\xC3\xA4\n", 5) && !doc_is_dirty(&d),
+          "confirmed: reopened as UTF-8");
+    int errors = g_error_alerts;
+    reopen_doc_as(&d, BTN_ENC_UTF16BE); /* 5 Bytes: ungerade Laenge */
+    CHECK(g_error_alerts == errors + 1 && d.enc == BTN_ENC_UTF8 && buffer_is(&d, "\xC3\xA4\xC3\xA4\n", 5),
+          "does not fit UTF-16: message, document unchanged");
+    g_error_alerts = errors;
+    free(d.path);
+    d.path = NULL;
+    reopen_doc_as(&d, BTN_ENC_LATIN1);
+    CHECK(d.enc == BTN_ENC_UTF8, "untitled: nothing to reopen");
+    doc_done(&d);
+    g_choice_answer = 1;
+}
+
 int main(void) {
     if (!mkdtemp(g_dir)) {
         return 2;
     }
+    test_encodings();
     test_untouched();
     test_binary();
     test_edit_keeps_format();

@@ -64,6 +64,11 @@ enum {
 #define BTN_MENU_AI_MODEL_BASE 2000
 #define BTN_MAX_AI_MODELS 100
 #define BTN_MENU_AI_TEXT_MODEL_BASE (BTN_MENU_AI_MODEL_BASE + BTN_MAX_AI_MODELS)
+/* Ablage > Kodierung: Sichern als (BTN_MENU_ENC_BASE + BtnEncoding) und
+ * Neu oeffnen als (BTN_MENU_REOPEN_ENC_BASE + BtnEncoding), siehe encoding.h. */
+#define BTN_MENU_ENC_COUNT 6
+#define BTN_MENU_ENC_BASE 2300
+#define BTN_MENU_REOPEN_ENC_BASE 2320
 
 /* Rohe NSEvent.ModifierFlags-Bitwerte (von Apple dokumentiert/stabil), damit
  * main.c ohne Cocoa-Header auskommt. */
@@ -185,6 +190,10 @@ void btn_app_request_redraw(void);
 /* Systemton (z.B. Weitersuchen ohne Treffer bei geschlossener Suchleiste). */
 void btn_beep(void);
 
+/* Haekchen bei Ablage > Kodierung (index = BtnEncoding); enabled = 0 sperrt
+ * die Wahl (Binaerdatei), can_reopen = 0 sperrt "Neu oeffnen als"
+ * (unbenanntes Dokument). */
+void btn_app_set_encoding_menu(int index, int enabled, int can_reopen);
 /* Setzt das Haekchen im Untermenue Ablage > Zeilenenden auf Eintrag index
  * (0 = LF, 1 = CRLF, 2 = CR, wie BtnEol; -1 = keins, z.B. bei gemischten
  * Zeilenenden). enabled = 0 sperrt die drei Eintraege (Binaerdatei). */
