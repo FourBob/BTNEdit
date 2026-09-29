@@ -13,11 +13,16 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
   Windows-1252 - kein Mac Roman, kein ISO-8859-15, keine osteuropäischen
   oder asiatischen Kodierungen (Shift-JIS, GB18030, ...). Erkannt wird nur
   per BOM, gültigem UTF-8 und sonst Windows-1252: UTF-16 ohne BOM gilt als
-  Binärdatei (Neu öffnen als UTF-16 hilft), ISO-8859-1 wird als
+  Binärdatei (Neu öffnen als UTF-16 hilft, gesichert wird dann weiter ohne
+  BOM), eine UTF-16-BOM zählt nur, wenn die Datei Null-Bytes enthält (reiner
+  CJK-Text ohne Leerzeichen und Zeilenenden wird dann nicht erkannt),
+  ISO-8859-1 wird als
   Windows-1252 erkannt (für Texte ohne die Steuerzeichen 0x80-0x9F
   dasselbe). Umwandeln beim Öffnen und Sichern kostet eine zusätzliche
   Kopie des Dokuments (nicht bei UTF-8). Kaputtes UTF-16 wird roh wie eine
-  Binärdatei geöffnet.
+  Binärdatei geöffnet. Eine per "Neu öffnen als" gewählte Kodierung gilt
+  beim Neuladen weiter, solange die Erkennung dasselbe meint wie beim
+  Wählen.
 
 - KI-Vervollständigung: Vorschläge sind einzeilig und kommen nur, wenn
   rechts vom Cursor höchstens Leerraum oder Schließendes steht. Der

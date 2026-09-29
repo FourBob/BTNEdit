@@ -12,8 +12,8 @@
  *
  * Dateiformat (binaersicher - Pfade duerfen '\n', Texte NUL enthalten):
  *   "BTNEdit-Recovery 3\n"
- *   "<eol> <raw> <binary> <kodierung> <pfadlaenge> <textlaenge> <stempel:
- *    valid dev ino size mtime_ns ctime_ns>\n"
+ *   "<eol> <raw> <binary> <kodierung> <utf16-bom> <pfadlaenge> <textlaenge>
+ *    <stempel: valid dev ino size mtime_ns ctime_ns>\n"
  *   <pfad-bytes><text-bytes>
  * Pfadlaenge 0 = unbenanntes Dokument. Der Text ist der Pufferinhalt (bei
  * raw = 0 mit '\n' als Zeilenende, eol ist das Format der Datei). Der
@@ -31,6 +31,7 @@ typedef struct {
     int raw;
     int binary;
     int enc;      /* BtnEncoding */
+    int utf16_bom; /* UTF-16 mit BOM sichern */
     char *path;   /* malloc, NULL = unbenannt */
     char *text;   /* malloc, NUL-terminiert (darf NUL enthalten, siehe len) */
     size_t len;
@@ -54,7 +55,7 @@ char *btn_recovery_file_name(const char *dir, const char *run, unsigned id);
 /* Schreibt atomar (Tempdatei + rename()): der Text ist a[0..alen) +
  * b[0..blen) - direkt die beiden Haelften des Gap-Buffers. disk darf NULL
  * sein (kein Stand bekannt). 1 = geschrieben. */
-int btn_recovery_write(const char *file, const char *orig_path, int eol, int raw, int binary, int enc,
+int btn_recovery_write(const char *file, const char *orig_path, int eol, int raw, int binary, int enc, int utf16_bom,
                        const BtnFileStamp *disk, const char *a, size_t alen, const char *b, size_t blen);
 
 /* 1 = gelesen und vollstaendig (out muss mit btn_recovery_free() freigegeben

@@ -53,7 +53,7 @@ HEADERS = {
         "write_stream_checked", "write_file_atomic", "write_file_contents", "read_file_contents",
         "show_file_error", "set_doc_line_ending", "typedef:DecodedFile", "decode_file_bytes", "load_doc_contents",
         "discard_recovery", "open_file_path", "disk_content_changed", "confirm_save_as_utf8", "perform_save_doc",
-        "reload_doc_as", "reload_doc", "set_doc_encoding", "reopen_doc_as"]),
+        "#RELOAD_KEEP_CHOSEN", "reload_doc_as", "reload_doc", "set_doc_encoding", "reopen_doc_as"]),
     "render_pure_extracted.h": ("render.c", [
         "rows_push", "layout_build", "struct:g_layout", "btn_layout_get",
         "btn_layout_row_for_offset", "btn_row_offset_for_column", "first_row_of_line",
@@ -89,7 +89,7 @@ HEADERS = {
         "doc_is_blank", "add_tab", "find_tab_for_path", "read_file_contents", "show_file_error",
         "write_stream_checked", "write_file_atomic", "write_file_contents", "looks_binary", "typedef:DecodedFile",
         "decode_file_bytes", "load_doc_contents", "open_file_path", "disk_content_changed", "hash_for_stamp",
-        "confirm_save_as_utf8", "perform_save_doc", "reload_doc_as", "reload_doc", "check_doc_on_disk", "autosave_recovery", "on_timer",
+        "confirm_save_as_utf8", "perform_save_doc", "#RELOAD_KEEP_CHOSEN", "reload_doc_as", "reload_doc", "check_doc_on_disk", "autosave_recovery", "on_timer",
         "on_activate", "restore_into_tab", "restore_recovered_documents"]),
     "mouse_extracted.h": ("main.c", [
         "content_bounds", "visible_line_capacity", "build_current_rows",

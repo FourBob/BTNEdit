@@ -97,11 +97,15 @@ size_t btn_enc_bom_len(const char *s, size_t len, BtnEncoding enc) {
 }
 
 BtnEncoding btn_enc_detect(const char *s, size_t len) {
-    static const BtnEncoding with_bom[] = { BTN_ENC_UTF8_BOM, BTN_ENC_UTF16LE, BTN_ENC_UTF16BE };
-    for (size_t i = 0; i < sizeof(with_bom) / sizeof(with_bom[0]); i++) {
-        if (btn_enc_bom_len(s, len, with_bom[i])) {
-            return with_bom[i];
-        }
+    if (btn_enc_bom_len(s, len, BTN_ENC_UTF8_BOM)) {
+        return BTN_ENC_UTF8_BOM;
+    }
+    int has_nul = len == 2 || memchr(s, '\0', len) != NULL; /* nur die BOM: leere UTF-16-Datei */
+    if (has_nul && btn_enc_bom_len(s, len, BTN_ENC_UTF16LE)) {
+        return BTN_ENC_UTF16LE;
+    }
+    if (has_nul && btn_enc_bom_len(s, len, BTN_ENC_UTF16BE)) {
+        return BTN_ENC_UTF16BE;
     }
     const unsigned char *u = (const unsigned char *)s;
     size_t valid_multi = 0, invalid = 0;
@@ -191,7 +195,7 @@ char *btn_enc_decode(const char *s, size_t len, BtnEncoding enc, size_t *out_len
     return out;
 }
 
-char *btn_enc_encode(const char *u8, size_t len, BtnEncoding enc, size_t *out_len, size_t *out_bad) {
+char *btn_enc_encode(const char *u8, size_t len, BtnEncoding enc, int utf16_bom, size_t *out_len, size_t *out_bad) {
     *out_bad = (size_t)-1;
     const unsigned char *u = (const unsigned char *)u8;
     size_t cap;
@@ -217,7 +221,7 @@ char *btn_enc_encode(const char *u8, size_t len, BtnEncoding enc, size_t *out_le
         o += len;
     } else {
         int le = enc == BTN_ENC_UTF16LE;
-        if (enc == BTN_ENC_UTF16LE || enc == BTN_ENC_UTF16BE) {
+        if ((enc == BTN_ENC_UTF16LE || enc == BTN_ENC_UTF16BE) && utf16_bom) {
             out[o++] = (char)(le ? 0xFF : 0xFE);
             out[o++] = (char)(le ? 0xFE : 0xFF);
         }

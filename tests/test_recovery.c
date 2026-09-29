@@ -152,7 +152,7 @@ static void test_roundtrip(void) {
     long bad = 0;
     BtnFileStamp disk = { 1, 7, 123456789012ULL, 42, 1700000000123456789LL, 1700000001987654321LL };
     for (size_t split = 0; split <= tlen; split++) {
-        if (!btn_recovery_write(file, path, 1, 0, 0, 0, &disk, text, split, text + split, tlen - split)) {
+        if (!btn_recovery_write(file, path, 1, 0, 0, 0, 1, &disk, text, split, text + split, tlen - split)) {
             bad++;
             continue;
         }
@@ -168,22 +168,22 @@ static void test_roundtrip(void) {
     CHECK(count_entries(dir) == 1, "no temp files left behind");
 
     BtnRecovered r;
-    CHECK(btn_recovery_write(file, NULL, 2, 1, 1, 0, NULL, NULL, 0, NULL, 0) && btn_recovery_read(file, &r) && r.path == NULL &&
+    CHECK(btn_recovery_write(file, NULL, 2, 1, 1, 0, 1, NULL, NULL, 0, NULL, 0) && btn_recovery_read(file, &r) && r.path == NULL &&
               r.len == 0 && r.text && r.eol == 2 && r.raw == 1 && r.binary == 1 && !r.disk.valid,
           "untitled, empty, CR/raw/binary, no stamp");
     btn_recovery_free(&r);
 
     /* Kodierung (Version 3); Version 2 ohne Kodierung bleibt lesbar */
-    CHECK(btn_recovery_write(file, "/p", 1, 0, 0, 5, NULL, "x", 1, NULL, 0) && btn_recovery_read(file, &r) && r.enc == 5 &&
-              r.eol == 1,
-          "encoding stored and read back");
+    CHECK(btn_recovery_write(file, "/p", 1, 0, 0, 5, 0, NULL, "x", 1, NULL, 0) && btn_recovery_read(file, &r) && r.enc == 5 &&
+              r.utf16_bom == 0 && r.eol == 1,
+          "encoding and BOM flag stored and read back");
     btn_recovery_free(&r);
     static const char v2[] = "BTNEdit-Recovery 2\n0 0 0 2 3 0 0 0 0 0 0\n/pa\xE4" "b";
     write_file(file, v2, sizeof v2 - 1);
-    CHECK(btn_recovery_read(file, &r) && r.enc == 0 && r.len == 3 && memcmp(r.text, "a\xE4" "b", 3) == 0 && strcmp(r.path, "/p") == 0,
+    CHECK(btn_recovery_read(file, &r) && r.enc == 0 && r.utf16_bom == 1 && r.len == 3 && memcmp(r.text, "a\xE4" "b", 3) == 0 && strcmp(r.path, "/p") == 0,
           "version 2 file: read, encoding UTF-8 (bytes as they were)");
     btn_recovery_free(&r);
-    static const char bad_enc[] = "BTNEdit-Recovery 3\n0 0 0 6 0 1 0 0 0 0 0 0\nx";
+    static const char bad_enc[] = "BTNEdit-Recovery 3\n0 0 0 6 1 0 1 0 0 0 0 0 0\nx";
     write_file(file, bad_enc, sizeof bad_enc - 1);
     CHECK(!btn_recovery_read(file, &r), "unknown encoding number: rejected");
     static const char v1[] = "BTNEdit-Recovery 1\n0 0 0 0 1 0 0 0 0 0 0\nx";
@@ -192,9 +192,12 @@ static void test_roundtrip(void) {
     static const char v2_as_v3[] = "BTNEdit-Recovery 3\n0 0 0 0 1 0 0 0 0 0 0\nx";
     write_file(file, v2_as_v3, sizeof v2_as_v3 - 1);
     CHECK(!btn_recovery_read(file, &r), "version 3 header with the version 2 field count: rejected");
+    static const char bad_bom[] = "BTNEdit-Recovery 3\n0 0 0 2 2 0 1 0 0 0 0 0 0\nx";
+    write_file(file, bad_bom, sizeof bad_bom - 1);
+    CHECK(!btn_recovery_read(file, &r), "BOM flag other than 0/1: rejected");
 
     /* Beschaedigte Dateien */
-    btn_recovery_write(file, "/p", 0, 0, 0, 0, &disk, "abc", 3, "def", 3);
+    btn_recovery_write(file, "/p", 0, 0, 0, 0, 1, &disk, "abc", 3, "def", 3);
     size_t full_len;
     char *full = slurp(file, &full_len);
     long accepted = 0;
@@ -239,7 +242,7 @@ static void test_roundtrip(void) {
     }
     unlink(file);
     CHECK(!btn_recovery_read(file, &r), "missing file");
-    CHECK(!btn_recovery_write("/nonexistent-dir/x.btnrecovery", NULL, 0, 0, 0, 0, NULL, "a", 1, NULL, 0), "unwritable dir: 0");
+    CHECK(!btn_recovery_write("/nonexistent-dir/x.btnrecovery", NULL, 0, 0, 0, 0, 1, NULL, "a", 1, NULL, 0), "unwritable dir: 0");
 }
 
 /* Haelt die Sperre eines "anderen laufenden Programms" ueber einen eigenen

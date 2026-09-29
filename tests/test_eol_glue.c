@@ -23,7 +23,9 @@ static int g_binary_warnings = 0;
 static int g_error_alerts = 0;
 static const char *g_save_as_path = NULL;
 
-const char *btn_tr(BtnStringId id) { return id == BTN_STR_FILE_TOO_LARGE_INFO_FMT ? "%d" : "%s"; }
+const char *btn_tr(BtnStringId id) {
+    return id == BTN_STR_FILE_TOO_LARGE_INFO_FMT ? "%d" : id == BTN_STR_ENC_UNREPRESENTABLE_INFO_FMT ? "%s: %s" : "%s";
+}
 static int btn_show_binary_file_warning(const char *name) { (void)name; g_binary_warnings++; return g_open_anyway; }
 static void btn_show_error_alert(const char *t, const char *i) { (void)t; (void)i; g_error_alerts++; }
 static char *btn_show_save_panel(const char *p) { (void)p; return g_save_as_path ? strdup(g_save_as_path) : NULL; }
@@ -37,8 +39,10 @@ static const char *doc_display_name(Document *d) { (void)d; return "doc"; }
 /* Konflikt beim Sichern: trotzdem sichern (eigener Test: test_protect);
  * Kodierung: g_choice_answer (1 = erster Knopf), gezaehlt */
 static int g_choice_answer = 1, g_choices = 0;
+static char g_last_info[256];
 static int btn_show_choice_alert(const char *t, const char *i, const char *a, const char *b, int esc) {
-    (void)t; (void)i; (void)a; (void)b; (void)esc;
+    (void)t; (void)a; (void)b; (void)esc;
+    snprintf(g_last_info, sizeof g_last_info, "%s", i);
     g_choices++;
     return g_choice_answer;
 }
@@ -315,19 +319,24 @@ static void test_encodings(void) {
     CHECK(d.enc == BTN_ENC_UTF8, "UTF-8 detected");
     g_choices = 0;
     reopen_doc_as(&d, BTN_ENC_LATIN1);
-    CHECK(g_choices == 0 && d.enc == BTN_ENC_LATIN1 && d.enc_chosen && buffer_is(&d, "\xC3\x83\xC2\xA4\n", 5) && !doc_is_dirty(&d),
+    CHECK(g_choices == 0 && d.enc == BTN_ENC_LATIN1 && d.read_enc == BTN_ENC_LATIN1 &&
+              buffer_is(&d, "\xC3\x83\xC2\xA4\n", 5) && !doc_is_dirty(&d),
           "reopened as Latin-1: no question without edits, clean");
     write_bytes(p, "\xC3\xA4\xC3\xA4\n", 5);
     reload_doc(&d);
-    CHECK(d.enc == BTN_ENC_LATIN1 && buffer_is(&d, "\xC3\x83\xC2\xA4\xC3\x83\xC2\xA4\n", 9), "reload keeps the chosen encoding");
-    write_bytes(p, "\xFF\xFE" "a\0", 4);
-    d.enc = BTN_ENC_UTF16LE; /* gewaehlt, Datei passt */
+    CHECK(d.enc == BTN_ENC_LATIN1 && buffer_is(&d, "\xC3\x83\xC2\xA4\xC3\x83\xC2\xA4\n", 9),
+          "reload, detection unchanged (UTF-8): keeps the chosen encoding");
+    /* die Sichern-Kodierung ist nicht die Lese-Kodierung */
+    set_doc_encoding(&d, BTN_ENC_UTF16LE);
     reload_doc(&d);
-    CHECK(d.enc == BTN_ENC_UTF16LE && d.enc_chosen && buffer_is(&d, "a", 1), "chosen UTF-16 still fits: kept");
+    CHECK(d.enc == BTN_ENC_LATIN1 && buffer_is(&d, "\xC3\x83\xC2\xA4\xC3\x83\xC2\xA4\n", 9),
+          "UTF-16 picked for saving: reload still reads as the chosen Latin-1");
+    /* ein Programm schreibt die Datei in einer anderen Kodierung neu */
+    write_bytes(p, "\xEF\xBB\xBFneu\n", 7);
+    reload_doc(&d);
+    CHECK(d.enc == BTN_ENC_UTF8_BOM && d.read_enc == -1 && buffer_is(&d, "neu\n", 4), "detection changed (BOM): detected again");
     write_bytes(p, "\xC3\xA4\xC3\xA4\n", 5);
     reload_doc(&d);
-    CHECK(d.enc == BTN_ENC_UTF8 && !d.enc_chosen && buffer_is(&d, "\xC3\xA4\xC3\xA4\n", 5),
-          "chosen encoding no longer fits (odd length for UTF-16): detected again");
     reopen_doc_as(&d, BTN_ENC_LATIN1);
     editor_insert_text(&d.editor, "x", 1);
     g_choice_answer = 0;
@@ -342,10 +351,78 @@ static void test_encodings(void) {
     CHECK(g_error_alerts == errors + 1 && d.enc == BTN_ENC_UTF8 && buffer_is(&d, "\xC3\xA4\xC3\xA4\n", 5),
           "does not fit UTF-16: message, document unchanged");
     g_error_alerts = errors;
+    /* nicht (mehr) lesbar */
+    char *keep = d.path;
+    d.path = strdup("/nonexistent/reopen.txt");
+    reopen_doc_as(&d, BTN_ENC_LATIN1);
+    CHECK(g_error_alerts == errors + 1 && d.missing_on_disk && buffer_is(&d, "\xC3\xA4\xC3\xA4\n", 5),
+          "unreadable: open error, text kept, marked missing");
+    g_error_alerts = errors;
+    free(d.path);
+    d.path = keep;
+    d.missing_on_disk = 0;
+    /* Binaerdatei "als Latin-1": roh, keine gewaehlte Lese-Kodierung */
+    write_bytes(p, "a\0b", 3);
+    reopen_doc_as(&d, BTN_ENC_LATIN1);
+    CHECK(d.binary && d.enc == BTN_ENC_UTF8 && d.read_enc == -1, "binary reopened as Latin-1: raw, nothing pinned");
     free(d.path);
     d.path = NULL;
     reopen_doc_as(&d, BTN_ENC_LATIN1);
     CHECK(d.enc == BTN_ENC_UTF8, "untitled: nothing to reopen");
+    doc_done(&d);
+
+    /* UTF-16 ohne BOM (gilt erst als binaer): Neu oeffnen als UTF-16 LE,
+     * Sichern fuegt keine BOM hinzu */
+    path_for(p, "nobom16.txt");
+    write_bytes(p, "h\0i\0", 4);
+    doc_init(&d);
+    open_file_path(&d, p);
+    CHECK(d.binary, "BOM-less UTF-16 looks binary");
+    reopen_doc_as(&d, BTN_ENC_UTF16LE);
+    CHECK(!d.binary && d.enc == BTN_ENC_UTF16LE && !d.utf16_bom && buffer_is(&d, "hi", 2), "reopened as UTF-16 LE");
+    editor_set_cursor(&d.editor, 0, 0);
+    editor_insert_text(&d.editor, "!", 1);
+    CHECK(perform_save_doc(&d, 0) == 1 && file_is(p, "!\0h\0i\0", 6), "saved without adding a BOM");
+    set_doc_encoding(&d, BTN_ENC_UTF16BE);
+    CHECK(!d.utf16_bom, "LE <-> BE keeps the BOM choice");
+    set_doc_encoding(&d, BTN_ENC_LATIN1);
+    set_doc_encoding(&d, BTN_ENC_UTF16BE);
+    CHECK(d.utf16_bom, "UTF-16 newly picked: with BOM");
+    doc_done(&d);
+    /* LE-Datei als BE gelesen: U+FFFE bleibt ein Zeichen, bytegleich zurueck */
+    path_for(p, "lebe.txt");
+    write_bytes(p, "\xFF\xFE" "A\0", 4);
+    doc_init(&d);
+    open_file_path(&d, p);
+    reopen_doc_as(&d, BTN_ENC_UTF16BE);
+    CHECK(d.enc == BTN_ENC_UTF16BE && !d.utf16_bom && perform_save_doc(&d, 0) == 1 && file_is(p, "\xFF\xFE" "A\0", 4),
+          "LE bytes read as BE: saved byte-identical");
+    doc_done(&d);
+
+    /* "Als UTF-8 sichern", aber Schreiben scheitert: Kodierung bleibt */
+    path_for(p, "fail.txt");
+    write_bytes(p, "\xE4", 1);
+    doc_init(&d);
+    open_file_path(&d, p);
+    editor_insert_text(&d.editor, "\xE2\x82\xAC", 3);
+    set_doc_encoding(&d, BTN_ENC_LATIN1);
+    free(d.path);
+    d.path = strdup("/nonexistent/fail.txt");
+    int errs = g_error_alerts;
+    g_choice_answer = 1;
+    CHECK(perform_save_doc(&d, 0) == 0 && d.enc == BTN_ENC_LATIN1 && g_error_alerts == errs + 1,
+          "save as UTF-8 failed to write: encoding choice kept");
+    g_error_alerts = errs;
+    doc_done(&d);
+    /* Beispielzeichen: ein roh geladenes Byte als Codepunkt, nicht als Byte */
+    path_for(p, "rawbyte.txt");
+    write_bytes(p, "\xC3\xA4\x80", 3); /* gemischt: bleibt roh */
+    doc_init(&d);
+    open_file_path(&d, p);
+    set_doc_encoding(&d, BTN_ENC_WIN1252);
+    g_choice_answer = 0;
+    CHECK(perform_save_doc(&d, 0) == 0 && strstr(g_last_info, "U+0080") != NULL, "sample shown as U+0080 (%s)", g_last_info);
+    g_choice_answer = 1;
     doc_done(&d);
     g_choice_answer = 1;
 }

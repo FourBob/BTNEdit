@@ -42,6 +42,15 @@ static int perform_save_doc(Document *d, int force) {
     return g_save_result[idx];
 }
 
+/* Kodierung kann den Text nicht fassen, Frage abgebrochen (eigener Test:
+ * test_eol_glue) */
+static int g_encodable[MAX_TABS];
+static int g_encodable_checks = 0;
+static int ensure_encodable(Document *d) {
+    g_encodable_checks++;
+    return !g_encodable[d - g_docs];
+}
+
 #include "close_extracted.h"   /* should_close() verbatim aus main.c */
 
 static int failures = 0;
@@ -109,6 +118,22 @@ int main(void) {
     check(should_close() == 1 && !doc_is_dirty(&g_docs[0]), "S6 'Don't Save' marks the line-ending change clean");
     g_docs[0].eol_raw = 0; g_docs[0].saved_eol_raw = 1;
     check(doc_is_dirty(&g_docs[0]), "S7 converting a mixed file (raw -> uniform) makes the doc dirty");
+
+    /* Beide sichern, aber Tab 2s Kodierung kann den Text nicht fassen und
+     * der Nutzer bricht ab: schon in der Fragerunde - noch nichts gesichert */
+    setup_two_dirty();
+    g_docs[0].eol = g_docs[0].saved_eol;
+    g_docs[0].eol_raw = g_docs[0].saved_eol_raw;
+    g_alert_choice[0] = 1; g_alert_choice[1] = 1;
+    g_save_result[0] = 1; g_save_result[1] = 1;
+    g_encodable[1] = 1;
+    g_encodable_checks = 0;
+    r = should_close();
+    check(r == 0 && g_save_calls == 0 && doc_is_dirty(&g_docs[0]) && doc_is_dirty(&g_docs[1]) && g_active_doc == 0,
+          "S8 encoding question cancelled while asking: nothing saved, back to the original tab");
+    g_encodable[1] = 0;
+    r = should_close();
+    check(r == 1 && g_save_calls == 2 && g_encodable_checks == 4, "S8 checked per 'Save' answer, then both saved");
 
     printf(failures ? "\n%d TEST(S) FAILED\n" : "\nALL TESTS PASSED\n", failures);
     return failures ? 1 : 0;

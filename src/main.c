@@ -72,7 +72,13 @@ typedef struct {
      * eine ungesicherte Aenderung. */
     BtnEncoding enc;
     BtnEncoding saved_enc;
-    int enc_chosen; /* per "Neu oeffnen als" gewaehlt: gilt auch beim Neuladen */
+    int utf16_bom;  /* UTF-16: mit BOM sichern (so geoeffnet bzw. neu gewaehlt) */
+    /* Per "Neu oeffnen als" gewaehlte Lese-Kodierung (-1 = erkennen) und was
+     * die Erkennung damals meinte: Neuladen liest wieder so, solange die
+     * Erkennung dasselbe meint - schreibt ein Programm die Datei in einer
+     * anderen Kodierung neu, wird wieder erkannt. */
+    int read_enc;
+    BtnEncoding read_detected;
     long scroll_row;
     double scroll_accum;
     /* Schutz der Arbeit: disk = Stand der Datei beim letzten Laden/Sichern
@@ -660,7 +666,8 @@ static int add_tab(void) {
     d->eol_raw = 0;
     d->binary = 0;
     d->enc = BTN_ENC_UTF8;
-    d->enc_chosen = 0;
+    d->utf16_bom = 1;
+    d->read_enc = -1;
     mark_doc_saved(d);
     d->scroll_row = 0;
     d->scroll_accum = 0.0;
@@ -2095,9 +2102,14 @@ static void set_doc_line_ending(Document *d, BtnEol eol) {
 /* Ablage > Kodierung: mit welcher Kodierung d gesichert wird (der Text
  * bleibt, wie er ist). Binaerdateien: gesperrt. */
 static void set_doc_encoding(Document *d, BtnEncoding enc) {
-    if (!d->binary) {
-        d->enc = enc;
+    if (d->binary) {
+        return;
     }
+    int was_utf16 = d->enc == BTN_ENC_UTF16LE || d->enc == BTN_ENC_UTF16BE;
+    if (!was_utf16) {
+        d->utf16_bom = 1; /* neu gewaehltes UTF-16: mit BOM, wie ueblich */
+    }
+    d->enc = enc;
 }
 
 static int reload_doc_as(Document *d, int forced);
@@ -2119,11 +2131,12 @@ static void reopen_doc_as(Document *d, BtnEncoding enc) {
         }
     }
     int r = reload_doc_as(d, (int)enc);
-    if (r == 1) {
-        d->enc_chosen = 1;
-    } else {
+    if (r == 0) {
         snprintf(title, sizeof(title), btn_tr(BTN_STR_ENC_INVALID_TITLE_FMT), doc_display_name(d), btn_enc_name(enc));
-        btn_show_error_alert(title, btn_tr(r == 0 ? BTN_STR_ENC_INVALID_INFO : BTN_STR_OPEN_FAILED_INFO));
+        btn_show_error_alert(title, btn_tr(BTN_STR_ENC_INVALID_INFO));
+    } else if (r < 0) {
+        d->missing_on_disk = 1; /* wie beim Neuladen: der Text existiert nur noch hier */
+        show_file_error(BTN_STR_OPEN_FAILED_TITLE_FMT, d->path, btn_tr(BTN_STR_OPEN_FAILED_INFO));
     }
 }
 
@@ -2157,10 +2170,12 @@ typedef struct {
     size_t len;
     BtnEncoding enc;
     int binary;
+    int bom; /* die Datei beginnt mit der BOM von enc */
 } DecodedFile;
 
 static int decode_file_bytes(char *bytes, size_t len, int forced, DecodedFile *out) {
     BtnEncoding enc = forced >= 0 ? (BtnEncoding)forced : btn_enc_detect(bytes, len);
+    out->bom = btn_enc_bom_len(bytes, len, enc) > 0;
     char *text = bytes;
     size_t tlen = len;
     int lossy = 0;
@@ -2178,6 +2193,7 @@ static int decode_file_bytes(char *bytes, size_t len, int forced, DecodedFile *o
         text = bytes;
         tlen = len;
         enc = BTN_ENC_UTF8;
+        out->bom = 0;
     }
     if (text != bytes) {
         free(bytes);
@@ -2188,10 +2204,11 @@ static int decode_file_bytes(char *bytes, size_t len, int forced, DecodedFile *o
     return 1;
 }
 
-static void load_doc_contents(Document *d, char *contents, size_t len, int binary, BtnEncoding enc) {
+static void load_doc_contents(Document *d, char *contents, size_t len, int binary, BtnEncoding enc, int bom) {
     int mixed = 0;
     d->binary = binary;
     d->enc = enc;
+    d->utf16_bom = bom;
     d->eol = binary ? BTN_EOL_LF : btn_eol_detect(contents, len, &mixed);
     d->eol_raw = binary || mixed;
     if (!d->eol_raw) {
@@ -2223,8 +2240,8 @@ static void open_file_path(Document *d, const char *path) {
             return;
         }
         d->disk_hash = hash;
-        load_doc_contents(d, df.text, df.len, df.binary, df.enc);
-        d->enc_chosen = 0;
+        load_doc_contents(d, df.text, df.len, df.binary, df.enc, df.bom);
+        d->read_enc = -1;
         free(df.text);
         set_doc_path(d, path);
         mark_doc_saved(d);
@@ -2313,9 +2330,19 @@ static int hash_for_stamp(const char *path, const BtnFileStamp *stamp, uint64_t 
 /* Die gewaehlte Kodierung kann ein Zeichen nicht darstellen (Offset bad im
  * zu sichernden Text): als UTF-8 sichern? 1 = ja. */
 static int confirm_save_as_utf8(Document *d, const char *text, size_t len, size_t bad) {
-    char sample[8] = "";
-    size_t n = btn_utf8_char_len((const unsigned char *)text + bad, len - bad);
-    memcpy(sample, text + bad, n < sizeof(sample) ? n : sizeof(sample) - 1);
+    char sample[16];
+    const unsigned char *c = (const unsigned char *)text + bad;
+    size_t n = btn_utf8_char_len(c, len - bad);
+    if (n == 1 && c[0] >= 0x80) {
+        /* kein UTF-8 (roh geladenes Byte, gilt als Latin-1): als Codepunkt -
+         * das Byte selbst machte die ganze Meldung ungueltig */
+        snprintf(sample, sizeof(sample), "U+%04X", c[0]);
+    } else if (n == 2 && c[0] == 0xC2 && c[1] < 0xA0) {
+        snprintf(sample, sizeof(sample), "U+%04X", c[1]); /* unsichtbares Steuerzeichen U+0080..9F */
+    } else {
+        memcpy(sample, c, n);
+        sample[n] = '\0';
+    }
     char title[512], info[512];
     snprintf(title, sizeof(title), btn_tr(BTN_STR_ENC_UNREPRESENTABLE_TITLE_FMT), doc_display_name(d),
              btn_enc_name(d->enc));
@@ -2370,15 +2397,16 @@ static int perform_save_doc(Document *d, int force_save_as) {
     }
     /* Zeichenkodierung (Binaerdateien bleiben roh). Kann sie ein Zeichen
      * nicht darstellen: nachfragen statt es still zu verlieren. */
+    BtnEncoding save_enc = d->enc; /* erst nach erfolgreichem Schreiben uebernommen */
     if (d->enc != BTN_ENC_UTF8 && !d->binary) {
         size_t blen, bad;
-        char *bytes = btn_enc_encode(contents, len, d->enc, &blen, &bad);
+        char *bytes = btn_enc_encode(contents, len, d->enc, d->utf16_bom, &blen, &bad);
         if (bytes) {
             free(contents);
             contents = bytes;
             len = blen;
         } else if (bad != (size_t)-1 && confirm_save_as_utf8(d, contents, len, bad)) {
-            d->enc = BTN_ENC_UTF8;
+            save_enc = BTN_ENC_UTF8;
         } else {
             if (bad == (size_t)-1) {
                 show_file_error(BTN_STR_SAVE_FAILED_TITLE_FMT, path, btn_tr(BTN_STR_SAVE_FAILED_INFO));
@@ -2395,6 +2423,7 @@ static int perform_save_doc(Document *d, int force_save_as) {
     free(contents);
 
     if (ok) {
+        d->enc = save_enc;
         set_doc_path(d, path);
         mark_doc_saved(d);
         btn_file_stamp(d->path, &d->disk);
@@ -2494,6 +2523,25 @@ static void close_tab(int idx) {
     btn_app_request_redraw();
 }
 
+/* Kann d's Kodierung den Text fassen? Sonst fragen ("Als UTF-8 sichern"
+ * stellt auf UTF-8 um). 0 = abgebrochen. */
+static int ensure_encodable(Document *d) {
+    if (d->enc == BTN_ENC_UTF8 || d->binary) {
+        return 1;
+    }
+    size_t len, blen, bad;
+    char *text = editor_copy_all(&d->editor, &len);
+    char *bytes = btn_enc_encode(text, len, d->enc, d->utf16_bom, &blen, &bad);
+    int ok = bytes != NULL || bad == (size_t)-1; /* ohne Speicher: das Sichern meldet es */
+    if (!ok && confirm_save_as_utf8(d, text, len, bad)) {
+        d->enc = BTN_ENC_UTF8;
+        ok = 1;
+    }
+    free(bytes);
+    free(text);
+    return ok;
+}
+
 /* Wird vom Shim sowohl beim Klick auf den roten Schliessen-Knopf als auch
  * bei Cmd+Q/"Beende" aufgerufen (windowShouldClose:/applicationShouldTerminate:)
  * - zentral hier statt separat pro Aufrufer, damit keiner dieser beiden
@@ -2527,7 +2575,10 @@ static int should_close(void) {
             btn_app_request_redraw();
         }
         int choice = btn_show_unsaved_changes_alert(doc_display_name(&g_docs[i]));
-        if (choice == 0) {
+        /* Sichern: jetzt (Tab sichtbar) klaeren, ob die Kodierung den Text
+         * fassen kann - nicht erst beim Schreiben unten, wenn schon andere
+         * Tabs gesichert sind und der Tab nicht mehr zu sehen ist */
+        if (choice == 0 || (choice == 1 && !ensure_encodable(&g_docs[i]))) {
             switch_to_tab(original_active);
             return 0;
         }
@@ -2564,8 +2615,11 @@ static int should_close(void) {
  * Text bleibt, der Tab gilt als ungesichert, und der ALTE Stand bleibt
  * gemerkt - Sichern fragt dann nach, statt die neuere Datei still zu
  * ueberschreiben, und die naechste Pruefung versucht es erneut.
- * forced: Kodierung (< 0: erkennen). Rueckgabe 1 = geladen, 0 = passt nicht
- * zu forced (Dokument unveraendert), -1 = nicht lesbar. */
+ * forced: Kodierung (-1: erkennen, RELOAD_KEEP_CHOSEN: die per "Neu oeffnen
+ * als" gewaehlte, solange die Erkennung noch dasselbe meint). Rueckgabe 1 =
+ * geladen, 0 = passt nicht zu forced (Dokument unveraendert), -1 = nicht
+ * lesbar. */
+#define RELOAD_KEEP_CHOSEN (-2)
 static int reload_doc_as(Document *d, int forced) {
     size_t len;
     BtnReadResult result;
@@ -2575,14 +2629,21 @@ static int reload_doc_as(Document *d, int forced) {
         return -1;
     }
     uint64_t hash = btn_hash_bytes(BTN_HASH_SEED, contents, len); /* die Bytes auf der Platte */
+    BtnEncoding detected = btn_enc_detect(contents, len);
+    if (forced == RELOAD_KEEP_CHOSEN) {
+        forced = d->read_enc >= 0 && detected == d->read_detected ? d->read_enc : -1;
+    }
     DecodedFile df;
     if (!decode_file_bytes(contents, len, forced, &df)) {
         free(contents);
         return 0;
     }
+    /* gewaehlt und wirklich so gelesen (nicht roh als Binaerdatei) */
+    d->read_enc = forced >= 0 && df.enc == (BtnEncoding)forced ? forced : -1;
+    d->read_detected = detected;
     size_t cursor = d->editor.cursor, anchor = d->editor.anchor;
     d->disk_hash = hash;
-    load_doc_contents(d, df.text, df.len, df.binary, df.enc);
+    load_doc_contents(d, df.text, df.len, df.binary, df.enc, df.bom);
     free(df.text);
     editor_set_cursor(&d->editor, editor_utf8_seq_start(&d->editor, anchor), 0);
     editor_set_cursor(&d->editor, editor_utf8_seq_start(&d->editor, cursor), 1);
@@ -2596,9 +2657,8 @@ static int reload_doc_as(Document *d, int forced) {
 /* Neu laden (geaendert von aussen): mit der gewaehlten Kodierung, falls
  * eine gewaehlt wurde und die Datei noch dazu passt, sonst erkannt. */
 static void reload_doc(Document *d) {
-    int r = reload_doc_as(d, d->enc_chosen ? (int)d->enc : -1);
+    int r = reload_doc_as(d, RELOAD_KEEP_CHOSEN);
     if (r == 0) {
-        d->enc_chosen = 0;
         r = reload_doc_as(d, -1);
     }
     if (r < 0) {
@@ -2703,8 +2763,8 @@ static void autosave_recovery(long now) {
         const char *a, *b;
         size_t alen, blen;
         gb_segments(&d->editor.buffer, &a, &alen, &b, &blen);
-        if (btn_recovery_write(file, d->path, (int)d->eol, d->eol_raw, d->binary, (int)d->enc, &d->disk, a, alen, b,
-                               blen)) {
+        if (btn_recovery_write(file, d->path, (int)d->eol, d->eol_raw, d->binary, (int)d->enc, d->utf16_bom, &d->disk, a,
+                               alen, b, blen)) {
             d->recovery_file = file;
             d->recovery_seq = d->editor.edit_seq;
             d->recovery_eol = d->eol;
@@ -2803,6 +2863,8 @@ static int restore_into_tab(BtnRecovered *r) {
     d->eol_raw = r->raw;
     d->binary = r->binary;
     d->enc = (BtnEncoding)r->enc;
+    d->utf16_bom = r->utf16_bom;
+    d->read_enc = -1;
     set_doc_path(d, r->path);
     mark_doc_saved(d);
     /* Kein edit_seq ist je (size_t)-1: der Tab bleibt ungesichert, auch

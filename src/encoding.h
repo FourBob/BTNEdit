@@ -26,7 +26,9 @@ typedef enum {
     BTN_ENC_COUNT
 } BtnEncoding;
 
-/* Kodierung von s[0,len): BOM (UTF-8, UTF-16 LE/BE) entscheidet, sonst
+/* Kodierung von s[0,len): BOM (UTF-8; UTF-16 LE/BE nur, wenn die Datei auch
+ * Null-Bytes enthaelt - sonst ist "ÿþ" am Anfang einer Latin-1-Datei
+ * wahrscheinlicher als UTF-16 ganz ohne ASCII und Zeilenenden), sonst
  * gueltiges UTF-8 -> UTF-8; ungueltiges UTF-8 ohne eine einzige gueltige
  * Mehrbyte-Folge -> Windows-1252 (alte Westeuropa-Datei); beides gemischt
  * (UTF-8-Log mit einzelnen kaputten Bytes) -> UTF-8: die Bytes bleiben, wie
@@ -43,12 +45,13 @@ size_t btn_enc_bom_len(const char *s, size_t len, BtnEncoding enc);
  * werden). NULL nur ohne Speicher. */
 char *btn_enc_decode(const char *s, size_t len, BtnEncoding enc, size_t *out_len, int *out_lossy);
 
-/* UTF-8 u[0,len) -> Bytes in enc (samt BOM bei UTF-8 mit BOM und UTF-16),
- * malloc, *out_len. Ein Byte, das kein gueltiges UTF-8 beginnt (roh
+/* UTF-8 u[0,len) -> Bytes in enc (samt BOM bei UTF-8 mit BOM, bei UTF-16
+ * nur mit utf16_bom - eine ohne BOM geoeffnete Datei bleibt ohne), malloc,
+ * *out_len. Ein Byte, das kein gueltiges UTF-8 beginnt (roh
  * geladene Dateien), gilt wie in der Anzeige als Latin-1-Zeichen (bei
  * UTF-8 bleibt es unveraendert). Ein Zeichen, das enc nicht darstellen
  * kann: NULL und *out_bad = Offset in u (sonst (size_t)-1). */
-char *btn_enc_encode(const char *u, size_t len, BtnEncoding enc, size_t *out_len, size_t *out_bad);
+char *btn_enc_encode(const char *u, size_t len, BtnEncoding enc, int utf16_bom, size_t *out_len, size_t *out_bad);
 
 /* "UTF-8", "UTF-8 (BOM)", "UTF-16 LE", ... - fuer Statuszeile und Menue. */
 const char *btn_enc_name(BtnEncoding enc);
