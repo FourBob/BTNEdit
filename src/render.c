@@ -693,7 +693,7 @@ static void draw_gutter(CGContextRef ctx, CGRect bounds, const BtnRow *rows, siz
  * nicht, main.c reicht sie nach btn_strings_set_language() einmal herein
  * (wie die Suchleisten-Beschriftungen). Englisch, bis das passiert. */
 static const char *g_footer_pos_fmt = "Line %zu, Column %zu";
-static const char *g_footer_stats_fmt = "%zu lines | %zu words | %zu characters | UTF-8";
+static const char *g_footer_stats_fmt = "%zu lines | %zu words | %zu characters";
 
 /* 1, wenn fmt genau n Mal "%zu" und sonst nur "%%" als Konversion enthaelt -
  * die Formate gehen an snprintf() mit genau so vielen size_t-Argumenten. */
