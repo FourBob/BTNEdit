@@ -244,6 +244,12 @@ void btn_text_rows_extent(CGRect bounds, double *top, double *bottom);
 /* Waagerecht (ohne Umbruch): linker Rand der ersten, rechter Rand der
  * letzten voll sichtbaren Spalte. */
 void btn_text_cols_extent(CGRect bounds, double *left, double *right);
+/* Unterkante des Textbereichs: Statuszeile, ohne Umbruch plus der Streifen
+ * des seitlichen Scrollbalkens darueber. */
+double btn_text_bottom(void);
+/* Erste Row der logischen Zeile line (Zeilenumbruch umschalten: dieselbe
+ * Zeile bleibt oben). */
+size_t btn_layout_row_of_line(const BtnRow *rows, size_t row_count, size_t line);
 
 /* Scrollbalken: nur ein Knopf (keine Schiene) in einem Streifen dieser
  * Breite am rechten Rand der Textflaeche - der Text bricht davor um. */

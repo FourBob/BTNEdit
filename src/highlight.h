@@ -55,6 +55,14 @@ int btn_highlight_indent_rules(const BtnLangSpec *lang);
 size_t btn_highlight_tokenize(const char *text, size_t len, const BtnLangSpec *lang,
                                int starts_in_comment, int *ends_in_comment,
                                BtnToken *out_tokens, size_t max_tokens);
+/* Wie oben, aber nur Tokens, die hinter skip_before enden (sichtbarer
+ * Ausschnitt einer langen Zeile) - die davor zaehlen auch nicht mit. */
+size_t btn_highlight_tokenize_from(const char *text, size_t len, const BtnLangSpec *lang,
+                                    int starts_in_comment, int *ends_in_comment, size_t skip_before,
+                                    BtnToken *out_tokens, size_t max_tokens);
+
+/* Laengere Zeilen bleiben ungefaerbt (und werden gar nicht erst gelesen). */
+#define BTN_MAX_HIGHLIGHT_LINE_LEN 100000
 
 #ifdef __cplusplus
 }

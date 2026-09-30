@@ -140,6 +140,13 @@ size_t editor_offset_for_column(Editor *ed, size_t line_index, size_t target_col
  * selbst etwas vom Wortumbruch wissen muss. */
 size_t editor_visual_column_in_range(Editor *ed, size_t range_start, size_t offset);
 size_t editor_offset_for_column_in_range(Editor *ed, size_t range_start, size_t range_len, size_t target_col);
+/* Dasselbe ab einer Stelle mitten in der Zeile, die in Spalte start_col
+ * steht (Tabs reichen bis zum selben Tabstopp wie von der Zeile aus
+ * gerechnet) - kostet nur die Strecke ab range_start. *out_col (darf NULL
+ * sein) = Spalte des zurueckgegebenen Offsets. */
+size_t editor_visual_column_from(Editor *ed, size_t range_start, size_t start_col, size_t offset);
+size_t editor_offset_for_column_from(Editor *ed, size_t range_start, size_t start_col, size_t range_end,
+                                     size_t target_col, size_t *out_col);
 
 /* Naechster Tabstopp ab der gegebenen Spalte. */
 size_t editor_tab_advance(size_t col);

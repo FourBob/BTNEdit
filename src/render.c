@@ -453,6 +453,14 @@ void btn_render_set_wrap(int on) {
     g_wrap = on;
 }
 
+/* Unterkante des Textbereichs: ueber der Statuszeile, ohne Umbruch auch
+ * ueber dem Streifen des seitlichen Scrollbalkens (der sonst die letzte
+ * Zeile verdeckte und ihre Klicks abfinge). */
+#define HSCROLL_STRIP_HEIGHT 10.0
+double btn_text_bottom(void) {
+    return BTN_FOOTER_HEIGHT + (g_wrap ? 0.0 : HSCROLL_STRIP_HEIGHT);
+}
+
 static long screen_chars_per_row(double text_width) {
     return g_wrap ? chars_per_row_for(text_width) : NO_WRAP_COLS;
 }
@@ -691,6 +699,10 @@ static size_t row_of_line_start(const BtnRow *rows, size_t row_count, size_t lin
     return lo < row_count ? lo : row_count - 1;
 }
 
+size_t btn_layout_row_of_line(const BtnRow *rows, size_t row_count, size_t line) {
+    return row_count ? row_of_line_start(rows, row_count, line) : 0;
+}
+
 /* ---- Zeichnen ---- */
 
 static void draw_gutter(CGContextRef ctx, CGRect bounds, const BtnRow *rows, size_t row_count,
@@ -711,7 +723,7 @@ static void draw_gutter(CGContextRef ctx, CGRect bounds, const BtnRow *rows, siz
          * einer anderen Reihe auf als die Text-Zeichnung, und die unterste
          * sichtbare Zeile bekommt Text, aber keine Zeilennummer. */
         double top_y = bounds.size.height - TOP_PADDING - (double)(r - (size_t)scroll_row + 1) * LINE_HEIGHT;
-        if (top_y + LINE_HEIGHT < BTN_FOOTER_HEIGHT) {
+        if (top_y + LINE_HEIGHT < btn_text_bottom()) {
             break;
         }
         if (rows[r].is_continuation) {
@@ -1382,11 +1394,13 @@ static int comment_state_before_line(Editor *ed, const BtnLangSpec *lang, const 
             continue;
         }
         size_t line_len = i - line_start;
-        char *text = gb_copy_range(&ed->buffer, line_start, line_len);
-        int ends;
-        btn_highlight_tokenize(text, line_len, lang, state, &ends, NULL, 0);
-        free(text);
-        state = ends;
+        if (line_len <= BTN_MAX_HIGHLIGHT_LINE_LEN) { /* laengere: Zustand bleibt (wie im Tokenizer) */
+            char *text = gb_copy_range(&ed->buffer, line_start, line_len);
+            int ends;
+            btn_highlight_tokenize(text, line_len, lang, state, &ends, NULL, 0);
+            free(text);
+            state = ends;
+        }
         line++;
         line_start = i + 1;
         /* Kein Speicher fuers Merken: trotzdem weiterrechnen, damit der
@@ -1454,15 +1468,20 @@ static void draw_row_line(CGContextRef ctx, Editor *ed, const BtnLangSpec *lang,
         if (ll != *cached_line) {
             size_t ls, llen;
             line_bounds_from_rows(rows, row_count, r, &ls, &llen);
-            char *text = gb_copy_range(&ed->buffer, ls, llen);
-            int ends;
-            *token_count = btn_highlight_tokenize(text, llen, lang, *comment_state, &ends,
-                                                   tokens, BTN_MAX_TOKENS_PER_LINE);
-            if (*token_count > BTN_MAX_TOKENS_PER_LINE) {
-                *token_count = BTN_MAX_TOKENS_PER_LINE;
+            *token_count = 0;
+            if (llen <= BTN_MAX_HIGHLIGHT_LINE_LEN) { /* laengere bleiben ungefaerbt */
+                char *text = gb_copy_range(&ed->buffer, ls, llen);
+                int ends;
+                /* Nur Tokens ab dem Ausschnitt - sonst endete die Farbe einer
+                 * langen Zeile ohne Umbruch nach BTN_MAX_TOKENS_PER_LINE */
+                *token_count = btn_highlight_tokenize_from(text, llen, lang, *comment_state, &ends, from - ls,
+                                                           tokens, BTN_MAX_TOKENS_PER_LINE);
+                if (*token_count > BTN_MAX_TOKENS_PER_LINE) {
+                    *token_count = BTN_MAX_TOKENS_PER_LINE;
+                }
+                free(text);
+                *comment_state = ends;
             }
-            free(text);
-            *comment_state = ends;
             *cached_line = ll;
             *cached_line_start = ls;
         }
@@ -1527,8 +1546,8 @@ static void draw_row_line(CGContextRef ctx, Editor *ed, const BtnLangSpec *lang,
 long btn_visible_row_capacity(double content_height) {
     /* Row k (0 = oberste sichtbare) hat top_y = H - TOP_PADDING - (k+1) *
      * LINE_HEIGHT (siehe btn_render_frame()) und ist ganz sichtbar, solange
-     * top_y >= BTN_FOOTER_HEIGHT. */
-    double usable = content_height - TOP_PADDING - BTN_FOOTER_HEIGHT;
+     * top_y >= btn_text_bottom(). */
+    double usable = content_height - TOP_PADDING - btn_text_bottom();
     long n = usable > 0.0 ? (long)(usable / LINE_HEIGHT) : 0;
     return n > 0 ? n : 1;
 }
@@ -1669,9 +1688,9 @@ static void draw_scroll_knob(CGContextRef ctx, CGRect knob, int which) {
 int btn_text_cursor_rects(CGRect window, CGRect content, int find_bar_visible, int scrollbar_visible, CGRect out[3]) {
     int n = 0;
     double w = content.size.width - GUTTER_WIDTH - (scrollbar_visible ? BTN_SCROLLBAR_WIDTH : 0.0);
-    double h = content.size.height - BTN_FOOTER_HEIGHT;
+    double h = content.size.height - btn_text_bottom();
     if (w > 0.0 && h > 0.0) {
-        out[n++] = CGRectMake(GUTTER_WIDTH, BTN_FOOTER_HEIGHT, w, h);
+        out[n++] = CGRectMake(GUTTER_WIDTH, btn_text_bottom(), w, h);
     }
     if (find_bar_visible) {
         /* Wie draw_find_field()/btn_render_find_caret_rect() */
@@ -1739,12 +1758,17 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
 
     /* Text, Hervorhebungen und Cursor nur im Textbereich - seitlich
      * gescrollt ragte er sonst in die Zeilennummern und den Scrollbalken */
+    double clip_left = g_wrap ? GUTTER_WIDTH : GUTTER_WIDTH + LEFT_PADDING;
+    double text_bottom = btn_text_bottom();
     CGContextSaveGState(ctx);
-    CGContextClipToRect(ctx, CGRectMake(GUTTER_WIDTH, BTN_FOOTER_HEIGHT, bounds.size.width - GUTTER_WIDTH - BTN_SCROLLBAR_WIDTH,
-                                        bounds.size.height - BTN_FOOTER_HEIGHT));
+    CGContextClipToRect(ctx, CGRectMake(clip_left, text_bottom, bounds.size.width - clip_left - BTN_SCROLLBAR_WIDTH,
+                                        bounds.size.height - text_bottom));
+    size_t cur_row = has_sel ? 0 : btn_layout_row_for_offset(rows, row_count, ed->cursor);
+    int cursor_shown = 0;
+    double cx = 0.0, cy = 0.0;
     for (size_t r = (size_t)scroll_row; r < row_count; r++) {
         double top_y = bounds.size.height - TOP_PADDING - (double)(r - (size_t)scroll_row + 1) * LINE_HEIGHT;
-        if (top_y + LINE_HEIGHT < BTN_FOOTER_HEIGHT) {
+        if (top_y + LINE_HEIGHT < text_bottom) {
             break;
         }
 
@@ -1752,18 +1776,32 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
         size_t row_len = rows[r].len;
         size_t row_end = row_start + row_len;
 
+        /* Ohne Umbruch nur den sichtbaren Ausschnitt einer (vielleicht sehr
+         * langen) Zeile anfassen: Spalten werden ab draw_from gezaehlt, nicht
+         * ab dem Zeilenanfang (draw_from_col haelt die Tabs richtig). Mit
+         * Umbruch ist der Ausschnitt die ganze Row. */
+        size_t draw_from = row_start, draw_to = row_end, draw_from_col = 0;
+        if (!g_wrap && row_len > 0) {
+            size_t first_col = scroll_col > 1 ? (size_t)scroll_col - 1 : 0;
+            draw_from = editor_offset_for_column_from(ed, row_start, 0, row_end, first_col, &draw_from_col);
+            draw_to = editor_offset_for_column_from(ed, draw_from, draw_from_col, row_end,
+                                                    (size_t)scroll_col + (size_t)visible_cols + 2, NULL);
+        }
+        double draw_x = text_x + (double)draw_from_col * char_width;
+
         if (match_count > 0) {
             while (match_idx < match_count && match_ends[match_idx] <= row_start) {
                 match_idx++;
             }
             for (size_t mi = match_idx; mi < match_count && match_starts[mi] < row_end; mi++) {
-                size_t hi_from = match_starts[mi] > row_start ? match_starts[mi] : row_start;
-                size_t hi_to = match_ends[mi] < row_end ? match_ends[mi] : row_end;
+                /* auf den Ausschnitt begrenzt: Treffer daneben kosten nichts */
+                size_t hi_from = match_starts[mi] > draw_from ? match_starts[mi] : draw_from;
+                size_t hi_to = match_ends[mi] < draw_to ? match_ends[mi] : draw_to;
                 if (hi_from >= hi_to) {
                     continue;
                 }
-                size_t col_from = editor_visual_column_in_range(ed, row_start, hi_from);
-                size_t col_to = editor_visual_column_in_range(ed, row_start, hi_to);
+                size_t col_from = editor_visual_column_from(ed, draw_from, draw_from_col, hi_from);
+                size_t col_to = editor_visual_column_from(ed, hi_from, col_from, hi_to);
                 double hx = text_x + (double)col_from * char_width;
                 double hw = (double)(col_to - col_from) * char_width;
                 if (hw < 2.0) {
@@ -1779,12 +1817,21 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
             size_t hi_to = sel_end < row_end ? sel_end : row_end;
             int extends_past_row = (sel_end > row_end) && (sel_start <= row_end) &&
                                     (r + 1 < row_count) && rows[r + 1].is_continuation;
-            if (hi_from < hi_to || extends_past_row) {
+            /* links vom Ausschnitt beginnt die Markierung am Ausschnitt,
+             * rechts davon endet sie dort (dahinter clippt der Rand) */
+            if (hi_from < draw_from && hi_to > draw_from) {
+                hi_from = draw_from;
+            }
+            if (hi_to > draw_to) {
+                hi_to = draw_to;
+                extends_past_row = 0;
+            }
+            if ((hi_from < hi_to || extends_past_row) && hi_from >= draw_from) {
                 if (hi_to < hi_from) {
                     hi_to = hi_from;
                 }
-                size_t col_from = editor_visual_column_in_range(ed, row_start, hi_from);
-                size_t col_to = editor_visual_column_in_range(ed, row_start, hi_to);
+                size_t col_from = editor_visual_column_from(ed, draw_from, draw_from_col, hi_from);
+                size_t col_to = editor_visual_column_from(ed, hi_from, col_from, hi_to);
                 double hx = text_x + (double)col_from * char_width;
                 double hw = (double)(col_to - col_from) * char_width;
                 if (extends_past_row) {
@@ -1801,28 +1848,14 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
         if (has_bracket_match) {
             for (int b = 0; b < 2; b++) {
                 size_t pos = (b == 0) ? bracket_a : bracket_b;
-                if (pos >= row_start && pos < row_end) {
-                    size_t col = editor_visual_column_in_range(ed, row_start, pos);
+                if (pos >= draw_from && pos < draw_to) {
+                    size_t col = editor_visual_column_from(ed, draw_from, draw_from_col, pos);
                     double bx = text_x + (double)col * char_width;
                     set_fill(ctx, col_bracket());
                     CGContextFillRect(ctx, CGRectMake(bx, top_y, char_width, LINE_HEIGHT));
                 }
             }
         }
-
-        /* Ohne Umbruch nur den sichtbaren Ausschnitt einer (vielleicht sehr
-         * langen) Zeile aufbereiten; draw_from_col haelt die Tabs richtig. */
-        size_t draw_from = row_start, draw_to = row_end, draw_from_col = 0;
-        if (!g_wrap && row_len > 0) {
-            size_t first_col = scroll_col > 1 ? (size_t)scroll_col - 1 : 0;
-            draw_from = editor_offset_for_column_in_range(ed, row_start, row_len, first_col);
-            draw_from_col = editor_visual_column_in_range(ed, row_start, draw_from);
-            draw_to = editor_offset_for_column_in_range(ed, row_start, row_len, (size_t)scroll_col + (size_t)visible_cols + 2);
-            if (draw_to < draw_from) {
-                draw_to = draw_from;
-            }
-        }
-        double draw_x = text_x + (double)draw_from_col * char_width;
 
         if (g_show_invisibles) {
             int line_end = draw_to == row_end && row_end < editor_length(ed) && gb_char_at(&ed->buffer, row_end) == '\n';
@@ -1839,25 +1872,30 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
         }
         draw_row_line(ctx, ed, lang, rows, row_count, r, draw_from, draw_to, draw_from_col, draw_x, top_y, attrs,
                        &cached_line, &cached_line_start, &comment_state, tokens, &token_count);
-    }
 
-    if (!has_sel) {
-        size_t cur_row = btn_layout_row_for_offset(rows, row_count, ed->cursor);
-        if (cur_row >= (size_t)scroll_row) {
-            size_t col = editor_visual_column_in_range(ed, rows[cur_row].start, ed->cursor);
-            double cx = text_x + (double)col * char_width;
-            double cy = bounds.size.height - TOP_PADDING - (double)(cur_row - (size_t)scroll_row + 1) * LINE_HEIGHT;
-            if (g_marked.target == BTN_MARKED_DOCUMENT) {
-                draw_marked_overlay(ctx, cx, cy, LINE_HEIGHT, cy + 4.0, attrs, col_bg());
-            } else {
-                draw_ghost_text(ctx, cx, cy, LINE_HEIGHT, cy + 4.0);
-                set_fill(ctx, col_cursor());
-                CGContextFillRect(ctx, CGRectMake(cx, cy, 1.4, LINE_HEIGHT - 2));
-            }
+        /* Cursor: nur im Ausschnitt (daneben liegt er ausserhalb des Bildes) */
+        if (!has_sel && r == cur_row && ed->cursor >= draw_from && ed->cursor <= draw_to) {
+            size_t col = editor_visual_column_from(ed, draw_from, draw_from_col, ed->cursor);
+            cx = text_x + (double)col * char_width;
+            cy = top_y;
+            cursor_shown = 1;
         }
     }
 
     CGContextRestoreGState(ctx);
+
+    /* Cursor samt vorlaeufigem Text und KI-Vorschlag nach dem Clip: die
+     * duerfen wie bisher ueber den rechten Rand hinausragen - aber nur bei
+     * sichtbarem Cursor (seitlich weggescrollt: nichts) */
+    if (cursor_shown && cx >= clip_left && cx <= bounds.size.width - BTN_SCROLLBAR_WIDTH) {
+        if (g_marked.target == BTN_MARKED_DOCUMENT) {
+            draw_marked_overlay(ctx, cx, cy, LINE_HEIGHT, cy + 4.0, attrs, col_bg());
+        } else {
+            draw_ghost_text(ctx, cx, cy, LINE_HEIGHT, cy + 4.0);
+            set_fill(ctx, col_cursor());
+            CGContextFillRect(ctx, CGRectMake(cx, cy, 1.4, LINE_HEIGHT - 2));
+        }
+    }
 
     draw_gutter(ctx, bounds, rows, row_count, scroll_row);
     CGRect knob;
@@ -1954,10 +1992,15 @@ size_t btn_hit_test(Editor *ed, CGRect bounds, double x, double y, long scroll_r
         row = (long)row_count - 1;
     }
 
-    double rel_x = x - (GUTTER_WIDTH + LEFT_PADDING) + (g_wrap ? 0.0 : (double)scroll_col * char_width);
+    if (g_wrap) {
+        scroll_col = 0;
+    }
+    double rel_x = x - (GUTTER_WIDTH + LEFT_PADDING) + (double)scroll_col * char_width;
     long col = (long)(rel_x / char_width + 0.5);
-    if (col < 0) {
-        col = 0;
+    /* links vom Text (Zeilennummern, Rand): erste sichtbare Spalte - nicht
+     * die angeschnittene davor, sonst scrollte der Klick das Bild */
+    if (col < scroll_col) {
+        col = scroll_col;
     }
 
     return btn_row_offset_for_column(ed, rows, row_count, (size_t)row, (size_t)col);

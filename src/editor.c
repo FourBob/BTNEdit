@@ -563,7 +563,11 @@ size_t editor_tab_advance(size_t col) {
  * (2 Bytes) als 2 Spalten zaehlen und der Cursor bei jedem mehrbytigen
  * Zeichen in derselben Zeile weiter vom gezeichneten Text weglaufen. */
 size_t editor_visual_column_in_range(Editor *ed, size_t range_start, size_t offset) {
-    size_t col = 0;
+    return editor_visual_column_from(ed, range_start, 0, offset);
+}
+
+size_t editor_visual_column_from(Editor *ed, size_t range_start, size_t start_col, size_t offset) {
+    size_t col = start_col;
     size_t i = range_start;
     while (i < offset) {
         unsigned char c = (unsigned char)gb_char_at(&ed->buffer, i);
@@ -574,8 +578,12 @@ size_t editor_visual_column_in_range(Editor *ed, size_t range_start, size_t offs
 }
 
 size_t editor_offset_for_column_in_range(Editor *ed, size_t range_start, size_t range_len, size_t target_col) {
-    size_t range_end = range_start + range_len;
-    size_t col = 0;
+    return editor_offset_for_column_from(ed, range_start, 0, range_start + range_len, target_col, NULL);
+}
+
+size_t editor_offset_for_column_from(Editor *ed, size_t range_start, size_t start_col, size_t range_end,
+                                     size_t target_col, size_t *out_col) {
+    size_t col = start_col;
     size_t i = range_start;
     while (i < range_end && col < target_col) {
         char c = gb_char_at(&ed->buffer, i);
@@ -586,6 +594,9 @@ size_t editor_offset_for_column_in_range(Editor *ed, size_t range_start, size_t 
          * echten Zeichens - siehe editor_visual_column_in_range() oben fuer
          * dasselbe Grundproblem in der jeweils anderen Richtung. */
         i += utf8_forward_len(ed, i, range_end);
+    }
+    if (out_col) {
+        *out_col = col;
     }
     return i;
 }

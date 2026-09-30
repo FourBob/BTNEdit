@@ -25,11 +25,14 @@ Derzeit keine.
   Wählen.
 
 - Ohne Zeilenumbruch: seitlich wird nur so weit gescrollt, dass der Cursor
-  gerade sichtbar ist (kein Vorlauf), und der seitliche Scrollbalken liegt
-  über dem unteren Rand der letzten Textzeile. Sehr lange Zeilen (MB-große
-  Einzeiler) werden pro Bild nur im sichtbaren Ausschnitt gezeichnet, aber
-  für Syntaxfarben und Spaltenrechnung noch ganz gelesen. Gedruckt wird
-  immer umgebrochen.
+  gerade sichtbar ist (kein Vorlauf; bei "Weitersuchen" steht der Cursor am
+  Trefferende, der Anfang eines sehr langen Treffers bleibt dann links
+  verdeckt). Gezeichnet, markiert und hervorgehoben wird nur im sichtbaren
+  Ausschnitt; die Cursor-Spalte (Mitscrollen) zählt aber bei jedem
+  Tastendruck vom Zeilenanfang, bei MB-großen Einzeilern spürbar. Zeilen
+  über 100 000 Bytes bleiben wie bisher ungefärbt. Vorläufiger Text einer
+  Eingabemethode und KI-Vorschläge ragen am rechten Rand hinaus, statt das
+  Bild mitzuscrollen. Gedruckt wird immer umgebrochen.
 
 - KI-Vervollständigung: Vorschläge sind einzeilig und kommen nur, wenn
   rechts vom Cursor höchstens Leerraum oder Schließendes steht. Der

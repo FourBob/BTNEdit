@@ -23,7 +23,10 @@ static double get_char_width(void) { return 8.0; }
 #include "render_pure_extracted.h"
 
 /* ---- Umgebung von on_mouse() ---- */
-static Document g_doc;
+#define MAX_TABS 2
+static Document g_docs[MAX_TABS];
+static int g_doc_count = 1;
+#define g_doc (g_docs[0])
 static CGRect g_bounds = { { 0, 0 }, { 900, 600 } };
 static int g_find_bar_visible = 0;
 static BtnFocus g_focus = BTN_FOCUS_DOCUMENT;
@@ -37,6 +40,9 @@ static void handle_find_bar_click(double x) { (void)x; g_find_clicks++; }
 void btn_app_set_autoscroll(int on) { g_autoscroll_on = on; }
 void btn_text_input_invalidate(void) {}
 void btn_app_request_redraw(void) {}
+static int g_prefs_saved;
+static void apply_wrap(int on) { btn_render_set_wrap(on); }
+static void save_prefs(void) { g_prefs_saved++; }
 #include "mouse_extracted.h"
 
 /* Geometrie im Test: Inhaltsbereich 900 x 568 (Fenster 600 minus Tableiste),
@@ -466,6 +472,130 @@ static void test_nowrap(void) {
     set_lines(10);
 }
 
+/* Review-Funde ohne Umbruch: eigener Streifen fuer den seitlichen
+ * Scrollbalken, links ziehen/klicken springt nicht, Trackpad-Achse,
+ * Umschalten behaelt die oberste Zeile. */
+static void test_nowrap_review(void) {
+    Editor *ed = &g_doc.editor;
+    btn_render_set_wrap(0);
+    set_wide_lines();
+    CGRect cb = content_bounds();
+    long cols = btn_visible_col_capacity(btn_layout_text_width(cb));
+
+    /* Streifen: Zeilen enden darueber, Knopf liegt darin */
+    CHECK(btn_text_bottom() == BTN_FOOTER_HEIGHT + HSCROLL_STRIP_HEIGHT, "wrap off: text ends above the strip");
+    long bad = 0;
+    for (double h = 60; h < 700; h += 1) {
+        long cap = btn_visible_row_capacity(h);
+        double last_bottom = h - TOP_PADDING - (double)cap * LINE_HEIGHT;
+        bad += last_bottom < btn_text_bottom();
+    }
+    CHECK(bad == 0, "every counted row lies above the strip (%ld heights)", bad);
+    CGRect k;
+    CHECK(btn_hscrollbar_knob(cb, 300, 0, &k) && k.origin.y >= BTN_FOOTER_HEIGHT &&
+          k.origin.y + k.size.height <= btn_text_bottom(), "knob inside the strip");
+    /* eine breite Zeile (Knopf da), darunter viele kurze */
+    char *text = malloc(300 + 1 + 100 * 9);
+    memset(text, 'w', 300);
+    text[300] = '\n';
+    for (int i = 0; i < 100; i++) {
+        memcpy(text + 301 + i * 9, "line xxx\n", 9);
+    }
+    editor_set_text(ed, text, 301 + 100 * 9);
+    free(text);
+    for (double h = 560; h < 600; h += 1) { /* Fensterhoehen wie im Fund (590) */
+        g_bounds.size.height = h;
+        cb = content_bounds();
+        double top, bottom;
+        btn_text_rows_extent(cb, &top, &bottom);
+        long last = btn_visible_row_capacity(cb.size.height) - 1;
+        g_doc.scroll_row = 0;
+        g_doc.scroll_col = 0;
+        mouse(BTN_MOUSE_DOWN, col_x(1), bottom + 1.0);
+        bad += g_drag != BTN_DRAG_TEXT || g_doc.scroll_col != 0 || ed->cursor != 301 + (size_t)(last - 1) * 9 + 1;
+        mouse(BTN_MOUSE_UP, col_x(1), bottom + 1.0);
+    }
+    g_bounds.size.height = 600;
+    cb = content_bounds();
+    CHECK(bad == 0, "click at the bottom of the last row places the cursor, never pages (%ld)", bad);
+    set_lines(3); /* alles passt: kein Knopf */
+    size_t cur = ed->cursor;
+    mouse(BTN_MOUSE_DOWN, col_x(1), BTN_FOOTER_HEIGHT + 3);
+    CHECK(g_drag == BTN_DRAG_NONE && ed->cursor == cur, "strip without knob: click does nothing");
+    set_wide_lines();
+
+    /* Links ziehen, wenn seitlich gescrollt: nur im Takt */
+    g_doc.scroll_col = 100;
+    editor_set_cursor(ed, 150, 0);
+    mouse(BTN_MOUSE_DOWN, col_x(10), row_y(0));
+    CHECK(ed->cursor == 110 && g_doc.scroll_col == 100, "click at view column 10 = column 110");
+    mouse(BTN_MOUSE_DRAGGED, GUTTER_WIDTH - 10, row_y(0));
+    mouse(BTN_MOUSE_DRAGGED, GUTTER_WIDTH - 10, row_y(0));
+    CHECK(g_doc.scroll_col == 100 && ed->cursor == 100 && g_autoscroll_on,
+          "left of the text: selection to the first visible column, no scrolling between ticks (%ld)", g_doc.scroll_col);
+    mouse(BTN_MOUSE_AUTOSCROLL, GUTTER_WIDTH - 10, row_y(0));
+    long after = g_doc.scroll_col;
+    CHECK(after < 100 && ed->cursor == (size_t)after, "tick scrolls left, cursor at the new first column (%ld)", after);
+    mouse(BTN_MOUSE_UP, GUTTER_WIDTH - 10, row_y(0));
+    g_doc.scroll_col = 100;
+    mouse(BTN_MOUSE_DOWN, GUTTER_WIDTH + 2, row_y(0)); /* im linken Rand */
+    CHECK(g_doc.scroll_col == 100 && ed->cursor == 100, "click in the left padding: first visible column, no jump");
+    mouse(BTN_MOUSE_UP, 0, 0);
+    (void)cols;
+
+    /* Trackpad: nur die staerkere Richtung */
+    g_doc.scroll_col = 0;
+    g_doc.scroll_row = 0;
+    g_doc.hscroll_accum = 0.0;
+    on_scroll(-7.0, -40.0);
+    on_scroll(-7.0, -40.0);
+    CHECK(g_doc.scroll_col == 0, "vertical swipe with a little sideways drift: no sideways scrolling");
+    on_scroll(-24.0, -3.0);
+    CHECK(g_doc.scroll_col == 3, "mostly sideways: sideways only (%ld)", g_doc.scroll_col);
+
+    /* Umschalten: dieselbe Zeile bleibt oben */
+    char *buf = malloc(200 * 151);
+    size_t n = 0;
+    for (int i = 0; i < 200; i++) {
+        memset(buf + n, 'a' + i % 26, 150); /* je Zeile 150 Zeichen: umgebrochen zwei Rows */
+        n += 150;
+        buf[n - 75] = ' ';
+        buf[n++] = '\n';
+    }
+    editor_set_text(ed, buf, n);
+    free(buf);
+    g_doc.scroll_row = 5;
+    g_doc.scroll_col = 0;
+    g_doc.scroll_accum = g_doc.hscroll_accum = 0.0;
+    on_scroll(-80.0, -30.0);
+    CHECK(g_doc.scroll_col == 10 && g_doc.scroll_row == 5, "sideways swipe with vertical drift: rows stay (%ld)", g_doc.scroll_row);
+    /* Markieren nach unten in den Scrollbalken-Streifen: Autoscroll */
+    g_doc.scroll_col = 0;
+    mouse(BTN_MOUSE_DOWN, col_x(1), row_y(0));
+    mouse(BTN_MOUSE_DRAGGED, col_x(1), BTN_FOOTER_HEIGHT + 3);
+    CHECK(g_autoscroll_on, "drag into the strip below the text: autoscroll down");
+    mouse(BTN_MOUSE_UP, col_x(1), BTN_FOOTER_HEIGHT + 3);
+    editor_set_cursor(ed, 150 * 151, 0); /* Zeile 150 */
+    btn_render_set_wrap(1);
+    const BtnRow *rows;
+    size_t rc = build_current_rows(&rows);
+    long top = (long)btn_layout_row_of_line(rows, rc, 140);
+    CHECK(rows[top].logical_line == 140 && !rows[top].is_continuation && top > 140, "wrapped: line 140 starts at row %ld", top);
+    g_doc.scroll_row = top;
+    sync_scroll_to_cursor();
+    CHECK(g_doc.scroll_row == top, "cursor line visible: no scrolling");
+    int saved = g_prefs_saved;
+    toggle_wrap();
+    CHECK(g_wrap == 0 && g_doc.scroll_row == 140 && g_prefs_saved == saved + 1,
+          "wrap off: line 140 stays at the top (%ld)", g_doc.scroll_row);
+    g_doc.scroll_col = 5;
+    toggle_wrap();
+    rc = build_current_rows(&rows);
+    CHECK(g_wrap == 1 && rows[g_doc.scroll_row].logical_line == 140 && g_doc.scroll_col == 0,
+          "wrap on again: line 140 at the top, sideways reset");
+    set_lines(10);
+}
+
 int main(void) {
     editor_init(&g_doc.editor);
     test_geometry();
@@ -473,6 +603,7 @@ int main(void) {
     test_drag_select();
     test_scrollbar_clicks();
     test_nowrap();
+    test_nowrap_review();
     editor_free(&g_doc.editor);
     printf("%s: %ld checks, %ld failures\n", fails ? "FAILED" : "ALL PASSED", checks, fails);
     return fails != 0;

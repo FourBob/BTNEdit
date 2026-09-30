@@ -237,18 +237,23 @@ static int is_keyword(const BtnLangSpec *lang, const char *word, size_t len) {
     return 0;
 }
 
-/* Obergrenze fuer die Zeilenlaenge, die noch tokenisiert wird - ohne die
+/* BTN_MAX_HIGHLIGHT_LINE_LEN (highlight.h): Obergrenze fuer die
+ * Zeilenlaenge, die noch tokenisiert wird - ohne die
  * wuerde eine pathologisch lange "Zeile" (z.B. eine SVG mit megabyteweise
  * Pfaddaten auf einer einzigen Zeile, oder eine Binaerdatei ganz ohne
  * Zeilenumbruch) bei JEDEM Redraw (dieses Projekt zeichnet bei jedem
  * Tastendruck neu, siehe render.c) komplett neu kopiert und tokenisiert.
  * Ab dieser Groesse bringt Hervorhebung ohnehin kaum noch etwas, also
  * lieber unformatiert lassen als jeden Tastendruck spuerbar zu bremsen. */
-#define BTN_MAX_HIGHLIGHT_LINE_LEN 100000
-
 size_t btn_highlight_tokenize(const char *text, size_t len, const BtnLangSpec *lang,
                                int starts_in_comment, int *ends_in_comment,
                                BtnToken *out_tokens, size_t max_tokens) {
+    return btn_highlight_tokenize_from(text, len, lang, starts_in_comment, ends_in_comment, 0, out_tokens, max_tokens);
+}
+
+size_t btn_highlight_tokenize_from(const char *text, size_t len, const BtnLangSpec *lang,
+                                    int starts_in_comment, int *ends_in_comment, size_t skip_before,
+                                    BtnToken *out_tokens, size_t max_tokens) {
     size_t count = 0;
     size_t i = 0;
     *ends_in_comment = 0;
@@ -266,12 +271,14 @@ size_t btn_highlight_tokenize(const char *text, size_t len, const BtnLangSpec *l
 
 #define BTN_EMIT(k, s, e)                             \
     do {                                              \
-        if (count < max_tokens) {                     \
-            out_tokens[count].start = (s);             \
-            out_tokens[count].len = (e) - (s);          \
-            out_tokens[count].kind = (k);               \
+        if ((e) > skip_before) {                      \
+            if (count < max_tokens) {                 \
+                out_tokens[count].start = (s);         \
+                out_tokens[count].len = (e) - (s);      \
+                out_tokens[count].kind = (k);           \
+            }                                           \
+            count++;                                   \
         }                                               \
-        count++;                                       \
     } while (0)
 
     if (starts_in_comment && lang->block_comment) {

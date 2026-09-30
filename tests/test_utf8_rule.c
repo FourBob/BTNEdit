@@ -293,11 +293,84 @@ static void test_end_key(void) {
     }
 }
 
+/* Spalten ab einer Stelle mitten in der Zeile (Ausschnitt ohne Umbruch):
+ * dieselben Werte wie vom Zeilenanfang aus, fuer jede Start-/Endgrenze. */
+static void test_columns_from(void) {
+    Editor ed;
+    editor_init(&ed);
+    srand(11);
+    const char *pieces[] = { "a", "\t", " ", "\xC3\xA4", "\xE2\x82\xAC", "\xF0\x9F\x98\x80", "\xFF", "\xC3" };
+    long bad = 0;
+    for (int it = 0; it < 400; it++) {
+        char buf[128];
+        size_t n = 0;
+        int parts = rand() % 20;
+        for (int k = 0; k < parts; k++) {
+            const char *p = pieces[rand() % 8];
+            memcpy(buf + n, p, strlen(p));
+            n += strlen(p);
+        }
+        editor_set_text(&ed, buf, n);
+        for (size_t a = 0; a <= n; a++) {
+            if (a < n && editor_utf8_seq_start(&ed, a) != a) {
+                continue; /* nur Zeichenanfaenge als Start */
+            }
+            size_t col_a = editor_visual_column_in_range(&ed, 0, a);
+            for (size_t b = a; b <= n; b++) {
+                if (editor_utf8_seq_start(&ed, b) != b && b < n) {
+                    continue;
+                }
+                bad += editor_visual_column_from(&ed, a, col_a, b) != editor_visual_column_in_range(&ed, 0, b);
+            }
+            for (size_t target = 0; target < 40; target++) {
+                size_t out_col;
+                size_t want = editor_offset_for_column_in_range(&ed, 0, n, target);
+                if (want < a) {
+                    continue; /* Ziel links vom Start: nicht Teil des Vertrags */
+                }
+                size_t got = editor_offset_for_column_from(&ed, a, col_a, n, target, &out_col);
+                bad += got != want || out_col != editor_visual_column_in_range(&ed, 0, got);
+            }
+        }
+    }
+    CHECK(bad == 0, "columns from a mid-line start match the whole-line count (%ld)", bad);
+    editor_free(&ed);
+}
+
+/* Tokens nur ab dem Ausschnitt: dieselben wie beim ganzen Durchlauf, nur
+ * ohne die davor endenden - auch hinter der Tokengrenze einer langen Zeile */
+static void test_tokenize_from(void) {
+    const BtnLangSpec *c = btn_highlight_lang_for_path("x.c");
+    char line[8000];
+    size_t n = 0;
+    for (int i = 0; i < 700; i++) {
+        n += (size_t)snprintf(line + n, sizeof line - n, "x=%d;", i);
+    }
+    BtnToken all[4000], part[512];
+    int e1, e2;
+    size_t na = btn_highlight_tokenize(line, n, c, 0, &e1, all, 4000);
+    CHECK(na > 600 && na < 4000, "long line has many tokens (%zu)", na);
+    size_t from = n - 100;
+    size_t np = btn_highlight_tokenize_from(line, n, c, 0, &e2, from, part, 512);
+    size_t k = 0;
+    while (k < na && all[k].start + all[k].len <= from) {
+        k++;
+    }
+    int same = np == na - k && e1 == e2;
+    for (size_t i = 0; same && i < np; i++) {
+        same = part[i].start == all[k + i].start && part[i].len == all[k + i].len && part[i].kind == all[k + i].kind;
+    }
+    CHECK(same && np > 0, "tokens from the slice = the tail of the full list (%zu vs %zu)", np, na - k);
+    CHECK(btn_highlight_tokenize_from(line, n, c, 0, &e2, 0, part, 512) == na, "from 0: all tokens");
+}
+
 int main(void) {
     test_char_len_exhaustive();
     test_segmentation_and_columns();
     test_specific();
     test_end_key();
+    test_columns_from();
+    test_tokenize_from();
     printf("%ld checks, %ld failures\n%s\n", checks, failures, failures ? "TESTS FAILED" : "ALL TESTS PASSED");
     return failures ? 1 : 0;
 }

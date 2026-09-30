@@ -58,19 +58,20 @@ HEADERS = {
         "discard_recovery", "open_file_path", "disk_content_changed", "confirm_save_as_utf8", "perform_save_doc",
         "#RELOAD_KEEP_CHOSEN", "reload_doc_as", "reload_doc", "set_doc_encoding", "reopen_doc_as"]),
     "wrap_state_extracted.h": ("render.c", ["include:limits.h", "var:g_wrap", "#NO_WRAP_COLS", "btn_render_set_wrap"]),
+    "text_bottom_extracted.h": ("render.c", ["include:wrap_state_extracted.h", "#HSCROLL_STRIP_HEIGHT", "btn_text_bottom"]),
     "render_pure_extracted.h": ("render.c", [
         "include:wrap_state_extracted.h", "screen_chars_per_row",
         "rows_push", "layout_build", "struct:g_layout", "btn_layout_get", "btn_layout_max_cols",
         "btn_layout_row_for_offset", "btn_row_offset_for_column", "first_row_of_line",
-        "line_bounds_from_rows", "row_of_line_start", "struct:g_cstate", "cstate_reserve",
+        "line_bounds_from_rows", "row_of_line_start", "btn_layout_row_of_line", "struct:g_cstate", "cstate_reserve",
         "comment_state_before_line"]),
     "render_decode_extracted.h": ("render.c", ["decode_row_from_col", "decode_row_for_display"]),
     "render_helpers_extracted.h": ("render.c", ["utf8_safe_cut", "utf8_prefix_bytes"]),
-    "cap_extracted.h": ("render.c", ["btn_visible_row_capacity"]),
+    "cap_extracted.h": ("render.c", ["include:text_bottom_extracted.h", "btn_visible_row_capacity"]),
     "fontsize_extracted.h": ("render.c", ["btn_render_set_font_size"]),
     "footer_fmt_extracted.h": ("render.c", ["btn_footer_format_ok"]),
     "mouse_render_extracted.h": ("render.c", [
-        "include:wrap_state_extracted.h",
+        "include:text_bottom_extracted.h",
         "#GUTTER_WIDTH", "#LINE_HEIGHT", "#LEFT_PADDING", "#TOP_PADDING", "chars_per_row_for",
         "btn_layout_text_width", "btn_hit_test", "btn_visible_row_capacity", "btn_text_rows_extent",
         "btn_text_cols_extent", "btn_visible_col_capacity", "btn_render_char_width",
@@ -104,7 +105,7 @@ HEADERS = {
         "content_bounds", "visible_line_capacity", "build_current_rows", "clamp_hscroll",
         "clamp_scroll_to_row_count", "clamp_scroll", "sync_scroll_to_cursor", "stop_mouse_drag",
         "autoscroll_steps", "autoscroll_rows", "autoscroll_cols", "drag_select_to", "scrollbar_mouse_down",
-        "scrollbar_drag_to", "hscrollbar_mouse_down", "hscrollbar_drag_to", "on_mouse", "on_scroll"]),
+        "scrollbar_drag_to", "hscrollbar_mouse_down", "hscrollbar_drag_to", "on_mouse", "on_scroll", "toggle_wrap"]),
 }
 
 

@@ -106,7 +106,8 @@ Klammern, Suchen/Ersetzen, Zeilen-Befehle) ist reine C-Logik und wird selbst
 
 - Wortumbruch, abschaltbar (`⌥⌘U`, Darstellung > Zeilenumbruch): ohne
   Umbruch eine Bildschirmzeile je Zeile, seitliches Scrollen per
-  Trackpad/Shift+Mausrad, seitlichem Scrollbalken unten und Autoscroll beim
+  Trackpad/Shift+Mausrad, seitlichem Scrollbalken (eigener Streifen über der
+  Statuszeile) und Autoscroll beim
   Markieren; der Cursor bleibt im Bild. Gedruckt wird immer umgebrochen
 - Zeilennummern, Statuszeile (Position, Zeilen/Wörter/Zeichen,
   Kodierung und Zeilenende-Format, z.B. „UTF-8 · LF“)

@@ -14,6 +14,7 @@
 #include "strings.h"
 
 #include <ctype.h>
+#include <math.h>
 #include <regex.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -4213,7 +4214,7 @@ static void drag_select_to(double x, double y, int tick) {
     long row_count = (long)build_current_rows(&rows);
     double top, bottom;
     btn_text_rows_extent(cb, &top, &bottom);
-    long step = autoscroll_rows(y, top, BTN_FOOTER_HEIGHT, visible_line_capacity());
+    long step = autoscroll_rows(y, top, btn_text_bottom(), visible_line_capacity());
     long hstep = 0;
     double left = 0.0, right = 0.0, char_width = btn_render_char_width();
     long cols = btn_visible_col_capacity(btn_layout_text_width(cb));
@@ -4283,8 +4284,8 @@ static void scrollbar_drag_to(double y) {
     clamp_scroll_to_row_count((long)row_count);
 }
 
-/* Seitlicher Scrollbalken (nur ohne Umbruch, Streifen unten im Textbereich
- * ueber der Statuszeile): auf den Knopf = ziehen, links/rechts davon = eine
+/* Seitlicher Scrollbalken (nur ohne Umbruch, eigener Streifen zwischen
+ * Text und Statuszeile): auf den Knopf = ziehen, links/rechts davon = eine
  * Seite blaettern. 0 = nicht behandelt (kein Knopf oder daneben). */
 static int hscrollbar_mouse_down(double x, double y) {
     CGRect cb = content_bounds();
@@ -4296,8 +4297,7 @@ static int hscrollbar_mouse_down(double x, double y) {
     }
     double left, right;
     btn_text_cols_extent(cb, &left, &right);
-    double strip_top = knob.origin.y + knob.size.height + (knob.origin.y - BTN_FOOTER_HEIGHT);
-    if (x < left || x >= cb.size.width - BTN_SCROLLBAR_WIDTH || y < BTN_FOOTER_HEIGHT || y >= strip_top) {
+    if (x < left || x >= cb.size.width - BTN_SCROLLBAR_WIDTH || y < BTN_FOOTER_HEIGHT || y >= btn_text_bottom()) {
         return 0;
     }
     long cols = btn_visible_col_capacity(btn_layout_text_width(cb));
@@ -4346,7 +4346,7 @@ static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, 
                 btn_app_request_redraw();
                 return;
             }
-            if (y < BTN_FOOTER_HEIGHT) {
+            if (y < btn_text_bottom()) { /* Statuszeile, Scrollbalken-Streifen ohne Knopf */
                 return;
             }
             /* Klick im Dokument entzieht der Suchen-Leiste den Fokus (die
@@ -4401,9 +4401,16 @@ static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, 
 }
 
 /* Mausrad/Trackpad: senkrecht in Zeilen, ohne Umbruch auch seitlich in
- * Spalten (Shift+Mausrad liefert macOS schon als delta_x). */
+ * Spalten (Shift+Mausrad liefert macOS schon als delta_x). Nur die
+ * staerkere Richtung zaehlt - sonst wanderte das Bild beim senkrechten
+ * Wischen auf dem Trackpad seitlich mit. */
 static void on_scroll(double delta_x, double delta_y) {
     btn_text_input_invalidate(); /* Kandidatenfenster folgt dem Cursor */
+    if (fabs(delta_x) < fabs(delta_y)) {
+        delta_x = 0.0;
+    } else {
+        delta_y = 0.0;
+    }
     Document *doc = active_doc();
     doc->scroll_accum += delta_y;
     long lines = (long)(doc->scroll_accum / BTN_LINE_HEIGHT);
@@ -4564,11 +4571,24 @@ static void perform_line_command(int tag) {
     }
 }
 
-/* Darstellung > Zeilenumbruch: alle Tabs fangen seitlich wieder links an,
- * der Cursor bleibt im Bild (die anderen Tabs holen das beim Wechsel nach). */
+/* Darstellung > Zeilenumbruch: in jedem Tab bleibt dieselbe Zeile oben
+ * (scroll_row zaehlt Rows, die sich dabei verschieben), seitlich geht es
+ * wieder links los; der Cursor des aktiven Tabs bleibt im Bild. */
 static void toggle_wrap(void) {
-    apply_wrap(!g_wrap);
+    double width = btn_layout_text_width(content_bounds());
+    size_t top_line[MAX_TABS];
     for (int i = 0; i < g_doc_count; i++) {
+        size_t n;
+        const BtnRow *rows = btn_layout_get(&g_docs[i].editor, width, &n);
+        size_t r = g_docs[i].scroll_row > 0 ? (size_t)g_docs[i].scroll_row : 0;
+        top_line[i] = n ? rows[r < n ? r : n - 1].logical_line : 0;
+    }
+    apply_wrap(!g_wrap);
+    width = btn_layout_text_width(content_bounds()); /* Streifen unten aendert nur die Hoehe */
+    for (int i = 0; i < g_doc_count; i++) {
+        size_t n;
+        const BtnRow *rows = btn_layout_get(&g_docs[i].editor, width, &n);
+        g_docs[i].scroll_row = (long)btn_layout_row_of_line(rows, n, top_line[i]);
         g_docs[i].scroll_col = 0;
         g_docs[i].hscroll_accum = 0.0;
     }
