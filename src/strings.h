@@ -138,6 +138,7 @@ typedef enum {
     BTN_STR_MOVE_LINES_UP,
     BTN_STR_MOVE_LINES_DOWN,
     BTN_STR_SHOW_INVISIBLES,
+    BTN_STR_WRAP,
     BTN_STR_AI_COMPLETION,
     /* KI-Verbindung testen: Menue, Titel, Ergebnisse ("%s" Modell/Vorschlag
      * bzw. Adresse, "%d" HTTP-Status), Hinweis wenn ausgeschaltet */

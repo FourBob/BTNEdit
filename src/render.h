@@ -182,13 +182,30 @@ void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_lab
  * der gewohnten Selektionsfarbe darueber erscheint. match_count darf 0 sein
  * (dann werden match_starts/match_ends nicht gelesen, duerfen also auch
  * NULL sein). */
-void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_row, const BtnLangSpec *lang,
+void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_row, long scroll_col, const BtnLangSpec *lang,
                        const size_t *match_starts, const size_t *match_ends, size_t match_count);
+
+/* Wortumbruch am Bildschirm an/aus (Standard an). Aus: eine Row je Zeile,
+ * scroll_col (Spalten) verschiebt den Text nach links - btn_render_frame(),
+ * btn_hit_test() und btn_render_caret_rect() beachten es, mit Umbruch wird
+ * es ignoriert. Der Druck bricht immer um. */
+void btn_render_set_wrap(int on);
+/* Ohne Umbruch: Breite der laengsten Zeile in Spalten (mit Umbruch nur
+ * eine obere Schranke, dort ungenutzt) bzw. wie viele Spalten in
+ * text_width passen. */
+long btn_layout_max_cols(Editor *ed, double text_width);
+long btn_visible_col_capacity(double text_width);
+double btn_render_char_width(void);
+/* Seitlicher Scrollbalken (nur ohne Umbruch): groesstes scroll_col, Knopf-
+ * Rechteck (0 = keiner, alles passt), Umkehrung beim Ziehen. */
+long btn_hscroll_max(CGRect bounds, long max_cols);
+int btn_hscrollbar_knob(CGRect bounds, long max_cols, long scroll_col, CGRect *out_knob);
+long btn_hscrollbar_col_for_knob_left(CGRect bounds, long max_cols, double knob_left);
 
 /* Bildet einen View-Punkt (Ursprung unten links, wie bei einer
  * nicht geflippten NSView) auf einen logischen Buffer-Offset ab,
  * unter Beruecksichtigung der aktuellen Scroll-Position. */
-size_t btn_hit_test(Editor *ed, CGRect bounds, double x, double y, long scroll_row);
+size_t btn_hit_test(Editor *ed, CGRect bounds, double x, double y, long scroll_row, long scroll_col);
 
 /* Vorschlag der KI-Vervollstaendigung, grau hinter dem Cursor des
  * Dokuments (wird kopiert; NULL/0 = keiner). */
@@ -208,7 +225,7 @@ void btn_render_set_marked_text(const char *utf8, size_t len, size_t caret, int 
  * Kandidatenfenster - fuer den Byte-Offset offset im Dokument (bounds =
  * Inhaltsbereich wie bei btn_render_frame()) bzw. im Suchen-/Ersetzen-Feld
  * (bounds = ganzes Fenster). */
-CGRect btn_render_caret_rect(Editor *ed, CGRect bounds, long scroll_row, size_t offset);
+CGRect btn_render_caret_rect(Editor *ed, CGRect bounds, long scroll_row, long scroll_col, size_t offset);
 CGRect btn_render_find_caret_rect(CGRect bounds, Editor *field, int replace_field, size_t offset);
 /* Gesetzte Breite von UTF-8-Text in der Editor-Schrift (vorlaeufiger Text:
  * Position eines Zeichens darin fuer das Kandidatenfenster). */
@@ -224,6 +241,9 @@ long btn_visible_row_capacity(double content_height);
  * btn_render_frame()): Oberkante der ersten, Unterkante der letzten. Beim
  * Markieren darueber hinaus endet die Selektion an der Randzeile. */
 void btn_text_rows_extent(CGRect bounds, double *top, double *bottom);
+/* Waagerecht (ohne Umbruch): linker Rand der ersten, rechter Rand der
+ * letzten voll sichtbaren Spalte. */
+void btn_text_cols_extent(CGRect bounds, double *left, double *right);
 
 /* Scrollbalken: nur ein Knopf (keine Schiene) in einem Streifen dieser
  * Breite am rechten Rand der Textflaeche - der Text bricht davor um. */
@@ -235,8 +255,9 @@ int btn_scrollbar_knob(CGRect bounds, size_t row_count, long scroll_row, CGRect 
 /* Umkehrung beim Ziehen: scroll_row fuer einen Knopf mit Oberkante knob_top
  * (geklemmt auf [0, row_count - Sichtkapazitaet]). */
 long btn_scrollbar_row_for_knob_top(CGRect bounds, size_t row_count, double knob_top);
-/* Knopf dunkler zeichnen, solange er gezogen wird. */
-void btn_render_set_scrollbar_active(int active);
+/* Knopf dunkler zeichnen, solange er gezogen wird (0 = keiner). */
+enum { BTN_SCROLLBAR_VERTICAL = 1, BTN_SCROLLBAR_HORIZONTAL = 2 };
+void btn_render_set_scrollbar_active(int which);
 
 /* Flaechen, ueber denen der Mauszeiger ein I-Beam ist (View-Koordinaten):
  * Textbereich des Dokuments ohne Zeilennummern, Statuszeile und - falls

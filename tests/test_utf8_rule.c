@@ -135,6 +135,27 @@ static void test_segmentation_and_columns(void) {
             CHECK(glyph == col, "doc %d boundary %zu: glyph pos %zu vs cursor col %zu", doc, b[k], glyph, col);
         }
         CHECK(map[len] == n16, "doc %d map[len]", doc);
+        /* 4b) Ausschnitt ab jeder Zeichengrenze (ohne Umbruch nur der
+         * sichtbare Teil): mit der Startspalte genau das Ende der ganzen Zeile */
+        {
+            UniChar *s16 = malloc((len * 4 + 2) * sizeof(UniChar));
+            size_t *smap = malloc((len + 1) * sizeof(size_t));
+            long bad = 0;
+            for (size_t k = 0; k < nb; k++) {
+                size_t from = b[k];
+                size_t col = editor_visual_column_in_range(&ed, 0, from);
+                size_t sn = decode_row_from_col(buf + from, len - from, col, s16, smap);
+                if (sn != n16 - map[from] || memcmp(s16, u16 + map[from], sn * sizeof(UniChar)) != 0) {
+                    bad++;
+                }
+                for (size_t j = 0; j <= len - from; j++) {
+                    bad += smap[j] + map[from] != map[from + j];
+                }
+            }
+            CHECK(bad == 0, "doc %d: slices from a start column match the full row (%ld)", doc, bad);
+            free(s16);
+            free(smap);
+        }
         /* 5) Latin-1-Bytes werden als U+00XX gezeichnet */
         for (size_t k = 0; k + 1 < nb; k++) {
             if (b[k + 1] - b[k] == 1 && buf[b[k]] >= 0x80) {
@@ -147,7 +168,7 @@ static void test_segmentation_and_columns(void) {
         /* 6) Umbruch: Rows beginnen auf Zeichengrenzen und passen in chars_per_row */
         size_t nrows, words, nchars;
         long cpr = 1 + (long)rnd(12);
-        BtnRow *rows = layout_build(&ed, cpr, &nrows, &words, &nchars);
+        BtnRow *rows = layout_build(&ed, cpr, &nrows, &words, &nchars, NULL);
         CHECK(nchars == nb - 1, "doc %d char count %zu vs %zu", doc, nchars, nb - 1);
         for (size_t r = 0; r < nrows; r++) {
             CHECK(editor_utf8_seq_start(&ed, rows[r].start) == rows[r].start || rows[r].start == len,
@@ -260,7 +281,7 @@ static void test_end_key(void) {
         editor_init(&ed);
         editor_insert_text(&ed, cases[k].text, strlen(cases[k].text));
         size_t nrows, words;
-        BtnRow *rows = layout_build(&ed, cases[k].cpr, &nrows, &words, NULL);
+        BtnRow *rows = layout_build(&ed, cases[k].cpr, &nrows, &words, NULL, NULL);
         ed.cursor = cases[k].cursor;
         size_t got = end_key(&ed, rows, nrows);
         size_t before = btn_layout_row_for_offset(rows, nrows, cases[k].cursor);

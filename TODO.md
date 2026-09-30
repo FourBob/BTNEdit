@@ -5,7 +5,7 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
 
 ## Fehlende Features (nach Priorität)
 
-1. **Code-Editor-Funktionen.** Wortumbruch an/aus.
+Derzeit keine.
 
 ## Bekannte Einschränkungen (bewusst zurückgestellt, kein akuter Bug)
 
@@ -23,6 +23,13 @@ Wird laufend aktualisiert - neue Punkte kommen dazu, erledigte werden entfernt
   Binärdatei geöffnet. Eine per "Neu öffnen als" gewählte Kodierung gilt
   beim Neuladen weiter, solange die Erkennung dasselbe meint wie beim
   Wählen.
+
+- Ohne Zeilenumbruch: seitlich wird nur so weit gescrollt, dass der Cursor
+  gerade sichtbar ist (kein Vorlauf), und der seitliche Scrollbalken liegt
+  über dem unteren Rand der letzten Textzeile. Sehr lange Zeilen (MB-große
+  Einzeiler) werden pro Bild nur im sichtbaren Ausschnitt gezeichnet, aber
+  für Syntaxfarben und Spaltenrechnung noch ganz gelesen. Gedruckt wird
+  immer umgebrochen.
 
 - KI-Vervollständigung: Vorschläge sind einzeilig und kommen nur, wenn
   rechts vom Cursor höchstens Leerraum oder Schließendes steht. Der

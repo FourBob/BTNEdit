@@ -36,6 +36,8 @@ static NSMenuItem *g_encItems[BTN_MENU_ENC_COUNT];
 static BOOL g_encMenuEnabled = YES, g_reopenEncEnabled = NO;
 static NSMenuItem *g_invisiblesItem = nil;
 static BOOL g_invisiblesOn = NO; /* auch vor dem Menuebau gesetzt (Einstellung) */
+static NSMenuItem *g_wrapItem = nil;
+static BOOL g_wrapOn = YES;
 static NSMenuItem *g_aiItem = nil;
 static BOOL g_aiOn = NO;
 static NSMenu *g_aiModelMenu = nil;
@@ -340,7 +342,7 @@ static long ns_loc(NSRange r) {
 
 - (void)scrollWheel:(NSEvent *)event {
     if (g_scroll_cb) {
-        g_scroll_cb([event scrollingDeltaY]);
+        g_scroll_cb([event scrollingDeltaX], [event scrollingDeltaY]);
     }
 }
 
@@ -819,6 +821,9 @@ void btn_app_build_menu(void) {
         g_invisiblesItem = add_item(viewMenu, trs(BTN_STR_SHOW_INVISIBLES), @"i", BTN_MENU_SHOW_INVISIBLES);
         [g_invisiblesItem setKeyEquivalentModifierMask:NSEventModifierFlagOption | NSEventModifierFlagCommand];
         [g_invisiblesItem setState:g_invisiblesOn ? NSControlStateValueOn : NSControlStateValueOff];
+        g_wrapItem = add_item(viewMenu, trs(BTN_STR_WRAP), @"u", BTN_MENU_WRAP);
+        [g_wrapItem setKeyEquivalentModifierMask:NSEventModifierFlagOption | NSEventModifierFlagCommand];
+        [g_wrapItem setState:g_wrapOn ? NSControlStateValueOn : NSControlStateValueOff];
         [viewMenuItem setSubmenu:viewMenu];
 
         /* Fenster: die AppKit-Standardaktionen (target nil -> Responder-Kette
@@ -1037,6 +1042,11 @@ void btn_app_restart_idle_timer(double seconds, btn_void_callback cb) {
 void btn_app_set_show_invisibles_menu(int on) {
     g_invisiblesOn = on ? YES : NO;
     [g_invisiblesItem setState:on ? NSControlStateValueOn : NSControlStateValueOff];
+}
+
+void btn_app_set_wrap_menu(int on) {
+    g_wrapOn = on ? YES : NO;
+    [g_wrapItem setState:on ? NSControlStateValueOn : NSControlStateValueOff];
 }
 
 void btn_app_set_encoding_menu(int index, int enabled, int can_reopen) {

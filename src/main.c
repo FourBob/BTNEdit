@@ -81,6 +81,8 @@ typedef struct {
     BtnEncoding read_detected;
     long scroll_row;
     double scroll_accum;
+    long scroll_col;       /* ohne Zeilenumbruch: seitlich gescrollte Spalten */
+    double hscroll_accum;
     /* Schutz der Arbeit: disk = Stand der Datei beim letzten Laden/Sichern
      * (oder bei "Meine Version behalten"); weicht die Platte davon ab, hat
      * ein anderes Programm sie geaendert. missing_on_disk: die Datei ist
@@ -153,10 +155,11 @@ static CGRect g_bounds = { { 0, 0 }, { 900, 600 } };
 typedef enum {
     BTN_DRAG_NONE,
     BTN_DRAG_TEXT,      /* Selektion ziehen (mit Autoscroll am Rand) */
-    BTN_DRAG_SCROLLBAR  /* Scrollbalken-Knopf ziehen */
+    BTN_DRAG_SCROLLBAR, /* Scrollbalken-Knopf ziehen */
+    BTN_DRAG_HSCROLLBAR /* seitlichen Scrollbalken-Knopf ziehen */
 } BtnDrag;
 static BtnDrag g_drag = BTN_DRAG_NONE;
-static double g_drag_knob_offset; /* Knopf-Oberkante minus Klickpunkt */
+static double g_drag_knob_offset; /* Knopf-Oberkante (seitlich: linke Kante) minus Klickpunkt */
 
 static void ai_cancel(void); /* KI-Vervollstaendigung, weiter unten */
 
@@ -424,8 +427,18 @@ static void apply_show_invisibles(int on) {
     btn_app_set_show_invisibles_menu(on);
 }
 
-/* Zeile 1: Schriftgroesse, Zeile 2: unsichtbare Zeichen (0/1). Eine alte
- * Datei mit nur der ersten Zeile laesst die zweite Einstellung aus. */
+/* Darstellung > Zeilenumbruch (dritte Zeile der Prefs-Datei, Standard an). */
+static int g_wrap = 1;
+
+static void apply_wrap(int on) {
+    g_wrap = on;
+    btn_render_set_wrap(on);
+    btn_app_set_wrap_menu(on);
+}
+
+/* Zeile 1: Schriftgroesse, Zeile 2: unsichtbare Zeichen (0/1), Zeile 3:
+ * Zeilenumbruch (0/1). Eine alte Datei mit weniger Zeilen laesst die
+ * fehlenden Einstellungen aus. */
 static void save_prefs(void) {
     char *path = prefs_file_path();
     if (!path) {
@@ -436,7 +449,7 @@ static void save_prefs(void) {
     if (!f) {
         return;
     }
-    fprintf(f, "%.1f\n%d\n", btn_render_get_font_size(), g_show_invisibles);
+    fprintf(f, "%.1f\n%d\n%d\n", btn_render_get_font_size(), g_show_invisibles, g_wrap);
     fclose(f);
 }
 
@@ -451,11 +464,14 @@ static void load_prefs(void) {
         return;
     }
     double size;
-    int invisibles;
+    int invisibles, wrap;
     if (fscanf(f, "%lf", &size) == 1) {
         btn_render_set_font_size(size);
         if (fscanf(f, "%d", &invisibles) == 1) {
             apply_show_invisibles(invisibles != 0);
+            if (fscanf(f, "%d", &wrap) == 1) {
+                apply_wrap(wrap != 0);
+            }
         }
     }
     fclose(f);
@@ -515,6 +531,20 @@ static size_t build_current_rows(const BtnRow **out_rows) {
     return row_count;
 }
 
+/* Seitlich (ohne Umbruch): scroll_col auf [0, breiteste Zeile + 1 - sichtbare
+ * Spalten]; mit Umbruch immer 0 (btn_hscroll_max()). */
+static void clamp_hscroll(void) {
+    Document *d = active_doc();
+    CGRect cb = content_bounds();
+    long max_col = btn_hscroll_max(cb, btn_layout_max_cols(&d->editor, btn_layout_text_width(cb)));
+    if (d->scroll_col > max_col) {
+        d->scroll_col = max_col;
+    }
+    if (d->scroll_col < 0) {
+        d->scroll_col = 0;
+    }
+}
+
 /* Klemmt scroll_row des aktiven Dokuments auf [0, row_count - Sichtkapazitaet]
  * - row_count wird uebergeben statt selbst neu gebaut, damit Aufrufer, die
  * das Layout schon haben (z.B. sync_scroll_to_cursor), es nicht ein zweites
@@ -531,6 +561,7 @@ static void clamp_scroll_to_row_count(long row_count) {
     if (d->scroll_row > max_scroll) {
         d->scroll_row = max_scroll;
     }
+    clamp_hscroll();
 }
 
 static void clamp_scroll(void) {
@@ -553,6 +584,15 @@ static void sync_scroll_to_cursor(void) {
         d->scroll_row = cur_row;
     } else if (cur_row >= d->scroll_row + capacity) {
         d->scroll_row = cur_row - capacity + 1;
+    }
+    if (!g_wrap && row_count > 0) {
+        long col = (long)editor_visual_column_in_range(&d->editor, rows[cur_row].start, d->editor.cursor);
+        long cols = btn_visible_col_capacity(btn_layout_text_width(content_bounds()));
+        if (col < d->scroll_col) {
+            d->scroll_col = col;
+        } else if (col >= d->scroll_col + cols) {
+            d->scroll_col = col - cols + 1;
+        }
     }
     clamp_scroll_to_row_count((long)row_count);
 }
@@ -671,6 +711,8 @@ static int add_tab(void) {
     mark_doc_saved(d);
     d->scroll_row = 0;
     d->scroll_accum = 0.0;
+    d->scroll_col = 0;
+    d->hscroll_accum = 0.0;
     d->label_cache_valid = 0;
     memset(&d->disk, 0, sizeof(d->disk));
     memset(&d->changed, 0, sizeof(d->changed));
@@ -3596,7 +3638,8 @@ static void on_draw(CGContextRef ctx, CGRect bounds) {
         snprintf(eol_label, sizeof(eol_label), "%s \xC2\xB7 %s", btn_enc_name(active->enc), eol_part);
     }
     btn_render_set_footer_eol(eol_label);
-    btn_render_set_scrollbar_active(g_drag == BTN_DRAG_SCROLLBAR);
+    btn_render_set_scrollbar_active(g_drag == BTN_DRAG_SCROLLBAR ? BTN_SCROLLBAR_VERTICAL
+                                    : g_drag == BTN_DRAG_HSCROLLBAR ? BTN_SCROLLBAR_HORIZONTAL : 0);
     btn_render_set_ghost_text(ghost_visible() ? g_ghost.text : NULL, g_ghost.len);
     /* Hier statt bei jeder Layout-Aenderung (Fenstergroesse, Suchleiste):
      * der Shim setzt die Flaechen nur neu, wenn sie sich geaendert haben. */
@@ -3610,7 +3653,7 @@ static void on_draw(CGContextRef ctx, CGRect bounds) {
                                g_focus == BTN_FOCUS_SEARCH    ? BTN_MARKED_SEARCH
                                : g_focus == BTN_FOCUS_REPLACE ? BTN_MARKED_REPLACE
                                                               : BTN_MARKED_DOCUMENT);
-    btn_render_frame(ctx, content_bounds(), &active->editor, active->scroll_row,
+    btn_render_frame(ctx, content_bounds(), &active->editor, active->scroll_row, active->scroll_col,
                       btn_highlight_lang_for_path(active->path),
                       g_match_starts, g_match_ends, render_match_count);
 }
@@ -4102,7 +4145,7 @@ static CGRect ti_caret_rect(long loc) {
     CGRect r;
     if (g_focus == BTN_FOCUS_DOCUMENT) {
         Document *d = active_doc();
-        r = btn_render_caret_rect(&d->editor, content_bounds(), d->scroll_row, pos);
+        r = btn_render_caret_rect(&d->editor, content_bounds(), d->scroll_row, d->scroll_col, pos);
     } else {
         r = btn_render_find_caret_rect(g_bounds, ed, g_focus == BTN_FOCUS_REPLACE, pos);
     }
@@ -4126,23 +4169,34 @@ static void on_resize(CGSize size) {
  * (> top) oder unter (< bottom) den sichtbaren Rows steht: negativ = nach
  * oben, 0 = innerhalb. Je weiter draussen, desto schneller - hoechstens
  * max_rows (eine Seite). */
+static long autoscroll_steps(double dist, double unit, long max_steps) {
+    long n = 1 + (long)(dist / unit);
+    if (n > max_steps) {
+        n = max_steps;
+    }
+    return n > 0 ? n : 1;
+}
+
 static long autoscroll_rows(double y, double top, double bottom, long max_rows) {
-    double dist;
-    long sign;
     if (y > top) {
-        dist = y - top;
-        sign = -1;
-    } else if (y < bottom) {
-        dist = bottom - y;
-        sign = 1;
-    } else {
-        return 0;
+        return -autoscroll_steps(y - top, BTN_LINE_HEIGHT, max_rows);
     }
-    long n = 1 + (long)(dist / BTN_LINE_HEIGHT);
-    if (n > max_rows) {
-        n = max_rows;
+    if (y < bottom) {
+        return autoscroll_steps(bottom - y, BTN_LINE_HEIGHT, max_rows);
     }
-    return sign * (n > 0 ? n : 1);
+    return 0;
+}
+
+/* Dasselbe seitlich (ohne Umbruch): Spalten pro Takt, wenn die Maus links
+ * (< left, negativ) oder rechts (> right) der sichtbaren Spalten steht. */
+static long autoscroll_cols(double x, double left, double right, double char_width, long max_cols) {
+    if (x < left) {
+        return -autoscroll_steps(left - x, char_width, max_cols);
+    }
+    if (x > right) {
+        return autoscroll_steps(x - right, char_width, max_cols);
+    }
+    return 0;
 }
 
 /* Markieren per Ziehen bis (x, y). Steht die Maus ueber der ersten Row
@@ -4160,18 +4214,35 @@ static void drag_select_to(double x, double y, int tick) {
     double top, bottom;
     btn_text_rows_extent(cb, &top, &bottom);
     long step = autoscroll_rows(y, top, BTN_FOOTER_HEIGHT, visible_line_capacity());
-    if (step != 0 && tick) {
+    long hstep = 0;
+    double left = 0.0, right = 0.0, char_width = btn_render_char_width();
+    long cols = btn_visible_col_capacity(btn_layout_text_width(cb));
+    if (!g_wrap) {
+        btn_text_cols_extent(cb, &left, &right);
+        hstep = autoscroll_cols(x, left, right, char_width, cols);
+    }
+    if ((step != 0 || hstep != 0) && tick) {
         doc->scroll_row += step;
+        doc->scroll_col += hstep;
         clamp_scroll_to_row_count(row_count);
     }
     long max_scroll = row_count - visible_line_capacity();
-    btn_app_set_autoscroll(step < 0 ? doc->scroll_row > 0 : step > 0 && doc->scroll_row < max_scroll);
+    long max_col = btn_hscroll_max(cb, btn_layout_max_cols(&doc->editor, btn_layout_text_width(cb)));
+    int more_rows = step < 0 ? doc->scroll_row > 0 : step > 0 && doc->scroll_row < max_scroll;
+    int more_cols = hstep < 0 ? doc->scroll_col > 0 : hstep > 0 && doc->scroll_col < max_col;
+    btn_app_set_autoscroll(more_rows || more_cols);
     if (y > top) {
         y = top - BTN_LINE_HEIGHT / 2.0;
     } else if (y < bottom) {
         y = bottom + BTN_LINE_HEIGHT / 2.0;
     }
-    editor_set_cursor(&doc->editor, btn_hit_test(&doc->editor, cb, x, y, doc->scroll_row), 1);
+    /* Rechts nur bis zur letzten sichtbaren Spalte - sonst holte
+     * sync_scroll_to_cursor() den Cursor schon bei jeder Mausbewegung ins
+     * Bild, am Takt vorbei (links klemmt btn_hit_test() selbst auf Spalte 0). */
+    if (hstep > 0) {
+        x = left + (double)(cols - 1) * char_width;
+    }
+    editor_set_cursor(&doc->editor, btn_hit_test(&doc->editor, cb, x, y, doc->scroll_row, doc->scroll_col), 1);
 }
 
 /* Klick in den Scrollbalken-Streifen: auf den Knopf = ziehen, darueber/
@@ -4212,13 +4283,52 @@ static void scrollbar_drag_to(double y) {
     clamp_scroll_to_row_count((long)row_count);
 }
 
+/* Seitlicher Scrollbalken (nur ohne Umbruch, Streifen unten im Textbereich
+ * ueber der Statuszeile): auf den Knopf = ziehen, links/rechts davon = eine
+ * Seite blaettern. 0 = nicht behandelt (kein Knopf oder daneben). */
+static int hscrollbar_mouse_down(double x, double y) {
+    CGRect cb = content_bounds();
+    Document *d = active_doc();
+    long max_cols = btn_layout_max_cols(&d->editor, btn_layout_text_width(cb));
+    CGRect knob;
+    if (!btn_hscrollbar_knob(cb, max_cols, d->scroll_col, &knob)) {
+        return 0;
+    }
+    double left, right;
+    btn_text_cols_extent(cb, &left, &right);
+    double strip_top = knob.origin.y + knob.size.height + (knob.origin.y - BTN_FOOTER_HEIGHT);
+    if (x < left || x >= cb.size.width - BTN_SCROLLBAR_WIDTH || y < BTN_FOOTER_HEIGHT || y >= strip_top) {
+        return 0;
+    }
+    long cols = btn_visible_col_capacity(btn_layout_text_width(cb));
+    long page = cols > 1 ? cols - 1 : 1;
+    if (x < knob.origin.x) {
+        d->scroll_col -= page;
+    } else if (x >= knob.origin.x + knob.size.width) {
+        d->scroll_col += page;
+    } else {
+        g_drag = BTN_DRAG_HSCROLLBAR;
+        g_drag_knob_offset = knob.origin.x - x;
+    }
+    clamp_hscroll();
+    return 1;
+}
+
+static void hscrollbar_drag_to(double x) {
+    CGRect cb = content_bounds();
+    Document *d = active_doc();
+    long max_cols = btn_layout_max_cols(&d->editor, btn_layout_text_width(cb));
+    d->scroll_col = btn_hscrollbar_col_for_knob_left(cb, max_cols, x + g_drag_knob_offset);
+    clamp_hscroll();
+}
+
 static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, unsigned long modifierFlags) {
     int shift = (modifierFlags & BTN_MOD_SHIFT) != 0;
 
     switch (phase) {
         case BTN_MOUSE_DOWN: {
             stop_mouse_drag();
-            if (scrollbar_mouse_down(x, y)) {
+            if (scrollbar_mouse_down(x, y) || hscrollbar_mouse_down(x, y)) {
                 /* Scrollen bewegt den Cursor nicht (kein sync_scroll_to_cursor())
                  * und laesst eine laufende Eingabe offen - wie das Mausrad. */
                 btn_text_input_invalidate();
@@ -4245,7 +4355,7 @@ static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, 
              * de-fokussiert. */
             g_focus = BTN_FOCUS_DOCUMENT;
             Document *doc = active_doc();
-            size_t offset = btn_hit_test(&doc->editor, content_bounds(), x, y, doc->scroll_row);
+            size_t offset = btn_hit_test(&doc->editor, content_bounds(), x, y, doc->scroll_row, doc->scroll_col);
             if (clickCount >= 3) {
                 editor_select_line_at(&doc->editor, offset);
             } else if (clickCount == 2) {
@@ -4258,9 +4368,13 @@ static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, 
         }
         case BTN_MOUSE_DRAGGED:
         case BTN_MOUSE_AUTOSCROLL:
-            if (g_drag == BTN_DRAG_SCROLLBAR) {
+            if (g_drag == BTN_DRAG_SCROLLBAR || g_drag == BTN_DRAG_HSCROLLBAR) {
                 if (phase == BTN_MOUSE_DRAGGED) {
-                    scrollbar_drag_to(y);
+                    if (g_drag == BTN_DRAG_SCROLLBAR) {
+                        scrollbar_drag_to(y);
+                    } else {
+                        hscrollbar_drag_to(x);
+                    }
                     btn_text_input_invalidate();
                     btn_app_request_redraw();
                 }
@@ -4286,16 +4400,26 @@ static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, 
     btn_app_request_redraw();
 }
 
-static void on_scroll(double delta_y) {
+/* Mausrad/Trackpad: senkrecht in Zeilen, ohne Umbruch auch seitlich in
+ * Spalten (Shift+Mausrad liefert macOS schon als delta_x). */
+static void on_scroll(double delta_x, double delta_y) {
     btn_text_input_invalidate(); /* Kandidatenfenster folgt dem Cursor */
     Document *doc = active_doc();
     doc->scroll_accum += delta_y;
     long lines = (long)(doc->scroll_accum / BTN_LINE_HEIGHT);
-    if (lines == 0) {
+    doc->scroll_accum -= (double)lines * BTN_LINE_HEIGHT;
+    long cols = 0;
+    if (!g_wrap) {
+        double char_width = btn_render_char_width();
+        doc->hscroll_accum += delta_x;
+        cols = (long)(doc->hscroll_accum / char_width);
+        doc->hscroll_accum -= (double)cols * char_width;
+    }
+    if (lines == 0 && cols == 0) {
         return;
     }
-    doc->scroll_accum -= (double)lines * BTN_LINE_HEIGHT;
     doc->scroll_row -= lines;
+    doc->scroll_col -= cols;
     clamp_scroll();
     btn_app_request_redraw();
 }
@@ -4440,6 +4564,18 @@ static void perform_line_command(int tag) {
     }
 }
 
+/* Darstellung > Zeilenumbruch: alle Tabs fangen seitlich wieder links an,
+ * der Cursor bleibt im Bild (die anderen Tabs holen das beim Wechsel nach). */
+static void toggle_wrap(void) {
+    apply_wrap(!g_wrap);
+    for (int i = 0; i < g_doc_count; i++) {
+        g_docs[i].scroll_col = 0;
+        g_docs[i].hscroll_accum = 0.0;
+    }
+    sync_scroll_to_cursor();
+    save_prefs();
+}
+
 static void on_menu(int tag) {
     char *clip;
 
@@ -4498,6 +4634,9 @@ static void on_menu(int tag) {
         case BTN_MENU_AI_MODELS_REFRESH:
             load_ai_config();
             ai_refresh_models(1);
+            break;
+        case BTN_MENU_WRAP:
+            toggle_wrap();
             break;
         case BTN_MENU_SHOW_INVISIBLES:
             apply_show_invisibles(!g_show_invisibles);

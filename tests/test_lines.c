@@ -24,6 +24,10 @@ static void btn_beep(void) { g_beeps++; }
 
 #include "invisibles_extracted.h"
 
+static size_t build_invisibles(const unsigned char *raw, size_t len, int line_end, char *out, int *any_mark) {
+    return build_invisibles_from(raw, len, 0, line_end, out, any_mark);
+}
+
 static long fails = 0, checks = 0;
 #define CHECK(c, ...) do { checks++; if (!(c)) { if (fails < 40) { printf("FAIL: " __VA_ARGS__); printf("\n"); } fails++; } } while (0)
 
@@ -306,6 +310,11 @@ static void test_invisibles(void) {
     CHECK(strcmp(out, "\xC2\xAC") == 0 && any, "empty line: just the line end");
     build_invisibles((const unsigned char *)"abc", 3, 0, out, &any);
     CHECK(!any, "nothing to mark: nothing drawn");
+    /* Ausschnitt ab Spalte 6 (ohne Umbruch): der Tab reicht bis Spalte 8 */
+    build_invisibles_from((const unsigned char *)"\tx y", 4, 6, 1, out, &any);
+    CHECK(strcmp(out, "\xC2\xBB  \xC2\xB7 \xC2\xAC") == 0, "slice from column 6: tab 2 wide (%s)", out);
+    build_invisibles_from((const unsigned char *)"\t", 1, 8, 0, out, &any);
+    CHECK(strcmp(out, "\xC2\xBB   ") == 0, "slice on a tab stop: full tab width");
 
     /* Fuzz gegen die Spaltenregel des Editors: jeder Marker genau auf der
      * Spalte seines Zeichens, Gesamtbreite = Breite der Row */

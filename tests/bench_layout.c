@@ -56,9 +56,9 @@ static void check(int cond, const char *label) {
 /* Arbeit eines Frames nach der ALTEN Methode (was vorher pro Tastendruck lief). */
 static void old_frame(Editor *ed, const BtnLangSpec *lang, double width, size_t first_line, size_t visible) {
     size_t n;
-    BtnRow *r1 = layout_build(ed, chars_per_row_for(width), &n, NULL, NULL); /* sync_scroll_to_cursor */
+    BtnRow *r1 = layout_build(ed, chars_per_row_for(width), &n, NULL, NULL, NULL); /* sync_scroll_to_cursor */
     free(r1);
-    BtnRow *rows = layout_build(ed, chars_per_row_for(width), &n, NULL, NULL); /* btn_render_frame */
+    BtnRow *rows = layout_build(ed, chars_per_row_for(width), &n, NULL, NULL, NULL); /* btn_render_frame */
     volatile int st = old_comment_state_before_line(ed, lang, first_line);
     (void)st;
     for (size_t l = first_line; l < first_line + visible; l++) {
@@ -136,7 +136,7 @@ int main(void) {
     const size_t visible = 45;
 
     size_t n_rows;
-    BtnRow *probe = layout_build(&ed, chars_per_row_for(width), &n_rows, NULL, NULL);
+    BtnRow *probe = layout_build(&ed, chars_per_row_for(width), &n_rows, NULL, NULL, NULL);
     size_t first_row = n_rows - visible;
     size_t first_line = probe[first_row].logical_line;
     free(probe);

@@ -118,7 +118,7 @@ static int rows_equal(const BtnRow *a, const BtnRow *b, size_t n) {
 static void verify(Editor *ed, const BtnLangSpec *lang, double width) {
     size_t n_cached, n_fresh, words_fresh;
     const BtnRow *cached = btn_layout_get(ed, width, &n_cached);
-    BtnRow *fresh = layout_build(ed, chars_per_row_for(width), &n_fresh, &words_fresh, NULL);
+    BtnRow *fresh = layout_build(ed, chars_per_row_for(width), &n_fresh, &words_fresh, NULL, NULL);
 
     checks++;
     if (n_cached != n_fresh || !rows_equal(cached, fresh, n_fresh)) {

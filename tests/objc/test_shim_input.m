@@ -362,6 +362,12 @@ int main(void) {
         CHECK(it && [it state] == NSControlStateValueOn, "Show Invisibles checkmark on");
         btn_app_set_show_invisibles_menu(0);
         CHECK(it && [it state] == NSControlStateValueOff, "and off again");
+        it = find_item(menubar, @"u", optcmd);
+        CHECK(it && [it tag] == BTN_MENU_WRAP && [it state] == NSControlStateValueOn, "Option+Cmd+U = Wrap Lines (on by default)");
+        btn_app_set_wrap_menu(0);
+        CHECK(it && [it state] == NSControlStateValueOff, "Wrap Lines checkmark off");
+        btn_app_set_wrap_menu(1);
+        CHECK(it && [it state] == NSControlStateValueOn, "and on again");
         NSMenuItem *aiItem = nil;
         for (NSMenuItem *m in [[[menubar itemAtIndex:2] submenu] itemArray]) {
             if ([m tag] == BTN_MENU_AI_COMPLETION) {

@@ -45,6 +45,7 @@ enum {
     BTN_MENU_MOVE_LINES_UP,
     BTN_MENU_MOVE_LINES_DOWN,
     BTN_MENU_SHOW_INVISIBLES,
+    BTN_MENU_WRAP,
     BTN_MENU_AI_COMPLETION,
     BTN_MENU_AI_TEST,
     BTN_MENU_AI_MODELS_REFRESH,
@@ -90,9 +91,9 @@ typedef void (*btn_key_callback)(const char *characters, unsigned short keycode,
 typedef void (*btn_resize_callback)(CGSize newSize);
 typedef void (*btn_menu_callback)(int tag);
 typedef void (*btn_mouse_callback)(btn_mouse_phase phase, double x, double y, int clickCount, unsigned long modifierFlags);
-/* delta_y in Punkten, positiv = nach oben scrollen (Trackpad-"natural
- * scrolling" ist bereits vom System eingerechnet). */
-typedef void (*btn_scroll_callback)(double delta_y);
+/* Deltas in Punkten, positiv = nach oben bzw. nach links scrollen
+ * (Trackpad-"natural scrolling" ist bereits vom System eingerechnet). */
+typedef void (*btn_scroll_callback)(double delta_x, double delta_y);
 /* Rueckgabe: 1 = Fenster schliessen/App beenden erlauben, 0 = abbrechen.
  * Wird sowohl vom roten Schliessen-Knopf (windowShouldClose:) als auch von
  * Cmd+Q/"Beende" (applicationShouldTerminate:) aufgerufen, damit keiner
@@ -201,6 +202,8 @@ void btn_app_set_line_ending_menu(int index, int enabled);
 
 /* Haekchen bei Darstellung > Unsichtbare Zeichen einblenden. */
 void btn_app_set_show_invisibles_menu(int on);
+/* Haekchen bei Darstellung > Zeilenumbruch. */
+void btn_app_set_wrap_menu(int on);
 /* Haekchen bei Bearbeiten > KI-Vervollstaendigung. */
 void btn_app_set_ai_menu(int on);
 /* Baut Bearbeiten > KI-Modell neu: status (grau, darf NULL sein); gibt es

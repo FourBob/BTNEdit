@@ -59,6 +59,7 @@ TESTS=(
     "test_save_links_perms||"
     "test_file_io|src/filestamp.c|"
     "test_font_size||"
+    "test_prefs||"
     "test_row_capacity||"
     "test_regex_budget||"
     "test_tab_label||"

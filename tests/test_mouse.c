@@ -282,12 +282,197 @@ static void test_scrollbar_clicks(void) {
     CHECK(ed->cursor == cur && g_drag == BTN_DRAG_NONE, "click in the footer does nothing");
 }
 
+/* Ohne Zeilenumbruch: eine Row je Zeile, seitliches Scrollen per Cursor,
+ * Mausrad, Scrollbalken und Autoscroll beim Markieren. */
+static void set_wide_lines(void) {
+    /* Zeile 0: 300 Zeichen, Zeile 1: kurz, Zeile 2: Tab + 150 Zeichen */
+    char buf[512];
+    size_t n = 0;
+    for (int i = 0; i < 300; i++) {
+        buf[n++] = (char)('a' + i % 26);
+    }
+    buf[n++] = '\n';
+    memcpy(buf + n, "short\n\t", 7);
+    n += 7;
+    for (int i = 0; i < 150; i++) {
+        buf[n++] = 'x';
+    }
+    editor_set_text(&g_doc.editor, buf, n);
+    g_doc.scroll_row = 0;
+    g_doc.scroll_col = 0;
+    g_doc.hscroll_accum = 0.0;
+}
+
+static void test_nowrap(void) {
+    Editor *ed = &g_doc.editor;
+    CGRect cb = content_bounds();
+    double width = btn_layout_text_width(cb);
+    long cols = btn_visible_col_capacity(width);
+    CHECK(cols > 20 && cols < 300, "test window shows part of a 300-column line (%ld)", cols);
+    set_wide_lines();
+    const BtnRow *rows;
+
+    /* Mit Umbruch: mehrere Rows, scroll_col zaehlt nicht */
+    btn_render_set_wrap(1);
+    size_t wrapped = build_current_rows(&rows);
+    CHECK(wrapped > 3, "wrap on: long lines take several rows (%zu)", wrapped);
+    CHECK(btn_hscroll_max(cb, btn_layout_max_cols(ed, width)) == 0, "wrap on: nothing to scroll sideways");
+    CGRect k;
+    CHECK(!btn_hscrollbar_knob(cb, 300, 0, &k), "wrap on: no horizontal knob");
+    CHECK(btn_hit_test(ed, cb, col_x(3), row_y(0), 0, 50) == 3, "wrap on: hit test ignores scroll_col");
+
+    btn_render_set_wrap(0);
+    size_t n = build_current_rows(&rows);
+    CHECK(n == 3 && rows[0].len == 300 && rows[2].len == 151 && !rows[1].is_continuation && !rows[2].is_continuation,
+          "wrap off: one row per line (%zu)", n);
+    CHECK(btn_layout_max_cols(ed, width) == 300, "longest line 300 columns (%ld)", btn_layout_max_cols(ed, width));
+    long max_col = btn_hscroll_max(cb, 300);
+    CHECK(max_col == 300 + 1 - cols, "scroll range = longest line + cursor column - visible (%ld)", max_col);
+    editor_set_text(ed, "\t\tab", 4);
+    CHECK(btn_layout_max_cols(ed, width) == 2 * (long)editor_tab_advance(0) + 2, "tabs count with their width");
+    set_wide_lines();
+
+    /* Hit-Test und Cursor-Rechteck mit scroll_col */
+    CHECK(btn_hit_test(ed, cb, col_x(5), row_y(0), 0, 40) == 45, "hit test adds scroll_col");
+    CHECK(btn_hit_test(ed, cb, col_x(5), row_y(1), 0, 40) == 301 + 5, "short line: clamps to its end");
+
+    /* Cursor sichtbar halten */
+    editor_set_cursor(ed, 300, 0); /* Ende der langen Zeile */
+    sync_scroll_to_cursor();
+    CHECK(g_doc.scroll_col == 300 - cols + 1, "cursor at column 300: scrolled right (%ld)", g_doc.scroll_col);
+    CHECK(g_doc.scroll_col == max_col, "exactly the maximum");
+    editor_set_cursor(ed, 250, 0);
+    sync_scroll_to_cursor();
+    CHECK(g_doc.scroll_col == 300 - cols + 1, "visible column: no scrolling");
+    editor_set_cursor(ed, 10, 0);
+    sync_scroll_to_cursor();
+    CHECK(g_doc.scroll_col == 10, "cursor left of the view: scroll to it (%ld)", g_doc.scroll_col);
+    editor_set_cursor(ed, 301, 0); /* Anfang der kurzen Zeile */
+    sync_scroll_to_cursor();
+    CHECK(g_doc.scroll_col == 0, "line start: back to the left edge");
+    size_t tab_line = 301 + 6;
+    editor_set_cursor(ed, tab_line + 1, 0); /* hinter dem Tab */
+    g_doc.scroll_col = 100;
+    sync_scroll_to_cursor();
+    CHECK(g_doc.scroll_col == (long)editor_tab_advance(0), "column after a tab counts the tab width (%ld)", g_doc.scroll_col);
+
+    /* Klemmen: kuerzer werdender Text */
+    g_doc.scroll_col = max_col;
+    editor_set_cursor(ed, 0, 0);
+    editor_set_text(ed, "abc", 3);
+    clamp_scroll();
+    CHECK(g_doc.scroll_col == 0, "text fits again: scroll_col clamps to 0");
+    set_wide_lines();
+    g_doc.scroll_col = -5;
+    clamp_scroll();
+    CHECK(g_doc.scroll_col == 0, "negative scroll_col clamps to 0");
+
+    /* Mausrad/Trackpad: delta_x in Punkten, positiv = nach links */
+    on_scroll(-8.0 * 3, 0.0);
+    CHECK(g_doc.scroll_col == 3 && g_doc.scroll_row == 0, "wheel left 3 columns (%ld)", g_doc.scroll_col);
+    on_scroll(-5.0, 0.0);
+    CHECK(g_doc.scroll_col == 3, "less than a column: accumulated");
+    on_scroll(-5.0, 0.0);
+    CHECK(g_doc.scroll_col == 4, "accumulated to a full column (%ld)", g_doc.scroll_col);
+    on_scroll(8.0 * 1000, 0.0);
+    CHECK(g_doc.scroll_col == 0, "wheel far right: clamps at 0");
+    on_scroll(-8.0 * 100000, 0.0);
+    CHECK(g_doc.scroll_col == max_col, "wheel far left: clamps at the maximum (%ld)", g_doc.scroll_col);
+    g_doc.scroll_col = 0;
+
+    /* Seitlicher Scrollbalken */
+    CHECK(btn_hscrollbar_knob(cb, 300, 0, &k), "wrap off: horizontal knob");
+    double track_left = GUTTER_WIDTH + LEFT_PADDING, track_w = width - SCROLLBAR_INSET;
+    CHECK(fabs(k.origin.x - track_left) < 1e-9 && k.origin.y == BTN_FOOTER_HEIGHT + SCROLLBAR_INSET &&
+          fabs(k.size.width - track_w * (double)cols / 301.0) < 1e-9,
+          "knob at the left, width = visible share");
+    CGRect vk;
+    CHECK(k.origin.x + k.size.width <= 900 - BTN_SCROLLBAR_WIDTH, "knob stays left of the vertical strip");
+    (void)vk;
+    long bad = 0;
+    for (long c = 0; c <= max_col; c++) {
+        CGRect kc;
+        btn_hscrollbar_knob(cb, 300, c, &kc);
+        if (btn_hscrollbar_col_for_knob_left(cb, 300, kc.origin.x) != c) {
+            bad++;
+        }
+    }
+    CHECK(bad == 0, "knob position -> scroll column round trip (%ld mismatches)", bad);
+    CHECK(btn_hscrollbar_col_for_knob_left(cb, 300, -1e6) == 0 && btn_hscrollbar_col_for_knob_left(cb, 300, 1e6) == max_col,
+          "knob dragged past the ends clamps");
+    CHECK(!btn_hscrollbar_knob(cb, cols - 1, 0, &k), "everything fits: no knob");
+
+    editor_set_cursor(ed, 0, 0);
+    btn_hscrollbar_knob(cb, 300, 0, &k);
+    double ky = k.origin.y + k.size.height / 2;
+    mouse(BTN_MOUSE_DOWN, k.origin.x + k.size.width + 20, ky);
+    CHECK(g_doc.scroll_col == cols - 1 && g_drag == BTN_DRAG_NONE && ed->cursor == 0,
+          "click right of the knob: one page right, cursor stays (%ld)", g_doc.scroll_col);
+    mouse(BTN_MOUSE_UP, 0, ky);
+    btn_hscrollbar_knob(cb, 300, g_doc.scroll_col, &k);
+    mouse(BTN_MOUSE_DOWN, k.origin.x - 2, ky);
+    CHECK(g_doc.scroll_col == 0, "click left of the knob: one page left");
+    mouse(BTN_MOUSE_UP, 0, ky);
+    btn_hscrollbar_knob(cb, 300, 0, &k);
+    double kx = k.origin.x + k.size.width / 2;
+    mouse(BTN_MOUSE_DOWN, kx, ky);
+    CHECK(g_drag == BTN_DRAG_HSCROLLBAR && ed->cursor == 0, "click on the knob: knob drag");
+    mouse(BTN_MOUSE_AUTOSCROLL, kx + 100, ky);
+    CHECK(g_doc.scroll_col == 0, "autoscroll tick ignored while dragging the knob");
+    mouse(BTN_MOUSE_DRAGGED, kx + 100, ky + 300); /* senkrecht egal */
+    long expect = btn_hscrollbar_col_for_knob_left(cb, 300, k.origin.x + 100);
+    CHECK(g_doc.scroll_col == expect && expect > 0 && g_doc.scroll_row == 0, "dragging the knob scrolls sideways (%ld)", expect);
+    mouse(BTN_MOUSE_DRAGGED, kx + 5000, ky);
+    CHECK(g_doc.scroll_col == max_col, "dragged past the right end: maximum");
+    mouse(BTN_MOUSE_UP, kx + 5000, ky);
+    CHECK(g_doc.scroll_col == max_col && g_drag == BTN_DRAG_NONE && ed->cursor == 0, "mouse up keeps the position");
+    /* Ueber dem Streifen: normaler Text */
+    g_doc.scroll_col = 0;
+    mouse(BTN_MOUSE_DOWN, kx, k.origin.y + k.size.height + SCROLLBAR_INSET + 1);
+    CHECK(g_drag == BTN_DRAG_TEXT, "above the strip: text click");
+    mouse(BTN_MOUSE_UP, 0, 0);
+
+    /* Markieren nach rechts ueber den Rand: Autoscroll im Takt */
+    set_wide_lines();
+    editor_set_cursor(ed, 0, 0);
+    mouse(BTN_MOUSE_DOWN, col_x(2), row_y(0));
+    double right = GUTTER_WIDTH + LEFT_PADDING + (double)cols * 8.0;
+    mouse(BTN_MOUSE_DRAGGED, right + 20, row_y(0));
+    CHECK(g_autoscroll_on && g_doc.scroll_col == 0, "past the right edge: autoscroll starts, no jump yet (%ld)", g_doc.scroll_col);
+    CHECK(ed->cursor == (size_t)cols - 1 && editor_has_selection(ed), "selection to the last visible column (%zu)", ed->cursor);
+    mouse(BTN_MOUSE_AUTOSCROLL, right + 20, row_y(0));
+    CHECK(g_doc.scroll_col == 3, "tick: 1 + 20/8 columns (%ld)", g_doc.scroll_col);
+    CHECK(ed->cursor == (size_t)(3 + cols - 1), "selection follows (%zu)", ed->cursor);
+    for (int i = 0; i < 200; i++) {
+        mouse(BTN_MOUSE_AUTOSCROLL, right + 20, row_y(0));
+    }
+    CHECK(g_doc.scroll_col == max_col && !g_autoscroll_on, "at the end the autoscroll stops (%ld)", g_doc.scroll_col);
+    mouse(BTN_MOUSE_DRAGGED, GUTTER_WIDTH - 10, row_y(0));
+    CHECK(g_autoscroll_on, "left of the text: autoscroll back");
+    long before = g_doc.scroll_col;
+    mouse(BTN_MOUSE_AUTOSCROLL, GUTTER_WIDTH - 10, row_y(0));
+    CHECK(g_doc.scroll_col < before && ed->cursor == (size_t)g_doc.scroll_col, "tick left, selection to the first visible column");
+    mouse(BTN_MOUSE_UP, GUTTER_WIDTH - 10, row_y(0));
+    CHECK(!g_autoscroll_on, "mouse up: autoscroll off");
+
+    /* Mit Umbruch: seitlich nichts */
+    btn_render_set_wrap(1);
+    g_doc.scroll_col = 0;
+    on_scroll(-800.0, 0.0);
+    CHECK(g_doc.scroll_col == 0, "wrap on: wheel does not scroll sideways");
+    g_doc.scroll_col = 7;
+    clamp_scroll();
+    CHECK(g_doc.scroll_col == 0, "wrap on: clamp resets scroll_col");
+    set_lines(10);
+}
+
 int main(void) {
     editor_init(&g_doc.editor);
     test_geometry();
     test_autoscroll_rows();
     test_drag_select();
     test_scrollbar_clicks();
+    test_nowrap();
     editor_free(&g_doc.editor);
     printf("%s: %ld checks, %ld failures\n", fails ? "FAILED" : "ALL PASSED", checks, fails);
     return fails != 0;

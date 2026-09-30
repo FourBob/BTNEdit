@@ -42,6 +42,9 @@ HEADERS = {
         "perform_replace_current", "replace_all_in_editor", "perform_replace_all"]),
     "doc_extracted.h": ("main.c", ["include:encoding.h", "typedef:Document", "doc_has_edits", "doc_is_dirty", "mark_doc_saved"]),
     "focus_extracted.h": ("main.c", ["typedef:BtnFocus"]),
+    "prefs_extracted.h": ("main.c", [
+        "prefs_file_path", "var:g_show_invisibles", "apply_show_invisibles", "var:g_wrap", "apply_wrap",
+        "save_prefs", "load_prefs"]),
     "shortcuts_extracted.h": ("main.c", [
         "take_selection_as_search_text", "find_next_from_menu", "use_selection_for_find", "next_tab_index",
         "cycle_tab"]),
@@ -54,24 +57,30 @@ HEADERS = {
         "show_file_error", "set_doc_line_ending", "typedef:DecodedFile", "decode_file_bytes", "load_doc_contents",
         "discard_recovery", "open_file_path", "disk_content_changed", "confirm_save_as_utf8", "perform_save_doc",
         "#RELOAD_KEEP_CHOSEN", "reload_doc_as", "reload_doc", "set_doc_encoding", "reopen_doc_as"]),
+    "wrap_state_extracted.h": ("render.c", ["include:limits.h", "var:g_wrap", "#NO_WRAP_COLS", "btn_render_set_wrap"]),
     "render_pure_extracted.h": ("render.c", [
-        "rows_push", "layout_build", "struct:g_layout", "btn_layout_get",
+        "include:wrap_state_extracted.h", "screen_chars_per_row",
+        "rows_push", "layout_build", "struct:g_layout", "btn_layout_get", "btn_layout_max_cols",
         "btn_layout_row_for_offset", "btn_row_offset_for_column", "first_row_of_line",
         "line_bounds_from_rows", "row_of_line_start", "struct:g_cstate", "cstate_reserve",
         "comment_state_before_line"]),
-    "render_decode_extracted.h": ("render.c", ["decode_row_for_display"]),
+    "render_decode_extracted.h": ("render.c", ["decode_row_from_col", "decode_row_for_display"]),
     "render_helpers_extracted.h": ("render.c", ["utf8_safe_cut", "utf8_prefix_bytes"]),
     "cap_extracted.h": ("render.c", ["btn_visible_row_capacity"]),
     "fontsize_extracted.h": ("render.c", ["btn_render_set_font_size"]),
     "footer_fmt_extracted.h": ("render.c", ["btn_footer_format_ok"]),
     "mouse_render_extracted.h": ("render.c", [
+        "include:wrap_state_extracted.h",
         "#GUTTER_WIDTH", "#LINE_HEIGHT", "#LEFT_PADDING", "#TOP_PADDING", "chars_per_row_for",
         "btn_layout_text_width", "btn_hit_test", "btn_visible_row_capacity", "btn_text_rows_extent",
+        "btn_text_cols_extent", "btn_visible_col_capacity", "btn_render_char_width",
         "#SCROLLBAR_INSET", "#SCROLLBAR_KNOB_WIDTH", "typedef:ScrollbarTrack", "scrollbar_track",
         "btn_scrollbar_knob", "btn_scrollbar_row_for_knob_top",
+        "typedef:HScrollTrack", "btn_hscroll_max", "hscrollbar_track", "btn_hscrollbar_knob",
+        "btn_hscrollbar_col_for_knob_left",
         "btn_find_bar_geometry", "btn_text_cursor_rects"]),
     "drag_type_extracted.h": ("main.c", ["typedef:BtnDrag"]),
-    "invisibles_extracted.h": ("render.c", ["build_invisibles"]),
+    "invisibles_extracted.h": ("render.c", ["build_invisibles_from"]),
     "linecmd_extracted.h": ("main.c", ["perform_line_command"]),
     "ai_glue_extracted.h": ("main.c", [
         "#BTN_MAX_FILE_MB", "#BTN_MAX_FILE_SIZE", "typedef:BtnReadResult", "read_file_contents",
@@ -92,15 +101,22 @@ HEADERS = {
         "confirm_save_as_utf8", "perform_save_doc", "#RELOAD_KEEP_CHOSEN", "reload_doc_as", "reload_doc", "check_doc_on_disk", "autosave_recovery", "on_timer",
         "on_activate", "restore_into_tab", "restore_recovered_documents"]),
     "mouse_extracted.h": ("main.c", [
-        "content_bounds", "visible_line_capacity", "build_current_rows",
+        "content_bounds", "visible_line_capacity", "build_current_rows", "clamp_hscroll",
         "clamp_scroll_to_row_count", "clamp_scroll", "sync_scroll_to_cursor", "stop_mouse_drag",
-        "autoscroll_rows", "drag_select_to", "scrollbar_mouse_down", "scrollbar_drag_to", "on_mouse"]),
+        "autoscroll_steps", "autoscroll_rows", "autoscroll_cols", "drag_select_to", "scrollbar_mouse_down",
+        "scrollbar_drag_to", "hscrollbar_mouse_down", "hscrollbar_drag_to", "on_mouse", "on_scroll"]),
 }
 
 
 def extract(src, spec, path):
     if spec.startswith("include:"):  # Header, den der erzeugte Text braucht
         return '#include "' + spec[len("include:"):] + '"'
+    if spec.startswith("var:"):  # einzeilige Variable "static ... NAME = ...;"
+        name = spec[len("var:"):]
+        m = re.search(r"^static [^\n;(]*\b" + re.escape(name) + r"\b[^\n]*;$", src, re.M)
+        if not m:
+            sys.exit(f"{path}: Variable {name} nicht gefunden")
+        return m.group(0)
     if spec.startswith("#"):
         m = re.search(r"^#define " + re.escape(spec[1:]) + r"\b.*$", src, re.M)
         if not m:
@@ -142,9 +158,11 @@ def main():
         path = os.path.join(src_dir, src_name)
         src = cache.setdefault(path, open(path, encoding="utf-8").read())
         parts = [extract(src, s, path) for s in specs]
+        guard = "GEN_" + re.sub(r"\W", "_", header).upper()
         with open(os.path.join(out_dir, header), "w", encoding="utf-8") as f:
             f.write(f"/* Automatisch erzeugt aus {src_name} von tests/gen_headers.py - nicht bearbeiten. */\n")
-            f.write("\n".join(parts) + "\n")
+            f.write(f"#ifndef {guard}\n#define {guard}\n")  # mehrfach eingebunden (wrap_state)
+            f.write("\n".join(parts) + "\n#endif\n")
 
 
 if __name__ == "__main__":

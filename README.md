@@ -104,15 +104,19 @@ Klammern, Suchen/Ersetzen, Zeilen-Befehle) ist reine C-Logik und wird selbst
 
 ### Darstellung
 
-- Wortumbruch, Zeilennummern, Statuszeile (Position, Zeilen/Wörter/Zeichen,
+- Wortumbruch, abschaltbar (`⌥⌘U`, Darstellung > Zeilenumbruch): ohne
+  Umbruch eine Bildschirmzeile je Zeile, seitliches Scrollen per
+  Trackpad/Shift+Mausrad, seitlichem Scrollbalken unten und Autoscroll beim
+  Markieren; der Cursor bleibt im Bild. Gedruckt wird immer umgebrochen
+- Zeilennummern, Statuszeile (Position, Zeilen/Wörter/Zeichen,
   Kodierung und Zeilenende-Format, z.B. „UTF-8 · LF“)
 - Syntax-Highlighting: C/C++/Objective-C/Java, Python, Shell,
   JavaScript/TypeScript, Swift, Markdown, STL (ASCII), INI/Config, SVG,
   DXF (ASCII)
 - Unsichtbare Zeichen einblenden (`⌥⌘I`): Leerzeichen `·`, Tabs `»`,
   Zeilenenden `¬`
-- Dark Mode folgt automatisch dem System; Schriftgröße (`⌘+`/`⌘-`/`⌘0`) und
-  unsichtbare Zeichen werden über Neustarts hinweg gemerkt
+- Dark Mode folgt automatisch dem System; Schriftgröße (`⌘+`/`⌘-`/`⌘0`),
+  unsichtbare Zeichen und Zeilenumbruch werden über Neustarts hinweg gemerkt
 - Maus: I-Beam über dem Text, Scrollbalken (Knopf ziehen, daneben klicken
   blättert eine Seite), Markieren über den Fensterrand hinaus scrollt
   automatisch (je weiter draußen, desto schneller)
@@ -254,6 +258,7 @@ Nullbreite) schneiden sie ab.
 | Emoji-Palette | `⌃⌘Leertaste` |
 | Vergrößern / Verkleinern / Tatsächliche Größe | `⌘+` / `⌘-` / `⌘0` |
 | Unsichtbare Zeichen einblenden | `⌥⌘I` |
+| Zeilenumbruch ein/aus | `⌥⌘U` |
 | Nächster / vorheriger Tab | `⌃Tab` / `⌃⇧Tab` oder `⇧⌘]` / `⇧⌘[` |
 | Im Dock ablegen / Vollbild | `⌘M` / `⌃⌘F` |
 
@@ -262,7 +267,7 @@ Nullbreite) schneiden sie ab.
 | Datei | Inhalt |
 |---|---|
 | `~/.btnedit_recent` | Zuletzt geöffnete Dateien (eine pro Zeile) |
-| `~/.btnedit_prefs` | Schriftgröße, unsichtbare Zeichen ein/aus |
+| `~/.btnedit_prefs` | Schriftgröße, unsichtbare Zeichen ein/aus, Zeilenumbruch ein/aus |
 | `~/.btnedit_ai` | Einstellungen der KI-Vervollständigung (erst beim ersten Einschalten) |
 | `~/Library/Application Support/BTNEdit/Recovery/` | Wiederherstellungsdateien ungesicherter Dokumente und eine Sperrdatei je laufendem Programm; nach normalem Beenden leer bis auf die Sperrdatei |
 
@@ -355,7 +360,7 @@ diesen Tests Stubs.
 | `test_lines` | Kommentar ein/aus (Einrückung, Leerzeilen, `#`/`;`, Selektion, Undo), Duplizieren, Verschieben (Ränder, letzte Zeile ohne Umbruch, CRLF), Fuzz-Rückwege; Markierungen für unsichtbare Zeichen gegen die Spaltenregel; Menü-Verdrahtung aus `main.c` |
 | `test_textinput` | Eingabemethoden: UTF-16-Umrechnung, nachgestellte Abläufe (Tottaste, Pinyin, Akzent-Menü, Emoji, Suchfeld) mit dem Code aus `main.c` |
 | `test_shortcuts` | Weitersuchen, Auswahl für Suche (auch mit NUL-Byte), Tab-Wechsel mit Umlauf |
-| `test_mouse` | Scrollbalken-Geometrie samt Umkehrung, I-Beam-Flächen, Autoscroll-Tempo; `on_mouse()` aus `main.c` mit echtem Layout: Markieren mit Autoscroll-Takt, Knopf ziehen, Seite blättern |
+| `test_mouse` | Scrollbalken-Geometrie samt Umkehrung, I-Beam-Flächen, Autoscroll-Tempo; `on_mouse()` aus `main.c` mit echtem Layout: Markieren mit Autoscroll-Takt, Knopf ziehen, Seite blättern; ohne Zeilenumbruch: eine Row je Zeile, Cursor bleibt seitlich im Bild, Mausrad, seitlicher Scrollbalken, seitlicher Autoscroll |
 | `test_eol` | Zeilenenden: Erkennung, bytegenauer Round-Trip LF/CRLF/CR, Umwandeln aus zwei Pufferhälften |
 | `test_eol_glue` | Laden/Sichern/Menü aus `main.c` mit echten Dateien: gemischte und Binärdateien bleiben bytegleich; Kodierungen (Latin-1/Windows-1252, UTF-16, BOM, gemischt) bytegleich, nicht darstellbare Zeichen, Kodierung umstellen, Neu öffnen als, Neuladen mit gewählter Kodierung |
 | `test_encoding` | Kodierungen: Erkennung, alle 256 Bytes Latin-1/Windows-1252 im Rundlauf, UTF-16 mit Surrogatpaaren und kaputten Einheiten, nicht darstellbare Zeichen, Fuzz-Rundlauf |
@@ -367,6 +372,7 @@ diesen Tests Stubs.
 | `test_ai_glue` | KI-Ablauf aus `main.c`: wann gefragt wird, Kontextgrenzen, veraltete/fehlerhafte Antworten, Geistertext, Tab als eigener Undo-Schritt, Weitertippen, Abbrechen, Einstellungsdatei, Modellliste (fehlendes Modell ersetzen, Server nicht erreichbar, kein Code-Modell), Verbindungstest, Fließtext-Modus (eigenes Modell, Rückfall ohne Fill-in-the-Middle, Test in zwei Stufen, Menü) |
 | `test_gapbuffer`, `test_oom` | Gap-Buffer und Speichermangel-Helfer |
 | `test_strings`, `test_tab_label`, `test_font_size`, `test_row_capacity` | Übersetzungstabelle, Tab-Beschriftung, Schriftgröße, sichtbare Zeilen |
+| `test_prefs` | Einstellungsdatei: Schriftgröße, unsichtbare Zeichen, Zeilenumbruch, ältere Dateien mit weniger Zeilen |
 
 Die Objective-C-Seite lässt sich so nicht testen. `make test-objc` (nur
 macOS) erzeugt deshalb die echte View aus `shim.m` und prüft sie mit

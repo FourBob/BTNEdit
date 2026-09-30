@@ -9,6 +9,8 @@
  * Zeichnen und Interaktion nie auseinanderlaufen (siehe render.h).
  */
 #include "render.h"
+
+#include <limits.h>
 #include <CoreText/CoreText.h>
 #include <string.h>
 #include <stdio.h>
@@ -328,9 +330,13 @@ static double get_char_width(void) {
  * (byte_to_u16[len] = Gesamtlaenge) - daraus werden die Farbbereiche der
  * Syntax-Tokens direkt abgelesen. out braucht Platz fuer
  * len * max(BTN_TAB_WIDTH, 2) Einheiten. */
-static size_t decode_row_for_display(const unsigned char *raw, size_t len, UniChar *out, size_t *byte_to_u16) {
+/* Wie decode_row_for_display(), aber der Text beginnt in Spalte start_col
+ * (Ausschnitt einer langen Zeile ohne Umbruch): Tabs reichen bis zum
+ * selben Tabstopp wie in der ganzen Zeile. */
+static size_t decode_row_from_col(const unsigned char *raw, size_t len, size_t start_col, UniChar *out,
+                                  size_t *byte_to_u16) {
     size_t n = 0;
-    size_t col = 0;
+    size_t col = start_col;
     size_t i = 0;
     while (i < len) {
         size_t clen = btn_utf8_char_len(raw + i, len - i);
@@ -371,6 +377,10 @@ static size_t decode_row_for_display(const unsigned char *raw, size_t len, UniCh
     return n;
 }
 
+static size_t decode_row_for_display(const unsigned char *raw, size_t len, UniChar *out, size_t *byte_to_u16) {
+    return decode_row_from_col(raw, len, 0, out, byte_to_u16);
+}
+
 /* ---- Unsichtbare Zeichen ----
  * Eine Zeile Markierungen, die genau ueber die Spalten der Row faellt (dieselbe
  * Spaltenregel wie decode_row_for_display()): Leerzeichen -> '·', Tab -> '»'
@@ -381,8 +391,9 @@ static size_t decode_row_for_display(const unsigned char *raw, size_t len, UniCh
  * zu BTN_TAB_WIDTH - 1 Leerzeichen); Rueckgabe: Laenge (NUL-terminiert),
  * *any_mark = 0, wenn es nichts zu zeichnen gibt. */
 #define INVISIBLES_BYTES_PER_BYTE (BTN_TAB_WIDTH + 1 > 2 ? BTN_TAB_WIDTH + 1 : 2)
-static size_t build_invisibles(const unsigned char *raw, size_t len, int line_end, char *out, int *any_mark) {
-    size_t o = 0, col = 0, i = 0;
+static size_t build_invisibles_from(const unsigned char *raw, size_t len, size_t start_col, int line_end, char *out,
+                                    int *any_mark) {
+    size_t o = 0, col = start_col, i = 0;
     *any_mark = line_end;
     while (i < len) {
         size_t clen = btn_utf8_char_len(raw + i, len - i);
@@ -432,6 +443,20 @@ static long chars_per_row_for(double text_width) {
     return n > 0 ? n : 1;
 }
 
+/* Wortumbruch am Bildschirm (Darstellung > Zeilenumbruch). Aus: eine Row je
+ * logischer Zeile, gescrollt wird seitlich (scroll_col). Der Druck bricht
+ * immer an der Seitenbreite um (btn_layout_build()). */
+static int g_wrap = 1;
+#define NO_WRAP_COLS (LONG_MAX / 4)
+
+void btn_render_set_wrap(int on) {
+    g_wrap = on;
+}
+
+static long screen_chars_per_row(double text_width) {
+    return g_wrap ? chars_per_row_for(text_width) : NO_WRAP_COLS;
+}
+
 static void rows_push(BtnRow **rows, size_t *count, size_t *cap,
                        size_t start, size_t len, size_t logical_line, int is_continuation) {
     if (*count == *cap) {
@@ -451,7 +476,8 @@ static void rows_push(BtnRow **rows, size_t *count, size_t *cap,
  * Zeilenenden ('\n') und Umbruchpunkte werden in derselben Schleife
  * erkannt, macht die Layout-Berechnung O(Zeichen) statt O(Zeilen*Zeichen). */
 static BtnRow *layout_build(Editor *ed, long chars_per_row, size_t *out_row_count, size_t *out_word_count,
-                            size_t *out_char_count) {
+                            size_t *out_char_count, long *out_max_cols) {
+    long max_cols = 0; /* ohne Umbruch: laengste Zeile in Spalten (seitlicher Scrollbalken) */
     size_t cap = 0, count = 0;
     /* Woerter und Zeichen im selben Durchlauf zaehlen (Woerter nach
      * derselben Regel wie editor_word_count(), Zeichen nach
@@ -476,6 +502,7 @@ static BtnRow *layout_build(Editor *ed, long chars_per_row, size_t *out_row_coun
     while (i <= total_len) {
         if (i == total_len || gb_char_at(&ed->buffer, i) == '\n') {
             rows_push(&rows, &count, &cap, row_start, i - row_start, logical_line, row_start != line_start);
+            max_cols = col > max_cols ? col : max_cols;
             logical_line++;
             line_start = i + 1;
             row_start = line_start;
@@ -506,6 +533,7 @@ static BtnRow *layout_build(Editor *ed, long chars_per_row, size_t *out_row_coun
              * (ein Wort breiter als die Zeile) erzwungen vor diesem Zeichen. */
             size_t break_at = (last_break != (size_t)-1 && last_break > row_start) ? last_break : i;
             rows_push(&rows, &count, &cap, row_start, break_at - row_start, logical_line, row_start != line_start);
+            max_cols = col > max_cols ? col : max_cols;
             row_start = break_at;
             col = (long)editor_visual_column_in_range(ed, row_start, i);
             last_break = (size_t)-1;
@@ -532,11 +560,14 @@ static BtnRow *layout_build(Editor *ed, long chars_per_row, size_t *out_row_coun
     if (out_char_count) {
         *out_char_count = chars;
     }
+    if (out_max_cols) {
+        *out_max_cols = max_cols;
+    }
     return rows;
 }
 
 BtnRow *btn_layout_build(Editor *ed, double text_width, size_t *out_row_count) {
-    return layout_build(ed, chars_per_row_for(text_width), out_row_count, NULL, NULL);
+    return layout_build(ed, chars_per_row_for(text_width), out_row_count, NULL, NULL, NULL);
 }
 
 /* Ein-Eintrags-Cache fuer das Bildschirm-Layout des gerade gezeichneten
@@ -554,14 +585,15 @@ static struct {
     size_t row_count;
     size_t word_count;
     size_t char_count;
+    long max_cols;
 } g_layout;
 
 const BtnRow *btn_layout_get(Editor *ed, double text_width, size_t *out_row_count) {
-    long chars_per_row = chars_per_row_for(text_width);
+    long chars_per_row = screen_chars_per_row(text_width);
     if (!g_layout.valid || g_layout.edit_seq != ed->edit_seq || g_layout.chars_per_row != chars_per_row) {
         free(g_layout.rows);
         g_layout.rows = layout_build(ed, chars_per_row, &g_layout.row_count, &g_layout.word_count,
-                                     &g_layout.char_count);
+                                     &g_layout.char_count, &g_layout.max_cols);
         g_layout.edit_seq = ed->edit_seq;
         g_layout.chars_per_row = chars_per_row;
         g_layout.valid = 1;
@@ -572,6 +604,20 @@ const BtnRow *btn_layout_get(Editor *ed, double text_width, size_t *out_row_coun
 
 void btn_layout_free(BtnRow *rows) {
     free(rows);
+}
+
+long btn_layout_max_cols(Editor *ed, double text_width) {
+    size_t n;
+    btn_layout_get(ed, text_width, &n);
+    return g_layout.max_cols;
+}
+
+long btn_visible_col_capacity(double text_width) {
+    return chars_per_row_for(text_width);
+}
+
+double btn_render_char_width(void) {
+    return get_char_width();
 }
 
 /* Letzte Row mit start <= offset. Die Row-Starts sind streng monoton
@@ -1392,13 +1438,16 @@ void btn_compute_line_comment_states(Editor *ed, const BtnLangSpec *lang, int *o
  * (Druck) dieselbe Hervorhebungs-/Zeichenlogik nutzt statt sie zu duplizieren.
  * Kennt bewusst keine Selektion/Cursor/Klammer-Hervorhebung - das bleibt
  * Sache der jeweiligen Aufrufer (Bildschirm hat sie, Druck nicht). */
+/* Zeichnet [from, to) von Row r (ohne Umbruch nur der sichtbare Teil einer
+ * langen Zeile) ab x; start_col = Spalte von from in der Row (fuer Tabs). */
 static void draw_row_line(CGContextRef ctx, Editor *ed, const BtnLangSpec *lang,
-                           const BtnRow *rows, size_t row_count, size_t r, double x, double top_y,
+                           const BtnRow *rows, size_t row_count, size_t r, size_t from, size_t to, size_t start_col,
+                           double x, double top_y,
                            CFDictionaryRef attrs, size_t *cached_line, size_t *cached_line_start,
                            int *comment_state, BtnToken *tokens, size_t *token_count) {
-    size_t row_start = rows[r].start;
-    size_t row_len = rows[r].len;
-    size_t row_end = row_start + row_len;
+    size_t row_start = from;
+    size_t row_len = to - from;
+    size_t row_end = to;
 
     if (lang) {
         size_t ll = rows[r].logical_line;
@@ -1433,7 +1482,7 @@ static void draw_row_line(CGContextRef ctx, Editor *ed, const BtnLangSpec *lang,
         free(byte_to_u16);
         return;
     }
-    size_t u16_len = decode_row_for_display((const unsigned char *)raw, row_len, u16, byte_to_u16);
+    size_t u16_len = decode_row_from_col((const unsigned char *)raw, row_len, start_col, u16, byte_to_u16);
     free(raw);
     CFStringRef lineStr = CFStringCreateWithCharacters(NULL, u16, (CFIndex)u16_len);
     free(u16);
@@ -1487,6 +1536,11 @@ long btn_visible_row_capacity(double content_height) {
 void btn_text_rows_extent(CGRect bounds, double *top, double *bottom) {
     *top = bounds.size.height - TOP_PADDING;
     *bottom = *top - (double)btn_visible_row_capacity(bounds.size.height) * LINE_HEIGHT;
+}
+
+void btn_text_cols_extent(CGRect bounds, double *left, double *right) {
+    *left = GUTTER_WIDTH + LEFT_PADDING;
+    *right = *left + (double)chars_per_row_for(btn_layout_text_width(bounds)) * get_char_width();
 }
 
 /* ---- Scrollbalken ----
@@ -1543,14 +1597,68 @@ long btn_scrollbar_row_for_knob_top(CGRect bounds, size_t row_count, double knob
     return (long)(frac * (double)t.max_scroll + 0.5);
 }
 
-static int g_scrollbar_active = 0;
+/* Seitlicher Scrollbalken (nur ohne Umbruch): Knopf unten im Textbereich
+ * ueber der Statuszeile, so breit wie der sichtbare Anteil der breitesten
+ * Zeile (+1 Spalte fuer den Cursor dahinter). 0 = kein Knopf. */
+typedef struct {
+    double left, range, knob_w;
+    long max_scroll;
+} HScrollTrack;
 
-void btn_render_set_scrollbar_active(int active) {
-    g_scrollbar_active = active;
+long btn_hscroll_max(CGRect bounds, long max_cols) {
+    if (g_wrap) {
+        return 0;
+    }
+    long m = max_cols + 1 - chars_per_row_for(btn_layout_text_width(bounds));
+    return m > 0 ? m : 0;
 }
 
-static void draw_scroll_knob(CGContextRef ctx, CGRect knob) {
-    set_fill(ctx, col_scroll_knob(g_scrollbar_active));
+static int hscrollbar_track(CGRect bounds, long max_cols, HScrollTrack *t) {
+    double text_width = btn_layout_text_width(bounds);
+    long visible = chars_per_row_for(text_width);
+    t->left = GUTTER_WIDTH + LEFT_PADDING;
+    double track_w = text_width - SCROLLBAR_INSET;
+    t->max_scroll = btn_hscroll_max(bounds, max_cols);
+    if (t->max_scroll <= 0 || track_w < BTN_SCROLLBAR_MIN_KNOB) {
+        return 0;
+    }
+    t->knob_w = track_w * (double)visible / (double)(max_cols + 1);
+    if (t->knob_w < BTN_SCROLLBAR_MIN_KNOB) {
+        t->knob_w = BTN_SCROLLBAR_MIN_KNOB;
+    }
+    t->range = track_w - t->knob_w;
+    return 1;
+}
+
+int btn_hscrollbar_knob(CGRect bounds, long max_cols, long scroll_col, CGRect *out_knob) {
+    HScrollTrack t;
+    if (!hscrollbar_track(bounds, max_cols, &t)) {
+        return 0;
+    }
+    double frac = (double)scroll_col / (double)t.max_scroll;
+    frac = frac < 0.0 ? 0.0 : frac > 1.0 ? 1.0 : frac;
+    *out_knob = CGRectMake(t.left + frac * t.range, BTN_FOOTER_HEIGHT + SCROLLBAR_INSET, t.knob_w, SCROLLBAR_KNOB_WIDTH);
+    return 1;
+}
+
+long btn_hscrollbar_col_for_knob_left(CGRect bounds, long max_cols, double knob_left) {
+    HScrollTrack t;
+    if (!hscrollbar_track(bounds, max_cols, &t) || t.range <= 0.0) {
+        return 0;
+    }
+    double frac = (knob_left - t.left) / t.range;
+    frac = frac < 0.0 ? 0.0 : frac > 1.0 ? 1.0 : frac;
+    return (long)(frac * (double)t.max_scroll + 0.5);
+}
+
+static int g_scrollbar_active = 0;
+
+void btn_render_set_scrollbar_active(int which) {
+    g_scrollbar_active = which;
+}
+
+static void draw_scroll_knob(CGContextRef ctx, CGRect knob, int which) {
+    set_fill(ctx, col_scroll_knob(g_scrollbar_active == which));
     double radius = SCROLLBAR_KNOB_WIDTH / 2.0;
     CGPathRef path = CGPathCreateWithRoundedRect(knob, radius, radius, NULL);
     CGContextAddPath(ctx, path);
@@ -1575,7 +1683,7 @@ int btn_text_cursor_rects(CGRect window, CGRect content, int find_bar_visible, i
     return n;
 }
 
-void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_row, const BtnLangSpec *lang,
+void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_row, long scroll_col, const BtnLangSpec *lang,
                        const size_t *match_starts, const size_t *match_ends, size_t match_count) {
     set_fill(ctx, col_bg());
     CGContextFillRect(ctx, bounds);
@@ -1586,6 +1694,12 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
     double text_width = btn_layout_text_width(bounds);
     size_t row_count;
     const BtnRow *rows = btn_layout_get(ed, text_width, &row_count);
+    if (g_wrap) {
+        scroll_col = 0;
+    }
+    /* x von Spalte 0 - ohne Umbruch um scroll_col Spalten nach links */
+    double text_x = GUTTER_WIDTH + LEFT_PADDING - (double)scroll_col * char_width;
+    long visible_cols = chars_per_row_for(text_width);
 
     int has_sel = editor_has_selection(ed);
     size_t sel_start = has_sel ? editor_selection_start(ed) : 0;
@@ -1623,6 +1737,11 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
         comment_state = comment_state_before_line(ed, lang, rows, row_count, rows[first_row].logical_line);
     }
 
+    /* Text, Hervorhebungen und Cursor nur im Textbereich - seitlich
+     * gescrollt ragte er sonst in die Zeilennummern und den Scrollbalken */
+    CGContextSaveGState(ctx);
+    CGContextClipToRect(ctx, CGRectMake(GUTTER_WIDTH, BTN_FOOTER_HEIGHT, bounds.size.width - GUTTER_WIDTH - BTN_SCROLLBAR_WIDTH,
+                                        bounds.size.height - BTN_FOOTER_HEIGHT));
     for (size_t r = (size_t)scroll_row; r < row_count; r++) {
         double top_y = bounds.size.height - TOP_PADDING - (double)(r - (size_t)scroll_row + 1) * LINE_HEIGHT;
         if (top_y + LINE_HEIGHT < BTN_FOOTER_HEIGHT) {
@@ -1645,7 +1764,7 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
                 }
                 size_t col_from = editor_visual_column_in_range(ed, row_start, hi_from);
                 size_t col_to = editor_visual_column_in_range(ed, row_start, hi_to);
-                double hx = GUTTER_WIDTH + LEFT_PADDING + (double)col_from * char_width;
+                double hx = text_x + (double)col_from * char_width;
                 double hw = (double)(col_to - col_from) * char_width;
                 if (hw < 2.0) {
                     hw = 2.0;
@@ -1666,7 +1785,7 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
                 }
                 size_t col_from = editor_visual_column_in_range(ed, row_start, hi_from);
                 size_t col_to = editor_visual_column_in_range(ed, row_start, hi_to);
-                double hx = GUTTER_WIDTH + LEFT_PADDING + (double)col_from * char_width;
+                double hx = text_x + (double)col_from * char_width;
                 double hw = (double)(col_to - col_from) * char_width;
                 if (extends_past_row) {
                     hw += char_width * 0.5;
@@ -1684,26 +1803,41 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
                 size_t pos = (b == 0) ? bracket_a : bracket_b;
                 if (pos >= row_start && pos < row_end) {
                     size_t col = editor_visual_column_in_range(ed, row_start, pos);
-                    double bx = GUTTER_WIDTH + LEFT_PADDING + (double)col * char_width;
+                    double bx = text_x + (double)col * char_width;
                     set_fill(ctx, col_bracket());
                     CGContextFillRect(ctx, CGRectMake(bx, top_y, char_width, LINE_HEIGHT));
                 }
             }
         }
 
+        /* Ohne Umbruch nur den sichtbaren Ausschnitt einer (vielleicht sehr
+         * langen) Zeile aufbereiten; draw_from_col haelt die Tabs richtig. */
+        size_t draw_from = row_start, draw_to = row_end, draw_from_col = 0;
+        if (!g_wrap && row_len > 0) {
+            size_t first_col = scroll_col > 1 ? (size_t)scroll_col - 1 : 0;
+            draw_from = editor_offset_for_column_in_range(ed, row_start, row_len, first_col);
+            draw_from_col = editor_visual_column_in_range(ed, row_start, draw_from);
+            draw_to = editor_offset_for_column_in_range(ed, row_start, row_len, (size_t)scroll_col + (size_t)visible_cols + 2);
+            if (draw_to < draw_from) {
+                draw_to = draw_from;
+            }
+        }
+        double draw_x = text_x + (double)draw_from_col * char_width;
+
         if (g_show_invisibles) {
-            int line_end = row_end < editor_length(ed) && gb_char_at(&ed->buffer, row_end) == '\n';
-            char *raw = gb_copy_range(&ed->buffer, row_start, row_len);
-            char *marks = btn_xmalloc(btn_xmul(row_len, INVISIBLES_BYTES_PER_BYTE) + 3);
+            int line_end = draw_to == row_end && row_end < editor_length(ed) && gb_char_at(&ed->buffer, row_end) == '\n';
+            size_t n = draw_to - draw_from;
+            char *raw = gb_copy_range(&ed->buffer, draw_from, n);
+            char *marks = btn_xmalloc(btn_xmul(n, INVISIBLES_BYTES_PER_BYTE) + 3);
             int any_mark;
-            build_invisibles((const unsigned char *)raw, row_len, line_end, marks, &any_mark);
+            build_invisibles_from((const unsigned char *)raw, n, draw_from_col, line_end, marks, &any_mark);
             if (any_mark) {
-                draw_text_at(ctx, marks, GUTTER_WIDTH + LEFT_PADDING, top_y + 4.0, get_dim_attrs());
+                draw_text_at(ctx, marks, draw_x, top_y + 4.0, get_dim_attrs());
             }
             free(marks);
             free(raw);
         }
-        draw_row_line(ctx, ed, lang, rows, row_count, r, GUTTER_WIDTH + LEFT_PADDING, top_y, attrs,
+        draw_row_line(ctx, ed, lang, rows, row_count, r, draw_from, draw_to, draw_from_col, draw_x, top_y, attrs,
                        &cached_line, &cached_line_start, &comment_state, tokens, &token_count);
     }
 
@@ -1711,7 +1845,7 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
         size_t cur_row = btn_layout_row_for_offset(rows, row_count, ed->cursor);
         if (cur_row >= (size_t)scroll_row) {
             size_t col = editor_visual_column_in_range(ed, rows[cur_row].start, ed->cursor);
-            double cx = GUTTER_WIDTH + LEFT_PADDING + (double)col * char_width;
+            double cx = text_x + (double)col * char_width;
             double cy = bounds.size.height - TOP_PADDING - (double)(cur_row - (size_t)scroll_row + 1) * LINE_HEIGHT;
             if (g_marked.target == BTN_MARKED_DOCUMENT) {
                 draw_marked_overlay(ctx, cx, cy, LINE_HEIGHT, cy + 4.0, attrs, col_bg());
@@ -1723,10 +1857,15 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
         }
     }
 
+    CGContextRestoreGState(ctx);
+
     draw_gutter(ctx, bounds, rows, row_count, scroll_row);
     CGRect knob;
     if (btn_scrollbar_knob(bounds, row_count, scroll_row, &knob)) {
-        draw_scroll_knob(ctx, knob);
+        draw_scroll_knob(ctx, knob, BTN_SCROLLBAR_VERTICAL);
+    }
+    if (btn_hscrollbar_knob(bounds, g_layout.max_cols, scroll_col, &knob)) {
+        draw_scroll_knob(ctx, knob, BTN_SCROLLBAR_HORIZONTAL);
     }
     draw_footer(ctx, bounds, ed, rows, row_count);
     /* rows gehoert dem Layout-Cache (btn_layout_get()) - nicht freigeben. */
@@ -1787,8 +1926,8 @@ void btn_render_print_page(CGContextRef ctx, CGRect page_rect, Editor *ed, const
         if (top_y < page_rect.origin.y + PRINT_MARGIN) {
             break;
         }
-        draw_row_line(ctx, ed, lang, rows, row_count, r, x, top_y, attrs,
-                       &cached_line, &cached_line_start, &comment_state, tokens, &token_count);
+        draw_row_line(ctx, ed, lang, rows, row_count, r, rows[r].start, rows[r].start + rows[r].len, 0, x, top_y,
+                       attrs, &cached_line, &cached_line_start, &comment_state, tokens, &token_count);
     }
 
     CFRelease(attrs);
@@ -1800,7 +1939,7 @@ void btn_render_print_page(CGContextRef ctx, CGRect page_rect, Editor *ed, const
     }
 }
 
-size_t btn_hit_test(Editor *ed, CGRect bounds, double x, double y, long scroll_row) {
+size_t btn_hit_test(Editor *ed, CGRect bounds, double x, double y, long scroll_row, long scroll_col) {
     double char_width = get_char_width();
     double text_width = btn_layout_text_width(bounds);
     size_t row_count;
@@ -1815,7 +1954,7 @@ size_t btn_hit_test(Editor *ed, CGRect bounds, double x, double y, long scroll_r
         row = (long)row_count - 1;
     }
 
-    double rel_x = x - (GUTTER_WIDTH + LEFT_PADDING);
+    double rel_x = x - (GUTTER_WIDTH + LEFT_PADDING) + (g_wrap ? 0.0 : (double)scroll_col * char_width);
     long col = (long)(rel_x / char_width + 0.5);
     if (col < 0) {
         col = 0;
@@ -1824,13 +1963,13 @@ size_t btn_hit_test(Editor *ed, CGRect bounds, double x, double y, long scroll_r
     return btn_row_offset_for_column(ed, rows, row_count, (size_t)row, (size_t)col);
 }
 
-CGRect btn_render_caret_rect(Editor *ed, CGRect bounds, long scroll_row, size_t offset) {
+CGRect btn_render_caret_rect(Editor *ed, CGRect bounds, long scroll_row, long scroll_col, size_t offset) {
     double char_width = get_char_width();
     size_t row_count;
     const BtnRow *rows = btn_layout_get(ed, btn_layout_text_width(bounds), &row_count);
     size_t cur_row = btn_layout_row_for_offset(rows, row_count, offset);
     size_t col = editor_visual_column_in_range(ed, rows[cur_row].start, offset);
-    double x = GUTTER_WIDTH + LEFT_PADDING + (double)col * char_width;
+    double x = GUTTER_WIDTH + LEFT_PADDING + ((double)col - (g_wrap ? 0.0 : (double)scroll_col)) * char_width;
     double y = bounds.size.height - TOP_PADDING - ((double)cur_row - (double)scroll_row + 1.0) * LINE_HEIGHT;
     return CGRectMake(x, y, char_width, LINE_HEIGHT);
 }

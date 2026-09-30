@@ -241,7 +241,7 @@ static void test_row_offset(void) {
         boundaries((const unsigned char *)doc, len, is_b);
         long cpr = 3 + (long)rnd(10);
         size_t nrows, nwords;
-        BtnRow *rows = layout_build(&ed, cpr, &nrows, &nwords, NULL);
+        BtnRow *rows = layout_build(&ed, cpr, &nrows, &nwords, NULL, NULL);
         for (size_t r = 0; r < nrows; r++) {
             size_t row_end = rows[r].start + rows[r].len;
             int wrapped = r + 1 < nrows && rows[r + 1].is_continuation;
