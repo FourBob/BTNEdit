@@ -1087,6 +1087,12 @@ void btn_app_run(void) {
                                                   backing:NSBackingStoreBuffered
                                                     defer:NO];
         [g_window setTitle:trs(BTN_STR_UNTITLED)];
+        /* Nicht beim Schliessen freigeben: g_window ist ein globaler Zeiger,
+         * und nach dem Schliessen des letzten Fensters fragt das Beenden
+         * (applicationShouldTerminate: -> should_close()) noch Titel und
+         * Bearbeitet-Punkt des Fensters ab - sonst an ein freigegebenes
+         * Objekt. */
+        [g_window setReleasedWhenClosed:NO];
         /* Breite 1080 statt z.B. 400: Felder, die vier Umschalter
          * (".*"/"Aa"/"\b"/"⧉") und der "Alle ersetzen"-Knopf der Suchen/
          * Ersetzen-Leiste (render.c) reichen bis x = 874pt, dahinter beginnt

@@ -23,6 +23,11 @@ BTN_SDK  ?=
 SDKFLAG  := $(if $(BTN_SDK),-isysroot $(BTN_SDK),)
 # Zusaetzliche Compiler-Flags, z.B. "make EXTRA_CFLAGS=-Werror" (so baut die CI).
 EXTRA_CFLAGS ?=
+# -MMD -MP: je .o eine .d-Datei mit den eingebundenen Headern - aendert sich
+# ein Header (z.B. das Editor-Struct), wird jede Datei neu gebaut, die ihn
+# benutzt; sonst lagen nach "git pull && make" Objekte mit verschiedenen
+# Struct-Layouts nebeneinander.
+DEPFLAGS := -MMD -MP
 CFLAGS   := -Wall -Wextra -std=c11 -O2 -Isrc $(SDKFLAG) $(EXTRA_CFLAGS)
 OBJCFLAGS:= -Wall -Wextra -fno-objc-arc -O2 -Isrc $(SDKFLAG) $(EXTRA_CFLAGS)
 FRAMEWORKS := -framework Cocoa -framework CoreText -framework CoreGraphics $(SDKFLAG)
@@ -61,10 +66,12 @@ $(RESOURCES_DIR)/AppIcon.icns: resources/AppIcon.iconset | $(RESOURCES_DIR)
 	iconutil -c icns resources/AppIcon.iconset -o $@
 
 %.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
 %.o: %.m
-	$(CC) $(OBJCFLAGS) -c $< -o $@
+	$(CC) $(OBJCFLAGS) $(DEPFLAGS) -c $< -o $@
+
+-include $(OBJ:.o=.d)
 
 run: all
 	open $(APP_DIR)
@@ -80,7 +87,7 @@ test:
 test-objc:
 	mkdir -p $(BUILD_DIR)/tests
 	$(CC) $(OBJCFLAGS) -o $(BUILD_DIR)/tests/test_shim_input tests/objc/test_shim_input.m src/shim.m src/strings.c src/encoding.c \
-		$(FRAMEWORKS)
+		src/textinput.c src/editor.c src/gapbuffer.c $(FRAMEWORKS)
 	$(BUILD_DIR)/tests/test_shim_input
 
 # Laufzeit pro Tastendruck bei grossen Dokumenten (kein Test, nur Messwerte).
@@ -91,4 +98,4 @@ bench:
 	$(BUILD_DIR)/tests/bench_layout
 
 clean:
-	rm -rf $(BUILD_DIR) src/*.o
+	rm -rf $(BUILD_DIR) src/*.o src/*.d
