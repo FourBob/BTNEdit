@@ -10,8 +10,10 @@ extern "C" {
 #endif
 
 /* Layout-Konstanten - oeffentlich, weil main.c sie fuers Scroll-Mass
- * (wie viele Zeilen passen ins Fenster) und fuer Klick-Ausschluss braucht. */
-#define BTN_LINE_HEIGHT 18.0
+ * (wie viele Zeilen passen ins Fenster) und fuer Klick-Ausschluss braucht.
+ * Die Zeilenhoehe des Dokuments waechst mit dem Zoom
+ * (btn_render_line_height()); 18pt gilt bei 13pt und fuer den Druck. */
+#define BTN_DEFAULT_LINE_HEIGHT 18.0
 #define BTN_FOOTER_HEIGHT 22.0
 
 /* Tableiste oben im Fenster (mehrere Dokumente) - main.c braucht diese
@@ -75,17 +77,19 @@ typedef struct {
  * Helligkeit haengen bleiben. */
 void btn_render_set_dark_mode(int dark);
 
-/* Schriftgroesse fuer Editor-Text/Gutter/Statuszeile/Tab-/Suchleiste (nicht
- * fuers Drucken - ein Ausdruck soll unabhaengig von der Bildschirm-Zoomstufe
- * immer dieselbe Papiergroesse ergeben). Aendert sich die Groesse, werden
- * Font/Zeichenbreite-Caches (siehe g_font/g_char_width in render.c)
- * verworfen und bei Bedarf neu vermessen. size wird auf
+/* Schriftgroesse des Dokument-Texts (Zoom). Zeilennummern, Statuszeile,
+ * Tab-/Suchleiste und der Druck bleiben bei BTN_DEFAULT_FONT_SIZE (die
+ * Leisten sind fest hoch; ein Ausdruck soll unabhaengig von der Zoomstufe
+ * dieselbe Papiergroesse ergeben). Die Zeilenhoehe waechst mit
+ * (btn_render_line_height()). Aendert sich die Groesse, werden die
+ * Font-/Zeichenbreite-Caches des Dokuments verworfen. size wird auf
  * [BTN_MIN_FONT_SIZE, BTN_MAX_FONT_SIZE] geklemmt. */
 #define BTN_MIN_FONT_SIZE 8.0
 #define BTN_MAX_FONT_SIZE 32.0
 #define BTN_DEFAULT_FONT_SIZE 13.0
 void btn_render_set_font_size(double size);
 double btn_render_get_font_size(void);
+double btn_render_line_height(void);
 /* Kurzformen fuer Cmd+/Cmd-/Cmd+0 (main.c's Zoom-Menuepunkte) - je 1pt
  * Schritt, Reset auf BTN_DEFAULT_FONT_SIZE. */
 /* Uebersetzte Statuszeilen-Formate (Zeiger muessen gueltig bleiben, z.B.

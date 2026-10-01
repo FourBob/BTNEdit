@@ -116,7 +116,9 @@ Klammern, Suchen/Ersetzen, Zeilen-Befehle) ist reine C-Logik und wird selbst
   DXF (ASCII)
 - Unsichtbare Zeichen einblenden (`⌥⌘I`): Leerzeichen `·`, Tabs `»`,
   Zeilenenden `¬`
-- Dark Mode folgt automatisch dem System; Schriftgröße (`⌘+`/`⌘-`/`⌘0`),
+- Dark Mode folgt automatisch dem System; Schriftgröße des Texts (`⌘+`/`⌘-`/`⌘0`,
+  8-32pt, die Zeilenhöhe wächst mit; Leisten, Zeilennummern und Druck
+  bleiben bei 13pt),
   unsichtbare Zeichen und Zeilenumbruch werden über Neustarts hinweg gemerkt
 - Maus: I-Beam über dem Text, Scrollbalken (Knopf ziehen, daneben klicken
   blättert eine Seite), Markieren über den Fensterrand hinaus scrollt
@@ -372,7 +374,7 @@ diesen Tests Stubs.
 | `test_ai` | KI: Einstellungsdatei, JSON-Rundlauf (auch kaputtes UTF-8, Steuerzeichen), Antworten (Escapes, Surrogatpaare, verschachtelte Werte, kaputtes JSON), Vorschlag bereinigen, Modellliste lesen und Code-Modell wählen, Fließtext (Dateityp, Anfrage, Satzende) |
 | `test_ai_glue` | KI-Ablauf aus `main.c`: wann gefragt wird, Kontextgrenzen, veraltete/fehlerhafte Antworten, Geistertext, Tab als eigener Undo-Schritt, Weitertippen, Abbrechen, Einstellungsdatei, Modellliste (fehlendes Modell ersetzen, Server nicht erreichbar, kein Code-Modell), Verbindungstest, Fließtext-Modus (eigenes Modell, Rückfall ohne Fill-in-the-Middle, Test in zwei Stufen, Menü) |
 | `test_gapbuffer`, `test_oom` | Gap-Buffer und Speichermangel-Helfer |
-| `test_strings`, `test_tab_label`, `test_font_size`, `test_row_capacity` | Übersetzungstabelle, Tab-Beschriftung, Schriftgröße, sichtbare Zeilen |
+| `test_strings`, `test_tab_label`, `test_font_size`, `test_row_capacity` | Übersetzungstabelle, Tab-Beschriftung, Schriftgröße und mitwachsende Zeilenhöhe, sichtbare Zeilen |
 | `test_prefs` | Einstellungsdatei: Schriftgröße, unsichtbare Zeichen, Zeilenumbruch, ältere Dateien mit weniger Zeilen |
 
 Die Objective-C-Seite lässt sich so nicht testen. `make test-objc` (nur

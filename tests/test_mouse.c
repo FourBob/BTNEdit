@@ -606,6 +606,33 @@ static void test_nowrap_review(void) {
     set_lines(10);
 }
 
+/* Zoom: die Zeilenhoehe waechst mit der Schrift - Kapazitaet, Klicks und
+ * Mausrad rechnen mit derselben Hoehe wie das Zeichnen */
+static void test_zoomed_rows(void) {
+    Editor *ed = &g_doc.editor;
+    btn_render_set_wrap(1);
+    set_lines(100);
+    g_line_height = 36.0;
+    CGRect cb = content_bounds();
+    long cap = btn_visible_row_capacity(cb.size.height);
+    CHECK(cap == (long)((568.0 - TOP_PADDING - BTN_FOOTER_HEIGHT) / 36.0), "capacity with 36pt rows (%ld)", cap);
+    double y3 = 568.0 - TOP_PADDING - 36.0 * 3 - 18.0; /* Mitte von Row 3 */
+    CHECK(btn_hit_test(ed, cb, col_x(2), y3, 0, 0) == 3 * 9 + 2, "click hits row 3 with tall rows");
+    g_doc.scroll_row = 0;
+    g_doc.scroll_accum = 0.0;
+    on_scroll(0.0, -36.0, 1);
+    CHECK(g_doc.scroll_row == 1, "one row of scrolling is one tall row (%ld)", g_doc.scroll_row);
+    on_scroll(0.0, -2.0, 0);
+    CHECK(g_doc.scroll_row == 3, "wheel notches count rows, whatever their height (%ld)", g_doc.scroll_row);
+    editor_set_cursor(ed, 50 * 9, 0);
+    sync_scroll_to_cursor();
+    CHECK(g_doc.scroll_row == 50 - cap + 1, "cursor sync uses the zoomed capacity (%ld)", g_doc.scroll_row);
+    CHECK(btn_rows_per_page(792.0) == (size_t)((792.0 - 2 * PRINT_MARGIN) / BTN_DEFAULT_LINE_HEIGHT),
+          "printing keeps the default line height, whatever the zoom (%zu)", btn_rows_per_page(792.0));
+    g_line_height = BTN_DEFAULT_LINE_HEIGHT;
+    set_lines(10);
+}
+
 int main(void) {
     editor_init(&g_doc.editor);
     test_geometry();
@@ -614,6 +641,7 @@ int main(void) {
     test_scrollbar_clicks();
     test_nowrap();
     test_nowrap_review();
+    test_zoomed_rows();
     editor_free(&g_doc.editor);
     printf("%s: %ld checks, %ld failures\n", fails ? "FAILED" : "ALL PASSED", checks, fails);
     return fails != 0;

@@ -11,24 +11,52 @@
 #include "render.h"
 
 #include <limits.h>
+#include <math.h>
 #include <CoreText/CoreText.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 #define GUTTER_WIDTH 44.0
-#define LINE_HEIGHT BTN_LINE_HEIGHT
+#define LINE_HEIGHT g_line_height
 #define LEFT_PADDING 8.0
 #define TOP_PADDING 8.0
 #define BTN_MAX_TOKENS_PER_LINE 512
 #define PRINT_MARGIN 24.0
 
-/* FONT_SIZE war frueher ein fixes #define - main.c braucht jetzt eine
- * Laufzeit-Schriftgroesse fuer Cmd+/Cmd-/Cmd+0 (siehe btn_render_set_font_size()
- * in render.h), deshalb eine gecachte Variable statt eines Makros. */
-static double g_font_size = BTN_DEFAULT_FONT_SIZE;
-static CTFontRef g_font = NULL;
-static double g_char_width = 0.0;
+/* Zwei Schrift-Saetze: der Text des Dokuments folgt dem Zoom (Cmd+/Cmd-/
+ * Cmd+0, siehe btn_render_set_font_size()), Leisten, Zeilennummern und der
+ * Druck bleiben bei BTN_DEFAULT_FONT_SIZE - sonst lief bei 32pt der Text
+ * aus der 22pt hohen Statuszeile und das Papier hinge am Bildschirm-Zoom.
+ * get_font()/get_char_width()/get_*_attrs() lesen den gerade gewaehlten
+ * Satz (g_fs, Standard: Dokument); Leisten schalten mit use_fonts() um. */
+typedef struct {
+    double size;
+    CTFontRef font;
+    double char_width;
+    CFDictionaryRef text_attrs, dim_attrs, accent_attrs, gutter_attrs, footer_attrs;
+} FontSet;
+static FontSet g_doc_fonts = { BTN_DEFAULT_FONT_SIZE, NULL, 0.0, NULL, NULL, NULL, NULL, NULL };
+static FontSet g_ui_fonts = { BTN_DEFAULT_FONT_SIZE, NULL, 0.0, NULL, NULL, NULL, NULL, NULL };
+static FontSet *g_fs = &g_doc_fonts;
+
+static FontSet *use_fonts(FontSet *fs) {
+    FontSet *old = g_fs;
+    g_fs = fs;
+    return old;
+}
+
+/* Zeilenhoehe des Dokuments: waechst mit der Schrift (18pt bei 13pt) */
+static double g_line_height = BTN_DEFAULT_LINE_HEIGHT;
+
+static double line_height_for(double font_size) {
+    return floor(font_size * BTN_DEFAULT_LINE_HEIGHT / BTN_DEFAULT_FONT_SIZE + 0.5);
+}
+
+/* Grundlinie des Texts ueber der Unterkante einer Zeile (4pt bei 13/18) */
+static double row_baseline(void) {
+    return (g_line_height - g_doc_fonts.size) / 2.0 + 1.5;
+}
 static CGColorRef g_token_colors[6] = { NULL, NULL, NULL, NULL, NULL, NULL };
 
 /* Gecachte Text-/Dim-/Akzent-/Gutter-/Footer-Farben und ihre fertigen
@@ -44,11 +72,6 @@ static CGColorRef g_dim_color = NULL;
 static CGColorRef g_accent_color = NULL;
 static CGColorRef g_gutter_text_color = NULL;
 static CGColorRef g_footer_text_color = NULL;
-static CFDictionaryRef g_text_attrs = NULL;
-static CFDictionaryRef g_dim_attrs = NULL;
-static CFDictionaryRef g_accent_attrs = NULL;
-static CFDictionaryRef g_gutter_attrs = NULL;
-static CFDictionaryRef g_footer_attrs = NULL;
 
 /* 0 = Light Mode, 1 = Dark Mode - main.c setzt das bei jedem Redraw frisch
  * (siehe btn_render_set_dark_mode() in render.h). */
@@ -158,11 +181,17 @@ static void invalidate_style_cache(void) {
             g_token_colors[i] = NULL;
         }
     }
-    if (g_text_attrs)   { CFRelease(g_text_attrs);   g_text_attrs = NULL; }
-    if (g_dim_attrs)    { CFRelease(g_dim_attrs);    g_dim_attrs = NULL; }
-    if (g_accent_attrs) { CFRelease(g_accent_attrs); g_accent_attrs = NULL; }
-    if (g_gutter_attrs) { CFRelease(g_gutter_attrs); g_gutter_attrs = NULL; }
-    if (g_footer_attrs) { CFRelease(g_footer_attrs); g_footer_attrs = NULL; }
+    FontSet *sets[2] = { &g_doc_fonts, &g_ui_fonts };
+    for (int k = 0; k < 2; k++) {
+        CFDictionaryRef *attrs[5] = { &sets[k]->text_attrs, &sets[k]->dim_attrs, &sets[k]->accent_attrs,
+                                      &sets[k]->gutter_attrs, &sets[k]->footer_attrs };
+        for (int a = 0; a < 5; a++) {
+            if (*attrs[a]) {
+                CFRelease(*attrs[a]);
+                *attrs[a] = NULL;
+            }
+        }
+    }
     if (g_text_color)        { CGColorRelease(g_text_color);        g_text_color = NULL; }
     if (g_dim_color)         { CGColorRelease(g_dim_color);         g_dim_color = NULL; }
     if (g_accent_color)      { CGColorRelease(g_accent_color);      g_accent_color = NULL; }
@@ -179,10 +208,10 @@ void btn_render_set_dark_mode(int dark) {
 }
 
 static CTFontRef get_font(void) {
-    if (!g_font) {
-        g_font = CTFontCreateWithName(CFSTR("Menlo"), g_font_size, NULL);
+    if (!g_fs->font) {
+        g_fs->font = CTFontCreateWithName(CFSTR("Menlo"), g_fs->size, NULL);
     }
-    return g_font;
+    return g_fs->font;
 }
 
 void btn_render_set_font_size(double size) {
@@ -195,28 +224,33 @@ void btn_render_set_font_size(double size) {
     if (!(size <= BTN_MAX_FONT_SIZE)) {
         size = BTN_MAX_FONT_SIZE;
     }
-    if (size == g_font_size) {
+    if (size == g_doc_fonts.size) {
         return;
     }
-    g_font_size = size;
-    if (g_font) {
-        CFRelease(g_font);
-        g_font = NULL;
+    g_doc_fonts.size = size;
+    g_line_height = line_height_for(size);
+    if (g_doc_fonts.font) {
+        CFRelease(g_doc_fonts.font);
+        g_doc_fonts.font = NULL;
     }
-    g_char_width = 0.0; /* neu vermessen bei naechstem get_char_width() */
+    g_doc_fonts.char_width = 0.0; /* neu vermessen bei naechstem get_char_width() */
     invalidate_style_cache(); /* Attribut-Dicts referenzieren noch den alten Font */
 }
 
 double btn_render_get_font_size(void) {
-    return g_font_size;
+    return g_doc_fonts.size;
+}
+
+double btn_render_line_height(void) {
+    return g_line_height;
 }
 
 void btn_render_zoom_in(void) {
-    btn_render_set_font_size(g_font_size + 1.0);
+    btn_render_set_font_size(g_doc_fonts.size + 1.0);
 }
 
 void btn_render_zoom_out(void) {
-    btn_render_set_font_size(g_font_size - 1.0);
+    btn_render_set_font_size(g_doc_fonts.size - 1.0);
 }
 
 void btn_render_zoom_reset(void) {
@@ -268,53 +302,53 @@ static CGColorRef get_footer_text_color(void) {
 }
 
 static CFDictionaryRef get_text_attrs(void) {
-    if (!g_text_attrs) {
-        g_text_attrs = make_attrs(get_font(), get_text_color());
+    if (!g_fs->text_attrs) {
+        g_fs->text_attrs = make_attrs(get_font(), get_text_color());
     }
-    return g_text_attrs;
+    return g_fs->text_attrs;
 }
 
 static CFDictionaryRef get_dim_attrs(void) {
-    if (!g_dim_attrs) {
-        g_dim_attrs = make_attrs(get_font(), get_dim_color());
+    if (!g_fs->dim_attrs) {
+        g_fs->dim_attrs = make_attrs(get_font(), get_dim_color());
     }
-    return g_dim_attrs;
+    return g_fs->dim_attrs;
 }
 
 static CFDictionaryRef get_accent_attrs(void) {
-    if (!g_accent_attrs) {
-        g_accent_attrs = make_attrs(get_font(), get_accent_color());
+    if (!g_fs->accent_attrs) {
+        g_fs->accent_attrs = make_attrs(get_font(), get_accent_color());
     }
-    return g_accent_attrs;
+    return g_fs->accent_attrs;
 }
 
 static CFDictionaryRef get_gutter_attrs(void) {
-    if (!g_gutter_attrs) {
-        g_gutter_attrs = make_attrs(get_font(), get_gutter_text_color());
+    if (!g_fs->gutter_attrs) {
+        g_fs->gutter_attrs = make_attrs(get_font(), get_gutter_text_color());
     }
-    return g_gutter_attrs;
+    return g_fs->gutter_attrs;
 }
 
 static CFDictionaryRef get_footer_attrs(void) {
-    if (!g_footer_attrs) {
-        g_footer_attrs = make_attrs(get_font(), get_footer_text_color());
+    if (!g_fs->footer_attrs) {
+        g_fs->footer_attrs = make_attrs(get_font(), get_footer_text_color());
     }
-    return g_footer_attrs;
+    return g_fs->footer_attrs;
 }
 
 static double get_char_width(void) {
-    if (g_char_width <= 0.0) {
+    if (g_fs->char_width <= 0.0) {
         CGColorRef black = CGColorCreateGenericRGB(0.0, 0.0, 0.0, 1.0);
         CFDictionaryRef attrs = make_attrs(get_font(), black);
         CFAttributedStringRef attrStr = CFAttributedStringCreate(NULL, CFSTR("M"), attrs);
         CTLineRef line = CTLineCreateWithAttributedString(attrStr);
-        g_char_width = CTLineGetTypographicBounds(line, NULL, NULL, NULL);
+        g_fs->char_width = CTLineGetTypographicBounds(line, NULL, NULL, NULL);
         CFRelease(line);
         CFRelease(attrStr);
         CFRelease(attrs);
         CGColorRelease(black);
     }
-    return g_char_width;
+    return g_fs->char_width;
 }
 
 /* Dekodiert eine Row fuer CoreText in UTF-16 - Zeichen fuer Zeichen nach
@@ -575,7 +609,10 @@ static BtnRow *layout_build(Editor *ed, long chars_per_row, size_t *out_row_coun
 }
 
 BtnRow *btn_layout_build(Editor *ed, double text_width, size_t *out_row_count) {
-    return layout_build(ed, chars_per_row_for(text_width), out_row_count, NULL, NULL, NULL);
+    FontSet *saved = use_fonts(&g_ui_fonts); /* Druck: feste Schrift, nicht der Zoom */
+    long chars_per_row = chars_per_row_for(text_width);
+    use_fonts(saved);
+    return layout_build(ed, chars_per_row, out_row_count, NULL, NULL, NULL);
 }
 
 /* Ein-Eintrags-Cache fuer das Bildschirm-Layout des gerade gezeichneten
@@ -715,7 +752,9 @@ static void draw_gutter(CGContextRef ctx, CGRect bounds, const BtnRow *rows, siz
     CGPoint divider[2] = { { GUTTER_WIDTH, BTN_FOOTER_HEIGHT }, { GUTTER_WIDTH, bounds.size.height } };
     CGContextStrokeLineSegments(ctx, divider, 2);
 
+    FontSet *saved = use_fonts(&g_ui_fonts); /* Zeilennummern in fester Groesse */
     CFDictionaryRef attrs = get_gutter_attrs();
+    use_fonts(saved);
 
     for (size_t r = (size_t)scroll_row; r < row_count; r++) {
         /* Dieselbe top_y-Formel und Abbruchbedingung wie btn_render_frame's
@@ -737,7 +776,7 @@ static void draw_gutter(CGContextRef ctx, CGRect bounds, const BtnRow *rows, siz
         CTLineRef line = CTLineCreateWithAttributedString(attrStr);
 
         double textWidth = CTLineGetTypographicBounds(line, NULL, NULL, NULL);
-        CGContextSetTextPosition(ctx, GUTTER_WIDTH - 8.0 - textWidth, top_y + 4.0);
+        CGContextSetTextPosition(ctx, GUTTER_WIDTH - 8.0 - textWidth, top_y + row_baseline());
         CTLineDraw(line, ctx);
 
         CFRelease(line);
@@ -795,7 +834,7 @@ void btn_render_set_footer_formats(const char *pos_fmt, const char *stats_fmt) {
     }
 }
 
-static void draw_footer(CGContextRef ctx, CGRect bounds, Editor *ed, const BtnRow *rows, size_t row_count) {
+static void draw_footer_text(CGContextRef ctx, CGRect bounds, Editor *ed, const BtnRow *rows, size_t row_count) {
     set_fill(ctx, col_footer_bg());
     CGContextFillRect(ctx, CGRectMake(0, 0, bounds.size.width, BTN_FOOTER_HEIGHT));
 
@@ -824,7 +863,7 @@ static void draw_footer(CGContextRef ctx, CGRect bounds, Editor *ed, const BtnRo
         snprintf(right + n, sizeof(right) - (size_t)n, " | %s", g_footer_eol);
     }
 
-    double text_y = (BTN_FOOTER_HEIGHT - g_font_size) / 2.0 + 3.0;
+    double text_y = (BTN_FOOTER_HEIGHT - g_ui_fonts.size) / 2.0 + 3.0;
 
     CFStringRef leftStr = CFStringCreateWithCString(NULL, left, kCFStringEncodingUTF8);
     CFAttributedStringRef leftAttrStr = CFAttributedStringCreate(NULL, leftStr, attrs);
@@ -845,6 +884,12 @@ static void draw_footer(CGContextRef ctx, CGRect bounds, Editor *ed, const BtnRo
     CFRelease(rightAttrStr);
     CFRelease(rightStr);
     /* attrs ist gecacht (siehe get_footer_attrs()) - keine Freigabe hier. */
+}
+
+static void draw_footer(CGContextRef ctx, CGRect bounds, Editor *ed, const BtnRow *rows, size_t row_count) {
+    FontSet *saved = use_fonts(&g_ui_fonts);
+    draw_footer_text(ctx, bounds, ed, rows, row_count);
+    use_fonts(saved);
 }
 
 /* Zeichnet str linksbuendig bei (x,y) mit den gegebenen Attributen und gibt
@@ -967,9 +1012,9 @@ double btn_tab_width_for(int count, double window_width) {
     return shrunk < 40.0 ? 40.0 : shrunk;
 }
 
-void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labels, int count, int active) {
+static void draw_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labels, int count, int active) {
     double bar_top = bounds.size.height - BTN_TAB_BAR_HEIGHT;
-    double text_y = bar_top + (BTN_TAB_BAR_HEIGHT - g_font_size) / 2.0 + 3.0;
+    double text_y = bar_top + (BTN_TAB_BAR_HEIGHT - g_ui_fonts.size) / 2.0 + 3.0;
     double tab_width = btn_tab_width_for(count, bounds.size.width);
 
     set_fill(ctx, col_tab_bar_bg());
@@ -1033,6 +1078,12 @@ void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labe
     CGContextStrokeLineSegments(ctx, bottom_divider, 2);
     /* attrs/dimAttrs sind gecacht (siehe get_text_attrs()/get_dim_attrs()) -
      * keine Freigabe hier. */
+}
+
+void btn_render_tab_bar(CGContextRef ctx, CGRect bounds, const char *const *labels, int count, int active) {
+    FontSet *saved = use_fonts(&g_ui_fonts);
+    draw_tab_bar(ctx, bounds, labels, count, active);
+    use_fonts(saved);
 }
 
 BtnFindBarGeometry btn_find_bar_geometry(void) {
@@ -1113,7 +1164,11 @@ double btn_render_text_width(const char *utf8, size_t len) {
     if (len == 0) {
         return 0.0;
     }
-    CTLineRef line = make_line(utf8, len, get_text_attrs(), NULL);
+    /* vorlaeufiger Text im Suchfeld: Leisten-Schrift, im Dokument: Zoom */
+    FontSet *saved = use_fonts(g_marked.target == BTN_MARKED_DOCUMENT ? &g_doc_fonts : &g_ui_fonts);
+    CFDictionaryRef attrs = get_text_attrs();
+    use_fonts(saved);
+    CTLineRef line = make_line(utf8, len, attrs, NULL);
     if (!line) {
         return 0.0;
     }
@@ -1254,8 +1309,9 @@ void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_lab
                           const char *replace_all_label,
                           int regex_mode, int case_sensitive, int whole_word, int all_tabs,
                           int focus_field, const char *status) {
+    FontSet *saved_fonts = use_fonts(&g_ui_fonts); /* Leiste in fester Groesse */
     double bar_top = bounds.size.height - BTN_TAB_BAR_HEIGHT - BTN_FIND_BAR_HEIGHT;
-    double text_y = bar_top + (BTN_FIND_BAR_HEIGHT - g_font_size) / 2.0 + 3.0;
+    double text_y = bar_top + (BTN_FIND_BAR_HEIGHT - g_ui_fonts.size) / 2.0 + 3.0;
 
     set_fill(ctx, col_find_bar_bg());
     CGContextFillRect(ctx, CGRectMake(0, bar_top, bounds.size.width, BTN_FIND_BAR_HEIGHT));
@@ -1313,6 +1369,7 @@ void btn_render_find_bar(CGContextRef ctx, CGRect bounds, const char *search_lab
     CGContextStrokeLineSegments(ctx, bottom_divider, 2);
     /* attrs/dimAttrs/accentAttrs sind gecacht (siehe get_text_attrs()/
      * get_dim_attrs()/get_accent_attrs()) - keine Freigabe hier. */
+    use_fonts(saved_fonts);
 }
 
 /* Kommentar-Zustand VOR jeder logischen Zeile (states[i] = Zustand vor
@@ -1456,7 +1513,7 @@ void btn_compute_line_comment_states(Editor *ed, const BtnLangSpec *lang, int *o
  * langen Zeile) ab x; start_col = Spalte von from in der Row (fuer Tabs). */
 static void draw_row_line(CGContextRef ctx, Editor *ed, const BtnLangSpec *lang,
                            const BtnRow *rows, size_t row_count, size_t r, size_t from, size_t to, size_t start_col,
-                           double x, double top_y,
+                           double x, double baseline_y,
                            CFDictionaryRef attrs, size_t *cached_line, size_t *cached_line_start,
                            int *comment_state, BtnToken *tokens, size_t *token_count) {
     size_t row_start = from;
@@ -1536,7 +1593,7 @@ static void draw_row_line(CGContextRef ctx, Editor *ed, const BtnLangSpec *lang,
     free(byte_to_u16);
 
     CTLineRef ctLine = CTLineCreateWithAttributedString(attrStr);
-    CGContextSetTextPosition(ctx, x, top_y + 4.0);
+    CGContextSetTextPosition(ctx, x, baseline_y);
     CTLineDraw(ctLine, ctx);
     CFRelease(ctLine);
     CFRelease(attrStr);
@@ -1865,13 +1922,14 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
             int any_mark;
             build_invisibles_from((const unsigned char *)raw, n, draw_from_col, line_end, marks, &any_mark);
             if (any_mark) {
-                draw_text_at(ctx, marks, draw_x, top_y + 4.0, get_dim_attrs());
+                draw_text_at(ctx, marks, draw_x, top_y + row_baseline(), get_dim_attrs());
             }
             free(marks);
             free(raw);
         }
-        draw_row_line(ctx, ed, lang, rows, row_count, r, draw_from, draw_to, draw_from_col, draw_x, top_y, attrs,
-                       &cached_line, &cached_line_start, &comment_state, tokens, &token_count);
+        draw_row_line(ctx, ed, lang, rows, row_count, r, draw_from, draw_to, draw_from_col, draw_x,
+                       top_y + row_baseline(), attrs, &cached_line, &cached_line_start, &comment_state, tokens,
+                       &token_count);
 
         /* Cursor: nur im Ausschnitt (daneben liegt er ausserhalb des Bildes) */
         if (!has_sel && r == cur_row && ed->cursor >= draw_from && ed->cursor <= draw_to) {
@@ -1889,9 +1947,9 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
      * sichtbarem Cursor (seitlich weggescrollt: nichts) */
     if (cursor_shown && cx >= clip_left && cx <= bounds.size.width - BTN_SCROLLBAR_WIDTH) {
         if (g_marked.target == BTN_MARKED_DOCUMENT) {
-            draw_marked_overlay(ctx, cx, cy, LINE_HEIGHT, cy + 4.0, attrs, col_bg());
+            draw_marked_overlay(ctx, cx, cy, LINE_HEIGHT, cy + row_baseline(), attrs, col_bg());
         } else {
-            draw_ghost_text(ctx, cx, cy, LINE_HEIGHT, cy + 4.0);
+            draw_ghost_text(ctx, cx, cy, LINE_HEIGHT, cy + row_baseline());
             set_fill(ctx, col_cursor());
             CGContextFillRect(ctx, CGRectMake(cx, cy, 1.4, LINE_HEIGHT - 2));
         }
@@ -1912,7 +1970,7 @@ void btn_render_frame(CGContextRef ctx, CGRect bounds, Editor *ed, long scroll_r
 
 size_t btn_rows_per_page(double page_height) {
     double usable = page_height - 2.0 * PRINT_MARGIN;
-    long n = (long)(usable / LINE_HEIGHT);
+    long n = (long)(usable / BTN_DEFAULT_LINE_HEIGHT);
     return n > 0 ? (size_t)n : 1;
 }
 
@@ -1947,7 +2005,9 @@ void btn_render_print_page(CGContextRef ctx, CGRect page_rect, Editor *ed, const
     CGContextSetRGBFillColor(ctx, 1.0, 1.0, 1.0, 1.0);
     CGContextFillRect(ctx, page_rect);
 
+    FontSet *saved_fonts = use_fonts(&g_ui_fonts); /* Papier: feste Schrift, nicht der Zoom */
     CTFontRef font = get_font();
+    use_fonts(saved_fonts);
     CGColorRef black = CGColorCreateGenericRGB(0.0, 0.0, 0.0, 1.0);
     CFDictionaryRef attrs = make_attrs(font, black);
 
@@ -1960,11 +2020,11 @@ void btn_render_print_page(CGContextRef ctx, CGRect page_rect, Editor *ed, const
     double x = page_rect.origin.x + PRINT_MARGIN;
     size_t r = first_row;
     for (size_t i = 0; r < row_count; i++, r++) {
-        double top_y = page_rect.origin.y + page_rect.size.height - PRINT_MARGIN - (double)(i + 1) * LINE_HEIGHT;
+        double top_y = page_rect.origin.y + page_rect.size.height - PRINT_MARGIN - (double)(i + 1) * BTN_DEFAULT_LINE_HEIGHT;
         if (top_y < page_rect.origin.y + PRINT_MARGIN) {
             break;
         }
-        draw_row_line(ctx, ed, lang, rows, row_count, r, rows[r].start, rows[r].start + rows[r].len, 0, x, top_y,
+        draw_row_line(ctx, ed, lang, rows, row_count, r, rows[r].start, rows[r].start + rows[r].len, 0, x, top_y + 4.0,
                        attrs, &cached_line, &cached_line_start, &comment_state, tokens, &token_count);
     }
 
@@ -2022,6 +2082,8 @@ CGRect btn_render_find_caret_rect(CGRect bounds, Editor *field, int replace_fiel
     double bar_top = bounds.size.height - BTN_TAB_BAR_HEIGHT - BTN_FIND_BAR_HEIGHT;
     double field_x = replace_field ? g.replace_field_x : g.search_field_x;
     size_t col = editor_visual_column_in_range(field, 0, offset);
+    FontSet *saved = use_fonts(&g_ui_fonts);
     double char_width = get_char_width();
+    use_fonts(saved);
     return CGRectMake(field_x + (double)col * char_width, bar_top + 4.0, char_width, BTN_FIND_BAR_HEIGHT - 8.0);
 }

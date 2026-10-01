@@ -4243,10 +4243,10 @@ static long autoscroll_steps(double dist, double unit, long max_steps) {
 
 static long autoscroll_rows(double y, double top, double bottom, long max_rows) {
     if (y > top) {
-        return -autoscroll_steps(y - top, BTN_LINE_HEIGHT, max_rows);
+        return -autoscroll_steps(y - top, btn_render_line_height(), max_rows);
     }
     if (y < bottom) {
-        return autoscroll_steps(bottom - y, BTN_LINE_HEIGHT, max_rows);
+        return autoscroll_steps(bottom - y, btn_render_line_height(), max_rows);
     }
     return 0;
 }
@@ -4296,9 +4296,9 @@ static void drag_select_to(double x, double y, int tick) {
     int more_cols = hstep < 0 ? doc->scroll_col > 0 : hstep > 0 && doc->scroll_col < max_col;
     btn_app_set_autoscroll(more_rows || more_cols);
     if (y > top) {
-        y = top - BTN_LINE_HEIGHT / 2.0;
+        y = top - btn_render_line_height() / 2.0;
     } else if (y < bottom) {
-        y = bottom + BTN_LINE_HEIGHT / 2.0;
+        y = bottom + btn_render_line_height() / 2.0;
     }
     /* Rechts nur bis zur letzten sichtbaren Spalte - sonst holte
      * sync_scroll_to_cursor() den Cursor schon bei jeder Mausbewegung ins
@@ -4473,7 +4473,7 @@ static void on_scroll(double delta_x, double delta_y, int precise) {
     btn_text_input_invalidate(); /* Kandidatenfenster folgt dem Cursor */
     if (!precise) {
         delta_x *= btn_render_char_width();
-        delta_y *= BTN_LINE_HEIGHT;
+        delta_y *= btn_render_line_height();
     }
     if (fabs(delta_x) < fabs(delta_y)) {
         delta_x = 0.0;
@@ -4482,8 +4482,8 @@ static void on_scroll(double delta_x, double delta_y, int precise) {
     }
     Document *doc = active_doc();
     doc->scroll_accum += delta_y;
-    long lines = (long)(doc->scroll_accum / BTN_LINE_HEIGHT);
-    doc->scroll_accum -= (double)lines * BTN_LINE_HEIGHT;
+    long lines = (long)(doc->scroll_accum / btn_render_line_height());
+    doc->scroll_accum -= (double)lines * btn_render_line_height();
     long cols = 0;
     if (!g_wrap) {
         double char_width = btn_render_char_width();
