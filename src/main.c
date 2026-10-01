@@ -5,12 +5,22 @@
 #include "shim.h"
 #include "render.h"
 #include "editor.h"
+#include "ai.h"
+#include "encoding.h"
+#include "eol.h"
+#include "filestamp.h"
+#include "recovery.h"
+#include "textinput.h"
 #include "strings.h"
 
+#include <ctype.h>
+#include <math.h>
 #include <regex.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #define KEYCODE_LEFT           123
@@ -21,6 +31,16 @@
 #define KEYCODE_END            119
 #define KEYCODE_FORWARD_DELETE 117
 #define KEYCODE_TAB            48
+/* Kein echter Keycode: markiert Text aus einer Eingabemethode (insertText:),
+ * der ueber denselben Weg wie ein getipptes Zeichen eingefuegt wird. */
+#define KEYCODE_TEXT           0xFFFF
+
+/* Ablage > Kodierung: ein Eintrag je BtnEncoding, in derselben Reihenfolge. */
+_Static_assert(BTN_MENU_ENC_COUNT == (int)BTN_ENC_COUNT, "BTN_MENU_ENC_COUNT muss BTN_ENC_COUNT entsprechen");
+/* on_menu() rechnet tag - BTN_MENU_EOL_LF in ein BtnEol um. */
+_Static_assert(BTN_MENU_EOL_CRLF - BTN_MENU_EOL_LF == (int)BTN_EOL_CRLF &&
+               BTN_MENU_EOL_CR - BTN_MENU_EOL_LF == (int)BTN_EOL_CR,
+               "BTN_MENU_EOL_* muss der Reihenfolge von BtnEol folgen");
 
 /* Ein offenes Dokument (ein Tab). Jedes hat seinen eigenen Puffer/Undo-
  * Verlauf/Scroll-Zustand - nur das Fenster, das Menue und die Zwischenablage
@@ -32,8 +52,70 @@ typedef struct {
     Editor editor;
     char *path;            /* NULL = unbenanntes, neues Dokument */
     size_t saved_edit_seq;
+    /* Zeilenenden (siehe eol.h). Normalfall: im Puffer steht nur '\n', eol
+     * ist das Format der Datei und wird beim Sichern wieder geschrieben.
+     * eol_raw = 1: der Puffer enthaelt die Datei Byte fuer Byte, wie sie war
+     * - bei gemischten Zeilenenden (ein '\r' kann dort Nutzdaten sein, z.B.
+     * Fortschrittszeilen in einem Log) und bei Binaerdateien; gesichert wird
+     * dann unveraendert, eol ist nur das vorherrschende Format fuer die
+     * Statuszeile. Erst eine ausdrueckliche Wahl im Menue wandelt um
+     * (set_doc_line_ending()). binary: per "Trotzdem oeffnen" geladen - das
+     * Menue ist dann gesperrt. saved_*: Stand beim letzten Laden/Sichern,
+     * ein Umstellen ist eine ungesicherte Aenderung. */
+    BtnEol eol;
+    int eol_raw;
+    int binary;
+    BtnEol saved_eol;
+    int saved_eol_raw;
+    /* Zeichenkodierung der Datei (encoding.h): im Puffer steht UTF-8, beim
+     * Sichern wird nach enc gewandelt; Binaerdateien bleiben roh (UTF-8 =
+     * unveraendert). Ein Umstellen im Menue ist wie bei den Zeilenenden
+     * eine ungesicherte Aenderung. */
+    BtnEncoding enc;
+    BtnEncoding saved_enc;
+    int utf16_bom;  /* UTF-16: mit BOM sichern (so geoeffnet bzw. neu gewaehlt) */
+    int saved_utf16_bom;
+    /* Per "Neu oeffnen als" gewaehlte Lese-Kodierung (-1 = erkennen) und was
+     * die Erkennung damals meinte: Neuladen liest wieder so, solange die
+     * Erkennung dasselbe meint - schreibt ein Programm die Datei in einer
+     * anderen Kodierung neu, wird wieder erkannt. */
+    int read_enc;
+    BtnEncoding read_detected;
     long scroll_row;
     double scroll_accum;
+    long scroll_col;       /* ohne Zeilenumbruch: seitlich gescrollte Spalten */
+    double hscroll_accum;
+    /* Schutz der Arbeit: disk = Stand der Datei beim letzten Laden/Sichern
+     * (oder bei "Meine Version behalten"); weicht die Platte davon ab, hat
+     * ein anderes Programm sie geaendert. missing_on_disk: die Datei ist
+     * verschwunden (geloescht, verschoben) oder nicht mehr lesbar - der Text
+     * existiert nur noch hier, der Tab gilt als ungesichert. recovery_*:
+     * Wiederherstellungsdatei (recovery.h) dieses Dokuments, NULL = keine;
+     * mit welchem Inhaltsstand und wann zuletzt geschrieben. */
+    BtnFileStamp disk;
+    uint64_t disk_hash;   /* Pruefsumme dieses Stands (filestamp.h) */
+    int disk_hash_valid;  /* 0 = unbekannt (wiederhergestellt, verschwunden) */
+    BtnFileStamp changed; /* zuletzt als echte Aenderung erkannter Stand (nicht neu lesen) */
+    int missing_on_disk;
+    unsigned recovery_id;
+    char *recovery_file;
+    size_t recovery_seq;
+    BtnEol recovery_eol;
+    int recovery_eol_raw;
+    BtnEncoding recovery_enc;
+    long recovery_time;
+    long disk_check_time; /* letzte Pruefung durch den Timer */
+    /* Gecachtes, fertig formatiertes Tab-Label (siehe doc_display_name()),
+     * damit on_draw() es nicht bei JEDEM Redraw (jedem Tastendruck, da die
+     * App ohne Dirty-Region-Tracking das ganze Fenster neu zeichnet) fuer
+     * ALLE offenen Tabs neu zusammenbauen muss, auch fuer unveraenderte
+     * Hintergrund-Tabs. label_cache_valid=0 erzwingt einen Neuaufbau;
+     * label_cache_was_dirty haelt fest, fuer welchen doc_is_dirty()-Zustand
+     * der Cache zuletzt gebaut wurde, damit ein Wechsel des Punkt-Praefixes
+     * (ungesicherte Aenderung) den Cache verlaesslich invalidiert. */
+    char label_cache[300];
+    int label_cache_valid;
+    int label_cache_was_dirty;
 } Document;
 
 #define MAX_TABS 20
@@ -41,8 +123,52 @@ static Document g_docs[MAX_TABS];
 static int g_doc_count = 0;
 static int g_active_doc = 0;
 
+/* Wiederherstellung nach Absturz (recovery.h): Ordner (NULL = aus, kein
+ * HOME) und fortlaufende Nummer fuer die Dateinamen der Dokumente. Alle
+ * BTN_RECOVERY_INTERVAL Sekunden schreibt ein Timer den Stand jedes
+ * ungesicherten Dokuments - bei grossen Dokumenten seltener (pro
+ * BTN_RECOVERY_BYTES_PER_SECOND eine Sekunde mehr Abstand), damit ein
+ * 1-GB-Dokument nicht alle paar Sekunden komplett geschrieben wird. */
+#define BTN_RECOVERY_INTERVAL 5
+#define BTN_RECOVERY_BYTES_PER_SECOND (20L * 1024 * 1024)
+static char *g_recovery_dir = NULL;
+static char *g_recovery_run = NULL; /* Kennung dieses Laufs (recovery.h) */
+static unsigned g_next_recovery_id = 1;
+
+/* Sekunden einer Uhr, die nie rueckwaerts springt (anders als time() beim
+ * Stellen der Uhr) - fuer die Abstaende der Wiederherstellungsdateien. */
+static long monotonic_seconds(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long)ts.tv_sec;
+}
+
+static void discard_recovery(Document *d) {
+    if (d->recovery_file) {
+        unlink(d->recovery_file);
+        free(d->recovery_file);
+        d->recovery_file = NULL;
+    }
+}
+
 static CGRect g_bounds = { { 0, 0 }, { 900, 600 } };
-static int g_dragging = 0;
+
+/* Was die gedrueckte Maustaste gerade tut. */
+typedef enum {
+    BTN_DRAG_NONE,
+    BTN_DRAG_TEXT,      /* Selektion ziehen (mit Autoscroll am Rand) */
+    BTN_DRAG_SCROLLBAR, /* Scrollbalken-Knopf ziehen */
+    BTN_DRAG_HSCROLLBAR /* seitlichen Scrollbalken-Knopf ziehen */
+} BtnDrag;
+static BtnDrag g_drag = BTN_DRAG_NONE;
+static double g_drag_knob_offset; /* Knopf-Oberkante (seitlich: linke Kante) minus Klickpunkt */
+
+static void ai_cancel(void); /* KI-Vervollstaendigung, weiter unten */
+
+static void stop_mouse_drag(void) {
+    g_drag = BTN_DRAG_NONE;
+    btn_app_set_autoscroll(0);
+}
 
 static char *g_recent_paths[BTN_MAX_RECENT_FILES]; /* [0] = neuester Eintrag */
 static int g_recent_count = 0;
@@ -60,10 +186,26 @@ typedef enum {
 } BtnFocus;
 
 static int g_find_bar_visible = 0;
+
+/* Vorlaeufiger Text einer Eingabemethode (siehe textinput.h) - gehoert zum
+ * fokussierten Editor, steht aber nicht in dessen Puffer. */
+static BtnMarkedText g_marked;
+static void commit_marked(void);
 static BtnFocus g_focus = BTN_FOCUS_DOCUMENT;
 static Editor g_search_editor;
 static Editor g_replace_editor;
 static int g_search_regex = 0; /* 0 = Literalsuche, 1 = POSIX-Regex (ERE) */
+/* Default 0 (Gross-/Kleinschreibung wird ignoriert) - entspricht der
+ * Voreinstellung praktisch aller anderen Mac-Sucheingaben (Safari, Xcode,
+ * VS Code); der "Aa"-Umschalter schaltet auf exakte Gross-/Kleinschreibung
+ * um. */
+static int g_search_case_sensitive = 0;
+/* Default 0 (Teiltreffer erlaubt) - der "\b"-Umschalter grenzt Treffer auf
+ * ganze Woerter ein (siehe compile_search_regex()). */
+static int g_search_whole_word = 0;
+/* "⧉"-Umschalter: Weitersuchen springt in den naechsten Tab mit Treffer,
+ * "Alle ersetzen" ersetzt in allen Tabs, der Status zaehlt alle Tabs. */
+static int g_search_all_tabs = 0;
 static char g_search_status[128] = "";
 
 /* Alle Fundstellen der aktuellen Suchanfrage im aktiven Dokument, nach Start
@@ -76,9 +218,29 @@ static char g_search_status[128] = "";
  * pathologisch haeufige Muster - analog zu BTN_MAX_HIGHLIGHT_LINE_LEN in
  * highlight.c. */
 #define BTN_MAX_SEARCH_MATCHES 5000
+/* Obergrenze fuer die Dokumentgroesse, bis zu der perform_live_search() noch
+ * bei JEDEM Tastendruck einen vollen Kopie+Regex-Scan macht - anders als die
+ * Trefferanzahl (deren Deckel BTN_MAX_SEARCH_MATCHES oben ist) waechst diese
+ * Kosten mit der Dokumentgroesse selbst, nicht mit der Trefferzahl, und war
+ * vor der Live-Suche schlicht nicht vorhanden (Tippen im Suchfeld war vorher
+ * O(1)). Darueber faellt die Live-Hervorhebung/-Suche aus, Suchen
+ * funktioniert aber weiterhin ganz normal per Return (perform_find() bleibt
+ * unveraendert schnell genug fuer eine einzelne, diskrete Nutzeraktion statt
+ * fuer jeden einzelnen Tastendruck). */
+#define BTN_LIVE_SEARCH_MAX_DOC_LEN (2 * 1024 * 1024)
 static size_t g_match_starts[BTN_MAX_SEARCH_MATCHES];
 static size_t g_match_ends[BTN_MAX_SEARCH_MATCHES];
 static size_t g_match_count = 0;
+/* editor_edit_seq() des aktiven Dokuments zum Zeitpunkt, als g_match_starts/
+ * g_match_ends zuletzt aufgebaut wurden - Klick ins Dokument entzieht der
+ * Suchleiste nur den Fokus (siehe close_find_bar()-Kommentar bei
+ * switch_to_tab()), schliesst sie aber NICHT; tippt der Nutzer danach direkt
+ * im Dokument weiter, veraendern sich die Byte-Offsets im Puffer, ohne dass
+ * irgendein Suchleisten-Pfad das mitbekommt. on_draw() vergleicht das vor
+ * jedem Redraw gegen den aktuellen edit_seq und verwirft veraltete Treffer
+ * (siehe invalidate_matches_if_doc_edited()), statt sie gegen den falschen
+ * (weil laengst verschobenen) Text zu zeichnen. */
+static size_t g_match_edit_seq = 0;
 
 /* Ausgangspunkt fuer die naechste Live-Suche (siehe perform_live_search) -
  * bewusst getrennt von der aktuellen Dokument-Selektion: die Selektion
@@ -113,11 +275,29 @@ static const char *basename_of(const char *path) {
     return slash ? slash + 1 : path;
 }
 
-static int doc_is_dirty(Document *d) {
+/* Eigene Aenderungen seit dem letzten Laden/Sichern. */
+static int doc_has_edits(Document *d) {
     /* Bewusst ueber edit_seq statt ueber undo.pos: Undo-Coalescing kann
      * pos unveraendert lassen, obwohl sich der Inhalt geaendert hat (siehe
      * editor.h-Kommentar bei edit_seq). */
-    return d->editor.edit_seq != d->saved_edit_seq;
+    return d->editor.edit_seq != d->saved_edit_seq || d->eol != d->saved_eol || d->eol_raw != d->saved_eol_raw ||
+           d->enc != d->saved_enc || (btn_enc_is_utf16(d->enc) && d->utf16_bom != d->saved_utf16_bom);
+}
+
+/* Ungesichert: eigene Aenderungen, oder die Datei auf der Platte ist weg. */
+static int doc_is_dirty(Document *d) {
+    return doc_has_edits(d) || d->missing_on_disk;
+}
+
+/* Merkt den aktuellen Stand als gesichert (nach Laden, Sichern oder "Nicht
+ * sichern"). */
+static void mark_doc_saved(Document *d) {
+    d->saved_edit_seq = d->editor.edit_seq;
+    d->saved_eol = d->eol;
+    d->saved_eol_raw = d->eol_raw;
+    d->saved_enc = d->enc;
+    d->saved_utf16_bom = d->utf16_bom;
+    d->missing_on_disk = 0;
 }
 
 static int is_dirty(void) {
@@ -136,6 +316,7 @@ static void set_doc_path(Document *d, const char *path) {
     char *copy = path ? btn_dup_cstring(path) : NULL;
     free(d->path);
     d->path = copy;
+    d->label_cache_valid = 0; /* Basisname fuers Tab-Label hat sich geaendert */
     if (d == active_doc()) {
         btn_set_window_title(doc_display_name(d));
     }
@@ -143,6 +324,9 @@ static void set_doc_path(Document *d, const char *path) {
 
 static void sync_window_state(void) {
     btn_app_set_document_edited(is_dirty());
+    Document *d = active_doc();
+    btn_app_set_line_ending_menu(d->eol_raw ? -1 : (int)d->eol, !d->binary);
+    btn_app_set_encoding_menu((int)d->enc, !d->binary, d->path != NULL);
 }
 
 /* Persistiert als einfache Zeilenliste unter ~/.btnedit_recent statt in
@@ -196,6 +380,16 @@ static void load_recent_files(void) {
     char line[4096];
     while (g_recent_count < BTN_MAX_RECENT_FILES && fgets(line, sizeof(line), f)) {
         size_t len = strlen(line);
+        /* Zeile laenger als der Puffer (kein '\n' und noch nicht am
+         * Dateiende): fgets() lieferte nur ihren Anfang, der Rest kaeme als
+         * eigene "Zeile" - beides waeren Pfade, die es so nicht gibt (und die
+         * im Zweifel eine ganz andere Datei treffen). Ganze Zeile verwerfen. */
+        if (len > 0 && line[len - 1] != '\n' && !feof(f)) {
+            int c;
+            while ((c = fgetc(f)) != EOF && c != '\n') {
+            }
+            continue;
+        }
         while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
             line[--len] = '\0';
         }
@@ -206,6 +400,82 @@ static void load_recent_files(void) {
             continue;
         }
         g_recent_paths[g_recent_count++] = btn_dup_cstring(line);
+    }
+    fclose(f);
+}
+
+/* Persistiert die per Cmd+/Cmd-/Cmd+0 eingestellte Schriftgroesse als
+ * einzelne Zahl unter ~/.btnedit_prefs - aus denselben Gruenden wie
+ * ~/.btnedit_recent oben (siehe recent_file_list_path()) eine eigene Datei
+ * statt NSUserDefaults, damit main.c Cocoa-frei bleibt. Ohne das wuerde
+ * jeder Neustart wieder bei BTN_DEFAULT_FONT_SIZE (13pt) anfangen, egal
+ * welchen Zoom der Nutzer zuletzt eingestellt hatte. */
+static char *prefs_file_path(void) {
+    const char *home = getenv("HOME");
+    if (!home) {
+        return NULL;
+    }
+    size_t len = strlen(home) + strlen("/.btnedit_prefs") + 1;
+    char *path = malloc(len);
+    snprintf(path, len, "%s/.btnedit_prefs", home);
+    return path;
+}
+
+/* Darstellung > Unsichtbare Zeichen einblenden (zweite Zeile der Prefs-Datei). */
+static int g_show_invisibles = 0;
+
+static void apply_show_invisibles(int on) {
+    g_show_invisibles = on;
+    btn_render_set_show_invisibles(on);
+    btn_app_set_show_invisibles_menu(on);
+}
+
+/* Darstellung > Zeilenumbruch (dritte Zeile der Prefs-Datei, Standard an). */
+static int g_wrap = 1;
+
+static void apply_wrap(int on) {
+    g_wrap = on;
+    btn_render_set_wrap(on);
+    btn_app_set_wrap_menu(on);
+}
+
+/* Zeile 1: Schriftgroesse, Zeile 2: unsichtbare Zeichen (0/1), Zeile 3:
+ * Zeilenumbruch (0/1). Eine alte Datei mit weniger Zeilen laesst die
+ * fehlenden Einstellungen aus. */
+static void save_prefs(void) {
+    char *path = prefs_file_path();
+    if (!path) {
+        return;
+    }
+    FILE *f = fopen(path, "w");
+    free(path);
+    if (!f) {
+        return;
+    }
+    fprintf(f, "%.1f\n%d\n%d\n", btn_render_get_font_size(), g_show_invisibles, g_wrap);
+    fclose(f);
+}
+
+static void load_prefs(void) {
+    char *path = prefs_file_path();
+    if (!path) {
+        return;
+    }
+    FILE *f = fopen(path, "r");
+    free(path);
+    if (!f) {
+        return;
+    }
+    double size;
+    int invisibles, wrap;
+    if (fscanf(f, "%lf", &size) == 1) {
+        btn_render_set_font_size(size);
+        if (fscanf(f, "%d", &invisibles) == 1) {
+            apply_show_invisibles(invisibles != 0);
+            if (fscanf(f, "%d", &wrap) == 1) {
+                apply_wrap(wrap != 0);
+            }
+        }
     }
     fclose(f);
 }
@@ -252,18 +522,30 @@ static CGRect content_bounds(void) {
 }
 
 static long visible_line_capacity(void) {
-    double content_height = content_bounds().size.height - BTN_FOOTER_HEIGHT;
-    long n = (long)(content_height / BTN_LINE_HEIGHT);
-    return n > 0 ? n : 1;
+    return btn_visible_row_capacity(content_bounds().size.height);
 }
 
-/* Baut das aktuelle Zeilenumbruch-Layout fuer die momentane Fensterbreite;
- * caller muss btn_layout_free(*out_rows) aufrufen. */
-static size_t build_current_rows(BtnRow **out_rows) {
+/* Zeilenumbruch-Layout fuer die momentane Fensterbreite aus render.c's
+ * Cache (siehe btn_layout_get()) - NICHT freigeben. */
+static size_t build_current_rows(const BtnRow **out_rows) {
     double width = btn_layout_text_width(content_bounds());
     size_t row_count;
-    *out_rows = btn_layout_build(&active_doc()->editor, width, &row_count);
+    *out_rows = btn_layout_get(&active_doc()->editor, width, &row_count);
     return row_count;
+}
+
+/* Seitlich (ohne Umbruch): scroll_col auf [0, breiteste Zeile + 1 - sichtbare
+ * Spalten]; mit Umbruch immer 0 (btn_hscroll_max()). */
+static void clamp_hscroll(void) {
+    Document *d = active_doc();
+    CGRect cb = content_bounds();
+    long max_col = btn_hscroll_max(cb, btn_layout_max_cols(&d->editor, btn_layout_text_width(cb)));
+    if (d->scroll_col > max_col) {
+        d->scroll_col = max_col;
+    }
+    if (d->scroll_col < 0) {
+        d->scroll_col = 0;
+    }
 }
 
 /* Klemmt scroll_row des aktiven Dokuments auf [0, row_count - Sichtkapazitaet]
@@ -282,12 +564,12 @@ static void clamp_scroll_to_row_count(long row_count) {
     if (d->scroll_row > max_scroll) {
         d->scroll_row = max_scroll;
     }
+    clamp_hscroll();
 }
 
 static void clamp_scroll(void) {
-    BtnRow *rows;
+    const BtnRow *rows;
     long row_count = (long)build_current_rows(&rows);
-    btn_layout_free(rows);
     clamp_scroll_to_row_count(row_count);
 }
 
@@ -295,17 +577,25 @@ static void clamp_scroll(void) {
  * bei Tastatur-Navigation gibt es sonst keinen anderen Weg, ihn wieder
  * ins Bild zu bekommen. */
 static void sync_scroll_to_cursor(void) {
-    BtnRow *rows;
+    const BtnRow *rows;
     size_t row_count = build_current_rows(&rows);
     Document *d = active_doc();
     long cur_row = (long)btn_layout_row_for_offset(rows, row_count, d->editor.cursor);
-    btn_layout_free(rows);
 
     long capacity = visible_line_capacity();
     if (cur_row < d->scroll_row) {
         d->scroll_row = cur_row;
     } else if (cur_row >= d->scroll_row + capacity) {
         d->scroll_row = cur_row - capacity + 1;
+    }
+    if (!g_wrap && row_count > 0) {
+        long col = (long)editor_visual_column_in_range(&d->editor, rows[cur_row].start, d->editor.cursor);
+        long cols = btn_visible_col_capacity(btn_layout_text_width(content_bounds()));
+        if (col < d->scroll_col) {
+            d->scroll_col = col;
+        } else if (col >= d->scroll_col + cols) {
+            d->scroll_col = col - cols + 1;
+        }
     }
     clamp_scroll_to_row_count((long)row_count);
 }
@@ -314,6 +604,7 @@ static void close_find_bar(void) {
     if (!g_find_bar_visible) {
         return;
     }
+    commit_marked();
     g_find_bar_visible = 0;
     g_focus = BTN_FOCUS_DOCUMENT;
     /* Sonst blieben die gelben Treffer-Hervorhebungen (siehe
@@ -332,16 +623,28 @@ static void close_find_bar(void) {
  * Suchtext - genau wie Cmd+F das in so gut wie jedem macOS-Editor tut.
  * Mehrzeilige Selektionen werden ignoriert (Zeilenumbrueche/Regex-
  * Sonderzeichen darin ergeben selten einen sinnvollen Suchbegriff). */
-static void open_find_bar(void) {
+/* Uebernimmt eine einzeilige Selektion des Dokuments als Suchbegriff (Cmd+F
+ * und Cmd+E). Laenge aus den Selektionsgrenzen, nicht strlen(): ein NUL-Byte
+ * in der Selektion schnitt die Vorbelegung vorher dort ab. 1 = uebernommen. */
+static int take_selection_as_search_text(void) {
     Editor *ed = &active_doc()->editor;
-    if (editor_has_selection(ed)) {
-        char *sel = editor_get_selection_text(ed);
-        size_t sel_len = strlen(sel);
-        if (strchr(sel, '\n') == NULL) {
-            editor_set_text(&g_search_editor, sel, sel_len);
-        }
-        free(sel);
+    if (!editor_has_selection(ed)) {
+        return 0;
     }
+    size_t len = editor_selection_end(ed) - editor_selection_start(ed);
+    char *sel = editor_get_selection_text(ed);
+    int single_line = memchr(sel, '\n', len) == NULL;
+    if (single_line) {
+        editor_set_text(&g_search_editor, sel, len);
+    }
+    free(sel);
+    return single_line;
+}
+
+static void open_find_bar(void) {
+    commit_marked();
+    Editor *ed = &active_doc()->editor;
+    take_selection_as_search_text();
     /* Bestehenden Suchtext komplett selektieren (wie Cmd+F in praktisch
      * jeder Mac-App) - Tippen ersetzt ihn dann sofort, statt ihn zu
      * ergaenzen. */
@@ -364,15 +667,30 @@ static void open_find_bar(void) {
  * Fenstergroessenaenderung angepasst haben kann. Schliesst nebenbei eine
  * offene Suchen-Leiste - deren Zustand (Selektion als aktueller Treffer)
  * bezieht sich sonst auf ein Dokument, das gerade nicht mehr sichtbar ist. */
-static void switch_to_tab(int idx) {
-    close_find_bar();
+/* Tabwechsel; keep_find: die Suchleiste bleibt offen (Suche ueber alle
+ * Tabs springt zum naechsten Treffer), ihre Treffer gehoeren dann aber
+ * nicht mehr zum aktiven Dokument. */
+static void switch_to_tab_ex(int idx, int keep_find) {
+    commit_marked();
+    stop_mouse_drag(); /* ein Ziehen gehoerte zum bisherigen Dokument */
+    ai_cancel();       /* eine Tipp-Pause auch */
+    if (keep_find) {
+        g_match_count = 0;
+    } else {
+        close_find_bar();
+    }
     g_active_doc = idx;
     btn_set_window_title(doc_display_name(active_doc()));
     sync_window_state();
     sync_scroll_to_cursor();
 }
 
+static void switch_to_tab(int idx) {
+    switch_to_tab_ex(idx, 0);
+}
+
 static void doc_free(Document *d) {
+    discard_recovery(d); /* das Dokument ist weg, also auch seine Sicherung */
     editor_free(&d->editor);
     free(d->path);
 }
@@ -387,9 +705,25 @@ static int add_tab(void) {
     Document *d = &g_docs[g_doc_count];
     editor_init(&d->editor);
     d->path = NULL;
-    d->saved_edit_seq = d->editor.edit_seq;
+    d->eol = BTN_EOL_LF;
+    d->eol_raw = 0;
+    d->binary = 0;
+    d->enc = BTN_ENC_UTF8;
+    d->utf16_bom = 1;
+    d->read_enc = -1;
+    mark_doc_saved(d);
     d->scroll_row = 0;
     d->scroll_accum = 0.0;
+    d->scroll_col = 0;
+    d->hscroll_accum = 0.0;
+    d->label_cache_valid = 0;
+    memset(&d->disk, 0, sizeof(d->disk));
+    memset(&d->changed, 0, sizeof(d->changed));
+    d->disk_hash_valid = 0;
+    d->missing_on_disk = 0;
+    d->recovery_id = g_next_recovery_id++;
+    d->recovery_file = NULL;
+    d->disk_check_time = -1000000; /* erste Timer-Pruefung sofort */
     return g_doc_count++;
 }
 
@@ -429,6 +763,29 @@ static void regex_escape_literal(const char *src, char *out, size_t out_cap) {
     out[o] = '\0';
 }
 
+/* Regex-Modus: "\t" im Suchmuster ist ein Tabulator. POSIX-ERE kennt kein
+ * \t (regcomp() las es als 't'), und die Tab-Taste wechselt in der
+ * Suchleiste das Feld - ohne das war ein Tab nur ueber [[:blank:]]
+ * erreichbar. Alle anderen Escapes gehen unveraendert an regcomp(), "\\t"
+ * bleibt also Backslash + t. out braucht Platz fuer len + 1 Bytes. */
+static void regex_translate_tab_escapes(const char *in, size_t len, char *out) {
+    size_t o = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (in[i] == '\\' && i + 1 < len) {
+            if (in[i + 1] == 't') {
+                out[o++] = '\t';
+            } else {
+                out[o++] = in[i];
+                out[o++] = in[i + 1];
+            }
+            i++;
+            continue;
+        }
+        out[o++] = in[i];
+    }
+    out[o] = '\0';
+}
+
 static int compile_search_regex(regex_t *re) {
     size_t query_len;
     char *query = editor_copy_all(&g_search_editor, &query_len);
@@ -444,13 +801,47 @@ static int compile_search_regex(regex_t *re) {
     size_t cap = query_len * 2 + 1;
     char *pattern = malloc(cap);
     if (g_search_regex) {
-        snprintf(pattern, cap, "%s", query);
+        regex_translate_tab_escapes(query, query_len, pattern);
     } else {
         regex_escape_literal(query, pattern, cap);
     }
     free(query);
-    int ok = regcomp(re, pattern, REG_EXTENDED) == 0;
-    free(pattern);
+
+    char *final_pattern = pattern;
+    if (g_search_whole_word) {
+        /* [[:<:]]/[[:>:]] sind wie REG_STARTEND oben eine BSD/Darwin-
+         * Erweiterung fuer nullbreite Wortgrenzen-Anker - anders als ein
+         * Wrap mit Zeichenklassen wie "(^|[^[:alnum:]_])...($|[^[:alnum:]_])"
+         * aendern sie NICHT den eigentlichen Treffer-Bereich selbst
+         * (wichtig, weil dieser Bereich 1:1 fuers Hervorheben/Ersetzen
+         * verwendet wird - ein Wrap wuerde die angrenzenden Trennzeichen
+         * mit in den Treffer ziehen). */
+        size_t plen = strlen(pattern);
+        char *wrapped = malloc(plen + 16);
+        if (wrapped) {
+            snprintf(wrapped, plen + 16, "[[:<:]]%s[[:>:]]", pattern);
+            free(pattern);
+            final_pattern = wrapped;
+        }
+        /* Bei fehlgeschlagener Allokation bleibt final_pattern das
+         * unveraenderte pattern (kein Leck, da wrapped hier NULL ist und
+         * pattern unten regulaer weiterverwendet/freigegeben wird) - die
+         * Suche funktioniert dann weiter, nur ohne Ganzes-Wort-Eingrenzung,
+         * statt mit NULL an snprintf() abzustuerzen. */
+    }
+
+    /* REG_NEWLINE: '^'/'$' matchen an jeder Zeilengrenze und '.' bzw. eine
+     * negierte Klasse laufen nicht ueber '\n' hinaus (wie in VS Code/BBEdit).
+     * Ohne das Flag bedeutete '^' nur "Anfang des durchsuchten Bereichs" -
+     * und weil jeder Scan beim Ende des vorherigen Treffers wieder aufsetzt
+     * (siehe collect_all_matches()), fand "^foo" in "bar\nfoo" schlicht
+     * nichts, "a$" vor einem Zeilenumbruch ebenso wenig. Die NOTBOL-Logik in
+     * regexec_flags_for() bleibt dabei korrekt: sie unterdrueckt '^' nur an
+     * der Startposition selbst, nach einem eingebetteten '\n' matcht '^'
+     * unabhaengig davon. */
+    int cflags = REG_EXTENDED | REG_NEWLINE | (g_search_case_sensitive ? 0 : REG_ICASE);
+    int ok = regcomp(re, final_pattern, cflags) == 0;
+    free(final_pattern);
     return ok;
 }
 
@@ -474,6 +865,49 @@ static int regexec_flags_for(const char *text, size_t offset) {
     return REG_STARTEND;
 }
 
+/* Ein regexec() auf text[scan, text_len), Treffer auf ganze Zeichen
+ * erweitert. Ohne setlocale() arbeitet regex in der C-Locale byteweise: "."
+ * auf "ae" (2 Bytes) traefe nur das erste Byte, Selektion bzw. Cursor laegen
+ * mitten im Zeichen und Tippen wuerde es zerteilen. Deshalb Anfang auf den
+ * Zeichenanfang zurueck (btn_utf8_seq_start()), Ende auf das Ende des letzten
+ * beruehrten Zeichens. Steht scan auf einer Zeichengrenze, liegt der
+ * erweiterte Treffer nie vor scan - aufeinanderfolgende Treffer ueberlappen
+ * also nicht. expand_replacement() erkennt einen so erweiterten Treffer
+ * (Re-Exec liefert nicht exakt denselben Bereich) und setzt dann nur $0. */
+static int regex_search_from(const regex_t *re, const char *text, size_t text_len, size_t scan, int eflags,
+                             size_t *out_start, size_t *out_end) {
+    regmatch_t m;
+    m.rm_so = (regoff_t)scan;
+    m.rm_eo = (regoff_t)text_len;
+    if (regexec(re, text, 1, &m, eflags) != 0) {
+        return 0;
+    }
+    const unsigned char *u = (const unsigned char *)text;
+    size_t ms = (size_t)m.rm_so, me = (size_t)m.rm_eo;
+    size_t start = btn_utf8_seq_start(u, text_len, ms);
+    size_t end = start;
+    if (me > ms) {
+        size_t last = btn_utf8_seq_start(u, text_len, me - 1);
+        end = last + btn_utf8_char_len(u + last, text_len - last);
+    }
+    *out_start = start;
+    *out_end = end;
+    return 1;
+}
+
+/* Scan-Position nach einem Treffer: dahinter, bei einem Leertreffer (z.B.
+ * "a*") ein ganzes Zeichen weiter statt ein Byte - sonst stuende der
+ * naechste Scan mitten in einem mehrbytigen Zeichen. */
+static size_t regex_next_scan(const char *text, size_t text_len, size_t ms, size_t me) {
+    if (me > ms) {
+        return me;
+    }
+    if (ms >= text_len) {
+        return ms + 1;
+    }
+    return ms + btn_utf8_char_len((const unsigned char *)text + ms, text_len - ms);
+}
+
 static int find_match(const char *text, size_t text_len, size_t from, int forward, int wrap,
                        size_t *out_start, size_t *out_end) {
     if (editor_length(&g_search_editor) == 0) {
@@ -484,25 +918,13 @@ static int find_match(const char *text, size_t text_len, size_t from, int forwar
         return 0;
     }
 
-    regmatch_t m;
     int found = 0;
     size_t found_start = 0, found_end = 0;
 
     if (forward) {
-        m.rm_so = (regoff_t)from;
-        m.rm_eo = (regoff_t)text_len;
-        if (regexec(&re, text, 1, &m, regexec_flags_for(text, from)) == 0) {
-            found = 1;
-            found_start = (size_t)m.rm_so;
-            found_end = (size_t)m.rm_eo;
-        } else if (wrap && from > 0) {
-            m.rm_so = 0;
-            m.rm_eo = (regoff_t)text_len;
-            if (regexec(&re, text, 1, &m, REG_STARTEND) == 0) {
-                found = 1;
-                found_start = (size_t)m.rm_so;
-                found_end = (size_t)m.rm_eo;
-            }
+        found = regex_search_from(&re, text, text_len, from, regexec_flags_for(text, from), &found_start, &found_end);
+        if (!found && wrap && from > 0) {
+            found = regex_search_from(&re, text, text_len, 0, REG_STARTEND, &found_start, &found_end);
         }
     } else {
         size_t scan = 0;
@@ -512,12 +934,10 @@ static int find_match(const char *text, size_t text_len, size_t from, int forwar
         size_t before_start = 0, before_end = 0;
 
         while (scan <= text_len) {
-            m.rm_so = (regoff_t)scan;
-            m.rm_eo = (regoff_t)text_len;
-            if (regexec(&re, text, 1, &m, regexec_flags_for(text, scan)) != 0) {
+            size_t ms, me;
+            if (!regex_search_from(&re, text, text_len, scan, regexec_flags_for(text, scan), &ms, &me)) {
                 break;
             }
-            size_t ms = (size_t)m.rm_so, me = (size_t)m.rm_eo;
             any_found = 1;
             last_start = ms;
             last_end = me;
@@ -526,7 +946,7 @@ static int find_match(const char *text, size_t text_len, size_t from, int forwar
                 before_start = ms;
                 before_end = me;
             }
-            scan = (me > ms) ? me : ms + 1; /* Leertreffer: mind. 1 vorruecken */
+            scan = regex_next_scan(text, text_len, ms, me);
         }
 
         if (has_before) {
@@ -545,6 +965,29 @@ static int find_match(const char *text, size_t text_len, size_t from, int forwar
         *out_start = found_start;
         *out_end = found_end;
     }
+    return found;
+}
+
+/* Letzter Treffer, der vor before beginnt ((size_t)-1: der letzte ueberhaupt),
+ * beim Scannen ab scan - scan muss ein Treffer-Anfang aus dem Scan ab 0 sein
+ * (oder 0), damit dieselben, nicht ueberlappenden Treffer herauskommen. */
+static int find_last_match(const char *text, size_t len, size_t scan, size_t before, size_t *ms, size_t *me) {
+    regex_t re;
+    if (editor_length(&g_search_editor) == 0 || !compile_search_regex(&re)) {
+        return 0;
+    }
+    int found = 0;
+    while (scan <= len) {
+        size_t s0, e0;
+        if (!regex_search_from(&re, text, len, scan, regexec_flags_for(text, scan), &s0, &e0) || s0 >= before) {
+            break;
+        }
+        found = 1;
+        *ms = s0;
+        *me = e0;
+        scan = regex_next_scan(text, len, s0, e0);
+    }
+    regfree(&re);
     return found;
 }
 
@@ -568,20 +1011,74 @@ static size_t collect_all_matches(const char *text, size_t text_len,
     }
     size_t count = 0;
     size_t scan = 0;
-    regmatch_t m;
     while (scan <= text_len && count < max_out) {
-        m.rm_so = (regoff_t)scan;
-        m.rm_eo = (regoff_t)text_len;
-        if (regexec(&re, text, 1, &m, regexec_flags_for(text, scan)) != 0) {
+        size_t ms, me;
+        if (!regex_search_from(&re, text, text_len, scan, regexec_flags_for(text, scan), &ms, &me)) {
             break;
         }
-        size_t ms = (size_t)m.rm_so, me = (size_t)m.rm_eo;
         out_starts[count] = ms;
         out_ends[count] = me;
         count++;
-        scan = (me > ms) ? me : ms + 1; /* Leertreffer: mind. 1 vorruecken */
+        scan = regex_next_scan(text, text_len, ms, me);
     }
     regfree(&re);
+    return count;
+}
+
+/* Wie collect_all_matches(), aber OHNE Obergrenze (waechst per realloc statt
+ * in ein Array fester Groesse zu schreiben) - nur fuer perform_replace_all()
+ * gedacht: "Alle ersetzen" ist ein einmaliger, expliziter Nutzerbefehl (kein
+ * Pro-Tastendruck-Pfad wie die Live-Suche, die BTN_MAX_SEARCH_MATCHES
+ * bewusst deckelt) und MUSS auch bei mehr als BTN_MAX_SEARCH_MATCHES
+ * Treffern (z.B. jedes Leerzeichen in einer grossen Datei) vollstaendig
+ * arbeiten statt den Rest der Datei stillschweigend unveraendert zu lassen.
+ * *out_starts und *out_ends sind NULL, wenn 0 zurueckgegeben wird, sonst
+ * muss der Aufrufer beide per free() freigeben. */
+static size_t collect_all_matches_unbounded(const char *text, size_t text_len,
+                                             size_t **out_starts, size_t **out_ends) {
+    *out_starts = NULL;
+    *out_ends = NULL;
+    if (editor_length(&g_search_editor) == 0) {
+        return 0;
+    }
+    regex_t re;
+    if (!compile_search_regex(&re)) {
+        return 0;
+    }
+    size_t cap = 0, count = 0;
+    size_t *starts = NULL, *ends = NULL;
+    size_t scan = 0;
+    while (scan <= text_len) {
+        size_t ms, me;
+        if (!regex_search_from(&re, text, text_len, scan, regexec_flags_for(text, scan), &ms, &me)) {
+            break;
+        }
+        if (count == cap) {
+            size_t new_cap = cap ? cap * 2 : 256;
+            /* Direkt zuweisen wuerde bei fehlgeschlagenem realloc() den
+             * alten (noch gueltigen) Zeiger verlieren - stattdessen in eine
+             * temporaere Variable, bei Fehlschlag mit den bisher
+             * gefundenen Treffern abbrechen statt abzustuerzen. */
+            size_t *new_starts = realloc(starts, new_cap * sizeof(size_t));
+            if (!new_starts) {
+                break;
+            }
+            starts = new_starts;
+            size_t *new_ends = realloc(ends, new_cap * sizeof(size_t));
+            if (!new_ends) {
+                break;
+            }
+            ends = new_ends;
+            cap = new_cap;
+        }
+        starts[count] = ms;
+        ends[count] = me;
+        count++;
+        scan = regex_next_scan(text, text_len, ms, me);
+    }
+    regfree(&re);
+    *out_starts = starts;
+    *out_ends = ends;
     return count;
 }
 
@@ -604,23 +1101,169 @@ static int pick_current_match(const size_t *starts, size_t count, size_t anchor,
     return 1;
 }
 
-/* Baut den Trefferzaehler-Status ("3 von 12 Treffern") fuer den Treffer bei
- * match_start in der zuletzt via collect_all_matches() befuellten
- * g_match_starts/g_match_count. Falls match_start dort nicht vorkommt (nur
- * im pathologischen Fall eines durch BTN_MAX_SEARCH_MATCHES gekappten
- * Dokuments mit mehr Treffern als die Obergrenze erlaubt), wird 1 gezeigt -
- * kosmetisch ungenau fuer diesen Randfall, aber kein Absturz und kein
- * teurer zweiter Scan nur dafuer. */
-static void set_match_count_status(size_t match_start) {
-    size_t idx = 0;
-    for (size_t i = 0; i < g_match_count; i++) {
-        if (g_match_starts[i] == match_start) {
-            idx = i;
-            break;
+/* Wie pick_current_match(), aber fuer beide Richtungen: forward=1 verhaelt
+ * sich identisch dazu, forward=0 waehlt den letzten Treffer VOR anchor
+ * (sonst Wrap zum letzten insgesamt) - entspricht find_match()s
+ * forward=0,wrap=1-Verhalten. Deckt beide Richtungen der Return-
+ * gesteuerten Navigation (perform_find()) aus DERSELBEN, bereits per
+ * collect_all_matches() gesammelten Trefferliste ab, statt dafuer einen
+ * zweiten, unabhaengigen Regex-Durchlauf zu brauchen. */
+static int pick_match_for_navigation(const size_t *starts, size_t count, size_t anchor,
+                                      int forward, size_t *out_index) {
+    if (forward) {
+        return pick_current_match(starts, count, anchor, out_index);
+    }
+    if (count == 0) {
+        return 0;
+    }
+    for (size_t i = count; i > 0; i--) {
+        if (starts[i - 1] < anchor) {
+            *out_index = i - 1;
+            return 1;
         }
     }
-    snprintf(g_search_status, sizeof(g_search_status), btn_tr(BTN_STR_FIND_COUNT_FMT),
-             (int)(idx + 1), (int)g_match_count);
+    *out_index = count - 1;
+    return 1;
+}
+
+/* Index des Tabs delta Schritte weiter, mit Umlauf (Fenster > Naechster/
+ * Vorheriger Tab, Ctrl+Tab / Ctrl+Shift+Tab). */
+static int next_tab_index(int current, int count, int delta) {
+    if (count <= 0) {
+        return 0;
+    }
+    return ((current + delta) % count + count) % count;
+}
+
+/* Baut den Trefferzaehler-Status ("3 von 12 Treffern") fuer den Treffer bei
+ * match_start in der zuletzt via collect_all_matches() befuellten
+ * g_match_starts/g_match_count. Gekappte Liste: "3 von 5000+", ein Treffer
+ * dahinter "nach den ersten 5000". */
+static void set_match_count_status(size_t match_start) {
+    int capped = g_match_count == BTN_MAX_SEARCH_MATCHES;
+    for (size_t i = 0; i < g_match_count; i++) {
+        if (g_match_starts[i] == match_start) {
+            snprintf(g_search_status, sizeof(g_search_status),
+                     btn_tr(capped ? BTN_STR_FIND_COUNT_MANY_FMT : BTN_STR_FIND_COUNT_FMT), (int)(i + 1),
+                     (int)g_match_count);
+            return;
+        }
+    }
+    /* hinter dem Deckel der Liste: Nummer unbekannt (kein zweiter Scan) */
+    snprintf(g_search_status, sizeof(g_search_status), btn_tr(BTN_STR_FIND_BEYOND_FMT), (int)g_match_count);
+}
+
+/* ---- Suche ueber alle Tabs ---- */
+static size_t g_other_starts[BTN_MAX_SEARCH_MATCHES], g_other_ends[BTN_MAX_SEARCH_MATCHES];
+
+/* Trefferzahl je Tab fuer den aktuellen Suchbegriff, damit Return/Cmd+G
+ * mit unveraendertem Begriff nicht jedes Mal alle Tabs kopiert und
+ * durchsucht. Schluessel: Suchtext + Umschalter; je Dokument recovery_id
+ * (bleibt, wenn Tabs nachruecken) und edit_seq (global eindeutig). */
+static struct {
+    unsigned id;
+    size_t seq, count;
+} g_tab_counts[MAX_TABS];
+static int g_tab_counts_n = 0;
+static char *g_tab_counts_key = NULL;
+static size_t g_tab_counts_key_len = 0;
+
+/* Vor einer Runde ueber die Tabs: anderer Suchbegriff -> alles vergessen. */
+static void tab_counts_check_key(void) {
+    size_t qlen;
+    char *q = editor_copy_all(&g_search_editor, &qlen);
+    char flags[3] = { (char)('0' + g_search_regex), (char)('0' + g_search_case_sensitive),
+                      (char)('0' + g_search_whole_word) };
+    char *key = malloc(qlen + sizeof(flags));
+    if (key) {
+        memcpy(key, q, qlen);
+        memcpy(key + qlen, flags, sizeof(flags));
+    }
+    free(q);
+    size_t klen = qlen + sizeof(flags);
+    if (key && g_tab_counts_key && g_tab_counts_key_len == klen && memcmp(key, g_tab_counts_key, klen) == 0) {
+        free(key);
+        return;
+    }
+    free(g_tab_counts_key);
+    g_tab_counts_key = key;
+    g_tab_counts_key_len = key ? klen : 0;
+    g_tab_counts_n = 0;
+}
+
+/* Treffer im Dokument d (hoechstens BTN_MAX_SEARCH_MATCHES) - ohne die
+ * Trefferliste des aktiven Dokuments (g_match_*) anzufassen. */
+static size_t doc_match_count(Document *d) {
+    int slot = -1;
+    for (int i = 0; i < g_tab_counts_n; i++) {
+        if (g_tab_counts[i].id == d->recovery_id) {
+            if (g_tab_counts[i].seq == d->editor.edit_seq) {
+                return g_tab_counts[i].count;
+            }
+            slot = i;
+        }
+    }
+    size_t len;
+    char *text = editor_copy_all(&d->editor, &len);
+    size_t n = collect_all_matches(text, len, g_other_starts, g_other_ends, BTN_MAX_SEARCH_MATCHES);
+    free(text);
+    if (slot < 0) {
+        if (g_tab_counts_n == MAX_TABS) {
+            g_tab_counts_n = 0; /* voll (geschlossene Tabs): neu anfangen */
+        }
+        slot = g_tab_counts_n++;
+    }
+    g_tab_counts[slot].id = d->recovery_id;
+    g_tab_counts[slot].seq = d->editor.edit_seq;
+    g_tab_counts[slot].count = n;
+    return n;
+}
+
+/* Andere Tabs, die die Suche ueber alle Tabs einbezieht: als Binaerdatei
+ * geoeffnete bleiben aussen vor (wie bei "Alle ersetzen"). */
+static int searchable_other_tab(int i) {
+    return i != g_active_doc && !g_docs[i].binary;
+}
+
+/* Hinter den Status die Summe ueber alle Tabs. live (bei jedem Tastendruck):
+ * nur, wenn die anderen Tabs zusammen hoechstens BTN_LIVE_SEARCH_MAX_DOC_LEN
+ * gross sind - sonst ohne Summe, Return zeigt sie. */
+static void append_all_tabs_status(int live) {
+    if (!g_search_all_tabs || g_doc_count < 2) {
+        return;
+    }
+    if (live) {
+        size_t others = 0;
+        for (int i = 0; i < g_doc_count; i++) {
+            others += searchable_other_tab(i) ? editor_length(&g_docs[i].editor) : 0;
+        }
+        if (others > BTN_LIVE_SEARCH_MAX_DOC_LEN) {
+            return;
+        }
+    }
+    tab_counts_check_key();
+    size_t total = g_match_count;
+    for (int i = 0; i < g_doc_count; i++) {
+        if (searchable_other_tab(i)) {
+            total += doc_match_count(&g_docs[i]);
+        }
+    }
+    size_t l = strlen(g_search_status);
+    snprintf(g_search_status + l, sizeof(g_search_status) - l, btn_tr(BTN_STR_FIND_ALL_TABS_FMT), (int)total);
+}
+
+/* Naechster (forward) bzw. voriger Tab mit Treffer, im Kreis ab dem aktiven;
+ * -1 = keiner. */
+static int next_tab_with_match(int forward) {
+    tab_counts_check_key();
+    int i = g_active_doc;
+    for (int k = 1; k < g_doc_count; k++) {
+        i = next_tab_index(i, g_doc_count, forward ? 1 : -1);
+        if (searchable_other_tab(i) && doc_match_count(&g_docs[i]) > 0) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 /* Live-Suche: wird bei JEDER Aenderung des Suchtexts aufgerufen (Tippen,
@@ -629,6 +1272,113 @@ static void set_match_count_status(size_t match_start) {
  * springt/scrollt bereits zum naechsten Treffer ab g_search_anchor, damit
  * sich Tippen wie eine echte Live-Suche anfuehlt statt nur nachtraeglich
  * eingefaerbt zu werden. */
+/* Hoechstens so viele Kopien eines Teilausdrucks darf die Live-Suche
+ * erzeugen - siehe regex_too_expensive_for_live_search(). */
+#define BTN_LIVE_REGEX_MAX_COPIES 1000
+
+/* 1, wenn ein Regex-Muster fuer die Live-Suche (regcomp() bei JEDEM
+ * Tastendruck) zu teuer ist: Apples TRE kopiert fuer x{n,m} den Teilbaum x
+ * max(n,m)-mal, verschachtelte oder verkettete Wiederholungen multiplizieren
+ * sich - ((a{255}){255}){255} sind rund 16 Mio. Knoten, sekundenlanges
+ * Haengen und Gigabytes Speicher pro Tastendruck. Deshalb wird pro Atom das
+ * Produkt der Wiederholungszahlen verfolgt, die es (samt allem, was darin
+ * steckt) vervielfachen; ueber BTN_LIVE_REGEX_MAX_COPIES faellt nur die
+ * Live-Vorschau aus. Uebliche Muster wie ([0-9]{1,3}\.){3}[0-9]{1,3}
+ * (Faktor 9) bleiben live. '*', '+', '?' kopieren nicht, reichen den Faktor
+ * aber weiter (a{60}*{60} = 3600). Return sucht wie immer ohne Deckel - der
+ * Nutzer hat es ausdruecklich angefordert. Kein Sicherheitsproblem, das
+ * Muster tippt der Nutzer selbst. */
+static int regex_too_expensive_for_live_search(const char *p, size_t len) {
+    enum { MAX_DEPTH = 64 };
+    unsigned long group_max[MAX_DEPTH + 1]; /* groesster Faktor innerhalb der offenen Gruppe */
+    int depth = 0;
+    unsigned long atom = 0;                 /* Faktor des zuletzt gelesenen Atoms, 0 = keins */
+    group_max[0] = 1;
+    for (size_t i = 0; i < len; i++) {
+        char c = p[i];
+        if (c == '\\') {
+            i++; /* Escape: naechstes Zeichen ist ein literales Atom */
+            atom = 1;
+        } else if (c == '[') {
+            /* Klammerausdruck = ein Atom; ']' direkt am Anfang (auch nach
+             * '^') ist literal, ebenso [:klasse:] / [.x.] / [=x=] */
+            size_t j = i + 1;
+            if (j < len && p[j] == '^') {
+                j++;
+            }
+            if (j < len && p[j] == ']') {
+                j++;
+            }
+            while (j < len && p[j] != ']') {
+                if (p[j] == '[' && j + 1 < len && (p[j + 1] == ':' || p[j + 1] == '.' || p[j + 1] == '=')) {
+                    char kind = p[j + 1];
+                    j += 2;
+                    while (j + 1 < len && !(p[j] == kind && p[j + 1] == ']')) {
+                        j++;
+                    }
+                    j += 2;
+                    continue;
+                }
+                j++;
+            }
+            i = j;
+            atom = 1;
+        } else if (c == '(') {
+            if (depth == MAX_DEPTH) {
+                return 1; /* absurd tief verschachtelt - auch zu teuer */
+            }
+            group_max[++depth] = 1;
+            atom = 0;
+        } else if (c == ')') {
+            if (depth > 0) {
+                atom = group_max[depth--]; /* Gruppe = Atom mit ihrem groessten Innenfaktor */
+            } else {
+                atom = 1;
+            }
+        } else if (c == '|') {
+            atom = 0;
+        } else if (c == '*' || c == '+' || c == '?') {
+            /* keine Kopie, Faktor des Atoms bleibt fuer ein folgendes {..} */
+        } else if (c == '{' && i + 1 < len && (isdigit((unsigned char)p[i + 1]) || p[i + 1] == ',')) {
+            /* {n}, {n,}, {n,m}, {,m}: TRE kopiert max(n,m) Mal */
+            unsigned long count = 0;
+            size_t j = i + 1;
+            while (j < len && (isdigit((unsigned char)p[j]) || p[j] == ',')) {
+                unsigned long v = 0;
+                while (j < len && isdigit((unsigned char)p[j])) {
+                    v = v * 10 + (unsigned long)(p[j] - '0');
+                    if (v > BTN_LIVE_REGEX_MAX_COPIES) {
+                        v = BTN_LIVE_REGEX_MAX_COPIES + 1;
+                    }
+                    j++;
+                }
+                if (v > count) {
+                    count = v;
+                }
+                if (j < len && p[j] == ',') {
+                    j++;
+                }
+            }
+            if (j < len && p[j] == '}') {
+                unsigned long base = atom ? atom : 1;
+                atom = base * (count ? count : 1);
+                if (atom > BTN_LIVE_REGEX_MAX_COPIES) {
+                    return 1;
+                }
+                i = j;
+            } else {
+                atom = 1; /* kein vollstaendiges {..}: literales '{' */
+            }
+        } else {
+            atom = 1;
+        }
+        if (atom > group_max[depth]) {
+            group_max[depth] = atom;
+        }
+    }
+    return 0;
+}
+
 static void perform_live_search(void) {
     Document *d = active_doc();
     Editor *ed = &d->editor;
@@ -640,21 +1390,109 @@ static void perform_live_search(void) {
         return;
     }
 
+    if (editor_length(ed) > BTN_LIVE_SEARCH_MAX_DOC_LEN) {
+        /* Siehe BTN_LIVE_SEARCH_MAX_DOC_LEN-Kommentar - fuer ein derart
+         * grosses Dokument waere ein voller Kopie+Regex-Scan bei JEDEM
+         * Tastendruck spuerbar langsam. Suche funktioniert weiterhin ganz
+         * normal per Return (perform_find()), nur ohne die Live-Vorschau. */
+        g_match_count = 0;
+        snprintf(g_search_status, sizeof(g_search_status), "%s",
+                 btn_tr(BTN_STR_FIND_LIVE_SEARCH_TOO_LARGE));
+        btn_app_request_redraw();
+        return;
+    }
+
+    if (g_search_regex) {
+        size_t qlen;
+        char *query = editor_copy_all(&g_search_editor, &qlen);
+        int expensive = regex_too_expensive_for_live_search(query, qlen);
+        free(query);
+        if (expensive) {
+            g_match_count = 0;
+            snprintf(g_search_status, sizeof(g_search_status), "%s", btn_tr(BTN_STR_FIND_LIVE_SEARCH_TOO_LARGE));
+            btn_app_request_redraw();
+            return;
+        }
+    }
+
     size_t len;
     char *text = editor_copy_all(ed, &len);
     g_match_count = collect_all_matches(text, len, g_match_starts, g_match_ends, BTN_MAX_SEARCH_MATCHES);
+    g_match_edit_seq = ed->edit_seq;
 
-    size_t idx;
-    if (pick_current_match(g_match_starts, g_match_count, g_search_anchor, &idx)) {
-        editor_set_cursor(ed, g_match_starts[idx], 0);
-        editor_set_cursor(ed, g_match_ends[idx], 1);
-        set_match_count_status(g_match_starts[idx]);
+    size_t idx, ms = 0, me = 0;
+    int found = pick_current_match(g_match_starts, g_match_count, g_search_anchor, &idx);
+    if (found) {
+        ms = g_match_starts[idx];
+        me = g_match_ends[idx];
+    }
+    /* Gekappte Liste, Anker hinter ihrem letzten Treffer: direkt suchen statt
+     * an den Anfang zu springen */
+    if (found && g_match_count == BTN_MAX_SEARCH_MATCHES && g_search_anchor > g_match_starts[g_match_count - 1]) {
+        found = find_match(text, len, g_search_anchor, 1, 1, &ms, &me);
+    }
+    if (found) {
+        editor_set_cursor(ed, ms, 0);
+        editor_set_cursor(ed, me, 1);
+        set_match_count_status(ms);
         sync_scroll_to_cursor();
     } else {
         snprintf(g_search_status, sizeof(g_search_status), "%s", btn_tr(BTN_STR_FIND_NOT_FOUND));
     }
+    append_all_tabs_status(1); /* Tippen wechselt nie den Tab, zeigt aber, wo es noch Treffer gibt */
     free(text);
     btn_app_request_redraw();
+}
+
+/* Naechster (forward) bzw. voriger Treffer ab from fuer Weitersuchen, mit
+ * Herumlaufen (*wrapped). Aus der Trefferliste g_match_*, solange sie
+ * vollstaendig ist; ist sie gekappt (BTN_MAX_SEARCH_MATCHES), direkt per
+ * Regex ab from - sonst waeren Treffer dahinter unerreichbar und
+ * Weitersuchen spraenge zurueck an den Anfang. skip_empty: ein leerer
+ * Treffer genau bei from ("^", "$", "^$") ist der eben gefundene - weiter
+ * zum naechsten, sonst bliebe Weitersuchen stehen; gibt es nur ihn, zaehlt
+ * das als herumgelaufen (alle Tabs: weiter). */
+static int navigate_match(const char *text, size_t len, size_t from, int forward, int skip_empty, size_t *ms,
+                          size_t *me, int *wrapped) {
+    int found, skipped = 0;
+    skip_empty = skip_empty && forward;
+    if (g_match_count < BTN_MAX_SEARCH_MATCHES) {
+        size_t idx;
+        found = pick_match_for_navigation(g_match_starts, g_match_count, from, forward, &idx);
+        if (found && skip_empty && g_match_starts[idx] == from && g_match_ends[idx] == from) {
+            idx = (idx + 1) % g_match_count;
+            skipped = 1;
+        }
+        if (found) {
+            *ms = g_match_starts[idx];
+            *me = g_match_ends[idx];
+        }
+    } else if (forward) {
+        found = find_match(text, len, from, 1, 1, ms, me);
+        if (found && skip_empty && *ms == from && *me == from) {
+            size_t next = regex_next_scan(text, len, from, from);
+            find_match(text, len, next > len ? 0 : next, 1, 1, ms, me); /* hinter dem Ende: von vorn */
+            skipped = 1;
+        }
+    } else {
+        /* Rueckwaerts ab dem letzten Listeneintrag statt ab dem Textanfang
+         * (der ist ein gueltiger Scan-Punkt): sonst ein Vollscan je Druck */
+        size_t last = g_match_starts[g_match_count - 1];
+        if (from <= last) {
+            size_t idx;
+            found = pick_match_for_navigation(g_match_starts, g_match_count, from, 0, &idx);
+            if (found && g_match_starts[idx] < from) {
+                *ms = g_match_starts[idx];
+                *me = g_match_ends[idx];
+            } else { /* vor dem ersten: herum zum allerletzten */
+                found = find_last_match(text, len, last, (size_t)-1, ms, me);
+            }
+        } else {
+            found = find_last_match(text, len, last, from, ms, me);
+        }
+    }
+    *wrapped = found && (forward ? *ms < from || (skipped && *ms == from) : *ms >= from);
+    return found;
 }
 
 /* Sucht den naechsten/vorigen Treffer ab der aktuellen Selektion (oder dem
@@ -664,34 +1502,114 @@ static void perform_live_search(void) {
  * ein Treffer gefunden wurde - editor_has_selection() waere hierfuer NICHT
  * zuverlaessig, weil ein leerer Regex-Treffer (z.B. "a*" oder "^") cursor==
  * anchor hinterlaesst, obwohl durchaus etwas gefunden wurde. */
-static int perform_find(int forward) {
+/* Zuletzt per Weitersuchen angesprungener leerer Treffer - nur der wird beim
+ * naechsten Mal uebersprungen (Ersetzen + Weiter, Klick dorthin oder eine
+ * Aenderung: nicht). */
+static Editor *g_empty_hit_ed = NULL;
+static size_t g_empty_hit_pos, g_empty_hit_seq;
+
+static int perform_find_ex(int forward, int may_skip_empty) {
     Document *d = active_doc();
     Editor *ed = &d->editor;
     size_t len;
     char *text = editor_copy_all(ed, &len);
 
     size_t from = forward ? editor_selection_end(ed) : editor_selection_start(ed);
-    size_t match_start, match_end;
-    int found = find_match(text, len, from, forward, 1, &match_start, &match_end);
-    /* Haelt g_match_starts/g_match_ends (Live-Hervorhebung aller Treffer)
-     * auch bei Return-gesteuerter Navigation auf dem aktuellen Stand - z.B.
-     * wenn die Leiste per Cmd+F mit vorausgefuellter Selektion oeffnet und
-     * der Nutzer sofort Return drueckt, ohne vorher zu tippen (dann hat
-     * perform_live_search() noch nie gelaufen). */
+    /* Ein einziger Scan liefert sowohl den navigierten Treffer als auch die
+     * komplette Liste fuer Live-Hervorhebung/Trefferzaehler - vorher liefen
+     * hier find_match() UND collect_all_matches() als zwei unabhaengige
+     * Regex-Durchlaeufe ueber denselben Text fuer denselben Tastendruck
+     * (z.B. wenn die Leiste per Cmd+F mit vorausgefuellter Selektion oeffnet
+     * und der Nutzer sofort Return drueckt, ohne vorher zu tippen). */
     g_match_count = collect_all_matches(text, len, g_match_starts, g_match_ends, BTN_MAX_SEARCH_MATCHES);
+    g_match_edit_seq = ed->edit_seq;
+
+    size_t match_start = 0, match_end = 0;
+    int wrapped;
+    int skip_empty = may_skip_empty && !editor_has_selection(ed) && g_empty_hit_ed == ed && g_empty_hit_pos == from &&
+                     g_empty_hit_seq == ed->edit_seq;
+    int found = navigate_match(text, len, from, forward, skip_empty, &match_start, &match_end, &wrapped);
     free(text);
+    /* Alle Tabs: am Ende dieses Dokuments nicht herumlaufen, sondern in den
+     * naechsten (vorigen) Tab mit Treffer, dort auf den ersten (letzten). */
+    if (g_search_all_tabs && (!found || wrapped)) {
+        int tab = next_tab_with_match(forward);
+        if (tab >= 0) {
+            switch_to_tab_ex(tab, 1);
+            ed = &active_doc()->editor;
+            text = editor_copy_all(ed, &len);
+            g_match_count = collect_all_matches(text, len, g_match_starts, g_match_ends, BTN_MAX_SEARCH_MATCHES);
+            g_match_edit_seq = ed->edit_seq;
+            /* dort der erste bzw. letzte (der letzte direkt per Regex: die
+             * Liste kann gekappt sein) */
+            found = g_match_count > 0;
+            if (found && forward) {
+                match_start = g_match_starts[0];
+                match_end = g_match_ends[0];
+            } else if (found) {
+                found = find_match(text, len, 0, 0, 1, &match_start, &match_end);
+            }
+            free(text);
+        }
+    }
 
     if (found) {
         editor_set_cursor(ed, match_start, 0);
         editor_set_cursor(ed, match_end, 1);
         g_search_anchor = forward ? match_end : match_start;
         set_match_count_status(match_start);
+        g_empty_hit_ed = match_start == match_end ? ed : NULL;
+        g_empty_hit_pos = match_start;
+        g_empty_hit_seq = ed->edit_seq;
     } else {
         snprintf(g_search_status, sizeof(g_search_status), "%s", btn_tr(BTN_STR_FIND_NOT_FOUND));
     }
+    append_all_tabs_status(0);
     sync_scroll_to_cursor();
     btn_app_request_redraw();
     return found;
+}
+
+static int perform_find(int forward) {
+    return perform_find_ex(forward, 1);
+}
+
+/* Bearbeiten > Weitersuchen / Rueckwaerts suchen (Cmd+G / Shift+Cmd+G) - mit
+ * dem letzten Suchbegriff, auch bei geschlossener Suchleiste. Ohne
+ * Suchbegriff oeffnet sich die Leiste. Kein Treffer: Systemton, denn die
+ * Statusmeldung ist bei geschlossener Leiste nicht zu sehen. */
+static void find_next_from_menu(int forward) {
+    if (editor_length(&g_search_editor) == 0) {
+        open_find_bar();
+        return;
+    }
+    if (!perform_find(forward)) {
+        btn_beep();
+    }
+    if (!g_find_bar_visible) {
+        g_match_count = 0; /* Treffer nur bei offener Leiste hervorheben */
+    }
+}
+
+/* Bearbeiten > Auswahl fuer Suche verwenden (Cmd+E). */
+static void use_selection_for_find(void) {
+    if (!take_selection_as_search_text()) {
+        btn_beep();
+        return;
+    }
+    g_search_status[0] = '\0';
+    if (g_find_bar_visible) {
+        editor_select_all(&g_search_editor);
+        perform_live_search();
+    }
+}
+
+/* Wechselt delta Tabs weiter; bei nur einem Tab nichts (switch_to_tab()
+ * wuerde sonst die Suchleiste schliessen, ohne etwas zu wechseln). */
+static void cycle_tab(int delta) {
+    if (g_doc_count > 1) {
+        switch_to_tab(next_tab_index(g_active_doc, g_doc_count, delta));
+    }
 }
 
 /* Ersetzt die aktuelle Selektion durch text/len - anders als
@@ -700,28 +1618,224 @@ static int perform_find(int forward) {
  * editor_insert_text() selbst kehrt bei len==0 sofort zurueck (Guard gegen
  * No-Op-Inserts), was die Selektion in genau diesem Fall stehen liesse. */
 static void replace_selection(Editor *ed, const char *text, size_t len) {
+    /* Ein Undo-Schritt: Loeschen der Selektion und Einfuegen landen sonst in
+     * zwei Records - das erste Cmd+Z nach "Ersetzen" oder Einfuegen ueber
+     * eine Selektion liess den Treffer geloescht, ohne Ersetzung. */
+    editor_begin_undo_group(ed);
     if (len == 0) {
         editor_delete_selection(ed);
     } else {
         editor_insert_text(ed, text, len);
     }
+    editor_end_undo_group(ed);
+}
+
+#define BTN_MAX_REGEX_GROUPS 10
+/* Obergrenze fuer die Groesse des expandierten Ersetzungstexts - ohne die
+ * koennte ein Ersetzungstext mit vielen hintereinander wiederholten
+ * Rueckreferenzen (z.B. "$1$1$1$1$1$1$1$1$1$1" bei einer Suche wie "(.*)",
+ * die praktisch die ganze Zeile faengt) unbegrenzt viel Speicher anfordern.
+ * Analog zu BTN_MAX_SEARCH_MATCHES/BTN_MAX_HIGHLIGHT_LINE_LEN: lieber an
+ * einer grosszuegigen Grenze abbrechen (das teilweise aufgebaute Ergebnis
+ * bis dahin bleibt gueltig und wird verwendet) als unbegrenzt zu wachsen. */
+#define BTN_MAX_EXPANDED_REPLACEMENT_LEN (16 * 1024 * 1024)
+
+/* Erkennt, ob text ueberhaupt $0-$9/\0-\9-Rueckreferenzen enthaelt - eine
+ * billige Byte-fuer-Byte-Pruefung, um expand_replacement()s teuren zweiten
+ * regexec()-Durchlauf (fuer die Gruppen-Bereiche) zu sparen, wenn der
+ * Ersetzungstext trotz aktivem Regex-Modus gar keine Rueckreferenz
+ * verwendet (z.B. Regex-Suche mit rein literalem Ersetzungstext) - in
+ * dem Fall ist der Treffer selbst (match_start/match_end) schon laengst
+ * anderweitig bekannt, seine Gruppen werden schlicht nicht gebraucht. */
+static int replacement_has_backreferences(const char *raw, size_t raw_len) {
+    for (size_t i = 0; i + 1 < raw_len; i++) {
+        if ((raw[i] == '$' || raw[i] == '\\') && isdigit((unsigned char)raw[i + 1])) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Muss der Ersetzungstext im Regex-Modus ueberhaupt umgebaut werden?
+ * Rueckreferenzen (siehe oben) oder die Escapes "\t" (Tabulator) und "\\"
+ * (ein Backslash - damit "\t" auch woertlich schreibbar bleibt). */
+static int replacement_needs_expansion(const char *raw, size_t raw_len) {
+    for (size_t i = 0; i + 1 < raw_len; i++) {
+        if (raw[i] == '\\' && (raw[i + 1] == 't' || raw[i + 1] == '\\')) {
+            return 1;
+        }
+    }
+    return replacement_has_backreferences(raw, raw_len);
+}
+
+/* Baut den tatsaechlichen Ersetzungstext aus g_replace_editor auf: im
+ * Literal-Modus (g_search_regex == 0) oder ohne Rueckreferenzen/Escapes
+ * (siehe replacement_needs_expansion() oben) unveraendert, sonst mit "\t"
+ * als Tabulator, "\\" als Backslash und $1..$9
+ * (bzw. \1..\9) ersetzt durch die jeweilige Erfassungsgruppe des Treffers
+ * bei [match_start, match_end) in text ($0/\0 = kompletter Treffer). Der
+ * Treffer wird hier erneut per regexec() ab match_start gesucht - mit
+ * denselben Flags deterministisch dieselbe Fundstelle wie beim ersten Mal,
+ * liefert aber zusaetzlich die einzelnen Gruppen-Bereiche, die
+ * find_match()/collect_all_matches() (nur Gruppe 0) nicht mit
+ * herausreichen. Nicht existierende oder nicht getroffene Gruppen
+ * werden durch einen leeren String ersetzt (wie in den meisten Editoren/
+ * sed -E ueblich). Caller muss free() aufrufen.
+ *
+ * flags: der Aufrufer uebergibt exakt die Flags, mit denen der Treffer
+ * GEFUNDEN wurde (perform_replace_all(): regexec_flags_for(orig_text,
+ * match_start) auf dem unveraenderten Snapshot; perform_replace_current():
+ * dieselbe Rechnung auf dem Live-Puffer). Nur dann ist der erneute regexec()
+ * deterministisch derselbe Aufruf wie beim Finden. Ein frueherer Versuch,
+ * hier stattdessen den "Live-Kontext" nach vorherigen Ersetzungen
+ * nachzubilden, lieferte STRENGERE Flags als beim Sammeln - der Re-Exec
+ * schlug dann bei direkt angrenzenden Treffern fehl (und fuegte den rohen
+ * Text mit woertlichem "$1" ins Dokument ein) oder fand einen spaeteren,
+ * anderen Treffer und nahm dessen Gruppen. match_end dient als
+ * Sicherheitsnetz: liefert der Re-Exec nicht exakt [match_start, match_end),
+ * sind die Gruppen unbekannt - dann wird $0 durch den bekannten Treffertext
+ * und $1..$9 durch leer ersetzt, nie der rohe Ersetzungstext eingefuegt.
+ * Das gilt auch fuer einen von regex_search_from() auf ganze Zeichen
+ * erweiterten Treffer - so fuegt eine Gruppe nie ein halbes Zeichen ein. */
+static char *expand_replacement(const char *text, size_t text_len, size_t match_start, size_t match_end,
+                                int flags, size_t *out_len) {
+    size_t raw_len;
+    char *raw = editor_copy_all(&g_replace_editor, &raw_len);
+    if (!g_search_regex || !replacement_needs_expansion(raw, raw_len)) {
+        *out_len = raw_len;
+        return raw;
+    }
+
+    /* Gruppen nur ermitteln, wenn der Text sie auch benutzt (bei reinem
+     * "\t" reicht der bekannte Treffer). */
+    regmatch_t groups[BTN_MAX_REGEX_GROUPS];
+    int ok = 0;
+    regex_t re;
+    if (replacement_has_backreferences(raw, raw_len) && compile_search_regex(&re)) {
+        groups[0].rm_so = (regoff_t)match_start;
+        groups[0].rm_eo = (regoff_t)text_len;
+        ok = regexec(&re, text, BTN_MAX_REGEX_GROUPS, groups, flags) == 0;
+        regfree(&re);
+    }
+    if (!ok || (size_t)groups[0].rm_so != match_start || (size_t)groups[0].rm_eo != match_end) {
+        groups[0].rm_so = (regoff_t)match_start;
+        groups[0].rm_eo = (regoff_t)match_end;
+        for (int g = 1; g < BTN_MAX_REGEX_GROUPS; g++) {
+            groups[g].rm_so = -1;
+            groups[g].rm_eo = -1;
+        }
+    }
+
+    size_t cap = raw_len + 1;
+    char *out = malloc(cap);
+    if (!out) {
+        /* Degradiert auf den unveraenderten Ersetzungstext statt mit NULL
+         * abzustuerzen - raw ist an dieser Stelle noch ein gueltiger,
+         * ungenutzter Puffer (wird sonst erst ganz unten freigegeben), der
+         * Aufrufer gibt den zurueckgegebenen Zeiger so oder so per free() frei. */
+        *out_len = raw_len;
+        return raw;
+    }
+    size_t o = 0;
+    for (size_t i = 0; i < raw_len; i++) {
+        if (o >= BTN_MAX_EXPANDED_REPLACEMENT_LEN) {
+            /* Obergrenze erreicht (siehe BTN_MAX_EXPANDED_REPLACEMENT_LEN) -
+             * das bis hierhin aufgebaute Ergebnis bleibt gueltig und wird
+             * verwendet, der Rest des Ersetzungstexts wird abgeschnitten. */
+            break;
+        }
+        char c = raw[i];
+        if (c == '\\' && i + 1 < raw_len && (raw[i + 1] == 't' || raw[i + 1] == '\\')) {
+            /* "\t" -> Tabulator, "\\" -> ein Backslash (dann unten normal anhaengen). */
+            i++;
+            c = (raw[i] == 't') ? '\t' : '\\';
+        } else if ((c == '$' || c == '\\') && i + 1 < raw_len && isdigit((unsigned char)raw[i + 1])) {
+            int g = raw[i + 1] - '0';
+            i++;
+            if (g < BTN_MAX_REGEX_GROUPS && groups[g].rm_so >= 0) {
+                size_t glen = (size_t)(groups[g].rm_eo - groups[g].rm_so);
+                if (o + glen + 1 > cap) {
+                    cap = o + glen + 1;
+                    char *tmp = realloc(out, cap);
+                    if (!tmp) {
+                        free(out);
+                        *out_len = raw_len;
+                        return raw;
+                    }
+                    out = tmp;
+                }
+                memcpy(out + o, text + groups[g].rm_so, glen);
+                o += glen;
+            }
+            continue;
+        }
+        if (o + 2 > cap) {
+            cap += 16;
+            char *tmp = realloc(out, cap);
+            if (!tmp) {
+                free(out);
+                *out_len = raw_len;
+                return raw;
+            }
+            out = tmp;
+        }
+        out[o++] = c;
+    }
+    free(raw);
+    *out_len = o;
+    return out;
+}
+
+/* Prueft, ob die aktuelle Selektion tatsaechlich exakt dem naechsten
+ * Treffer der aktuellen Suchanfrage ab ihrem eigenen Anfang entspricht -
+ * nicht nur "irgendeine Selektion". Wichtig, weil expand_replacement() im
+ * Regex-Modus intern erneut ab editor_selection_start() sucht, um an die
+ * Erfassungsgruppen zu kommen: regexec() mit REG_STARTEND ist dabei NICHT
+ * an genau diese Position angeankert (dieselbe "Treffer kann spaeter
+ * beginnen"-Semantik wie find_match()s eigener Vorwaertszweig weiter oben)
+ * - bei einer Selektion, die NICHT von einem echten Treffer stammt (z.B.
+ * manuell mit der Maus gewaehlt, waehrend die Suchleiste offen ist), wuerde
+ * diese interne Suche einen anderen Bereich finden. expand_replacement()
+ * faengt das zwar ab (Gruppen leer statt fremder Gruppen), aber die
+ * beliebige Selektion wuerde trotzdem ersetzt - deshalb sucht
+ * perform_replace_current() in diesem Fall erst den naechsten echten
+ * Treffer, statt die manuelle Selektion zu ueberschreiben. */
+static int selection_is_current_match(Editor *ed) {
+    if (!editor_has_selection(ed)) {
+        return 0;
+    }
+    size_t len;
+    char *text = editor_copy_all(ed, &len);
+    size_t match_start, match_end;
+    int found = find_match(text, len, editor_selection_start(ed), 1, 0, &match_start, &match_end);
+    free(text);
+    return found && match_start == editor_selection_start(ed) && match_end == editor_selection_end(ed);
 }
 
 /* Ersetzt den aktuellen Treffer (sucht erst einen, falls gerade keiner
- * selektiert ist) und springt direkt zum naechsten weiter. */
+ * selektiert ist bzw. die bestehende Selektion nicht wirklich der aktuelle
+ * Treffer ist) und springt direkt zum naechsten weiter. */
 static void perform_replace_current(void) {
     Editor *ed = &active_doc()->editor;
-    if (!editor_has_selection(ed)) {
+    if (!selection_is_current_match(ed)) {
         /* Rueckgabewert von perform_find() statt erneut editor_has_selection()
          * zu pruefen - ein gefundener, aber leerer Regex-Treffer (z.B. "a*")
          * hinterlaesst cursor==anchor und wuerde von editor_has_selection()
          * faelschlich als "nichts gefunden" gelesen. */
-        if (!perform_find(1)) {
+        /* Ohne Ueberspringen: ein leerer Treffer am Cursor ("^") ist genau
+         * der, den Weitersuchen eben angesprungen hat - der wird ersetzt */
+        if (!perform_find_ex(1, 0)) {
             return;
         }
+        ed = &active_doc()->editor; /* alle Tabs: der Treffer kann in einem anderen Tab liegen */
     }
+    size_t doc_len;
+    char *doc_text = editor_copy_all(ed, &doc_len);
+    size_t match_start = editor_selection_start(ed);
     size_t replace_len;
-    char *replace_text = editor_copy_all(&g_replace_editor, &replace_len);
+    char *replace_text = expand_replacement(doc_text, doc_len, match_start, editor_selection_end(ed),
+                                             regexec_flags_for(doc_text, match_start), &replace_len);
+    free(doc_text);
     replace_selection(ed, replace_text, replace_len);
     free(replace_text);
     sync_window_state();
@@ -735,47 +1849,105 @@ static void perform_replace_current(void) {
     btn_app_request_redraw();
 }
 
+/* Alle Treffer in ed ersetzen (ein Undo-Schritt), Rueckgabe: Anzahl. */
+static size_t replace_all_in_editor(Editor *ed) {
+
+    /* Nur wenn der Ersetzungstext tatsaechlich Rueckreferenzen oder Escapes
+     * enthaelt (siehe replacement_needs_expansion()), unterscheidet sich der
+     * tatsaechliche Ersetzungstext von Treffer zu Treffer und muss pro
+     * Treffer per expand_replacement() neu aufgebaut werden - sonst reicht
+     * (wie vor der Rueckreferenzen-Funktion) eine einzige Kopie vor der
+     * Schleife, statt sie bei jedem Treffer erneut zu malloc'en/kopieren. */
+    size_t fixed_replace_len = 0;
+    char *fixed_replace_text = NULL;
+    int per_match_expansion;
+    {
+        size_t raw_len;
+        char *raw = editor_copy_all(&g_replace_editor, &raw_len);
+        per_match_expansion = g_search_regex && replacement_needs_expansion(raw, raw_len);
+        if (per_match_expansion) {
+            free(raw);
+        } else {
+            fixed_replace_text = raw;
+            fixed_replace_len = raw_len;
+        }
+    }
+
+    /* Alle Treffer EINMAL im unveraenderten Ausgangsdokument sammeln, statt
+     * (wie zuvor) bei jedem einzelnen Treffer das inzwischen teils schon
+     * ersetzte Dokument komplett neu zu kopieren und erneut zu durchsuchen -
+     * das war O(Treffer * Dokumentlaenge), jetzt O(Dokumentlaenge) fuer die
+     * Suche plus die ohnehin noetigen Ersetzungen selbst. Treffer sind nicht
+     * ueberlappend und aufsteigend sortiert (siehe
+     * collect_all_matches_unbounded()) - jede Ersetzung betrifft daher nur
+     * den Bereich VOR dem naechsten Treffer, sodass orig_text ab dessen
+     * Originalposition weiterhin byte-identisch mit dem Live-Puffer an der
+     * um delta verschobenen Position ist. */
+    size_t orig_len;
+    char *orig_text = editor_copy_all(ed, &orig_len);
+    size_t *starts, *ends;
+    size_t match_count = collect_all_matches_unbounded(orig_text, orig_len, &starts, &ends);
+
+    long delta = 0;
+    /* Alle Ersetzungen zusammen ein Undo-Schritt (sonst zwei pro Treffer). */
+    editor_begin_undo_group(ed);
+    for (size_t i = 0; i < match_count; i++) {
+        size_t match_start = starts[i];
+        size_t match_end = ends[i];
+
+        size_t replace_len;
+        char *replace_text;
+        if (per_match_expansion) {
+            /* Exakt dieselben Flags wie beim Sammeln: Sammeln UND
+             * Expandieren arbeiten beide auf dem unveraenderten orig_text,
+             * der Re-Exec ist damit derselbe Aufruf wie beim Finden (siehe
+             * expand_replacement()-Kommentar, warum ein nachgebildeter
+             * "Live-Kontext" hier falsch war). */
+            replace_text = expand_replacement(orig_text, orig_len, match_start, match_end,
+                                              regexec_flags_for(orig_text, match_start), &replace_len);
+        } else {
+            replace_text = fixed_replace_text;
+            replace_len = fixed_replace_len;
+        }
+
+        size_t live_start = (size_t)((long)match_start + delta);
+        size_t live_end = (size_t)((long)match_end + delta);
+        editor_set_cursor(ed, live_start, 0);
+        editor_set_cursor(ed, live_end, 1);
+        replace_selection(ed, replace_text, replace_len);
+
+        delta += (long)replace_len - (long)(match_end - match_start);
+        if (per_match_expansion) {
+            free(replace_text);
+        }
+    }
+    editor_end_undo_group(ed);
+    free(starts);
+    free(ends);
+    free(orig_text);
+    free(fixed_replace_text); /* NULL-sicher, No-Op wenn per_match_expansion galt */
+    return match_count;
+}
+
+/* "Alle ersetzen": im aktiven Dokument, mit dem "⧉"-Umschalter in allen
+ * Tabs (je Tab ein Undo-Schritt; als Binaerdatei geoeffnete Hintergrund-Tabs
+ * bleiben unberuehrt). */
 static void perform_replace_all(void) {
-    Document *d = active_doc();
-    Editor *ed = &d->editor;
+    Editor *ed = &active_doc()->editor;
     if (editor_length(&g_search_editor) == 0) {
         return;
     }
-    size_t replace_len;
-    char *replace_text = editor_copy_all(&g_replace_editor, &replace_len);
-    size_t from = 0;
-    int count = 0;
-
-    while (1) {
-        size_t len;
-        char *text = editor_copy_all(ed, &len);
-        if (from > len) {
-            free(text);
-            break;
+    size_t count = replace_all_in_editor(ed);
+    int tabs = count > 0;
+    if (g_search_all_tabs) {
+        for (int i = 0; i < g_doc_count; i++) {
+            if (searchable_other_tab(i)) {
+                size_t n = replace_all_in_editor(&g_docs[i].editor);
+                count += n;
+                tabs += n > 0;
+            }
         }
-        size_t match_start, match_end;
-        /* wrap=0: sonst wuerde die Schleife, sobald sie einmal das
-         * Dokumentende erreicht, wieder vorne anfangen und bereits
-         * ersetzte Treffer erneut finden - eine Endlosschleife. */
-        int found = find_match(text, len, from, 1, 0, &match_start, &match_end);
-        free(text);
-        if (!found) {
-            break;
-        }
-        editor_set_cursor(ed, match_start, 0);
-        editor_set_cursor(ed, match_end, 1);
-        replace_selection(ed, replace_text, replace_len);
-        /* Bei leerem Treffer UND leerem Ersetzungstext wuerde from sonst
-         * nicht vorruecken (Leertreffer an derselben Stelle immer wieder
-         * "ersetzt") - mindestens 1 Byte Fortschritt erzwingen. */
-        size_t advance = replace_len;
-        if (advance == 0 && match_end == match_start) {
-            advance = 1;
-        }
-        from = match_start + advance;
-        count++;
     }
-    free(replace_text);
 
     /* Trefferliste nach dem Ersetzen neu aufbauen - der bisherige Stand
      * (aus der Live-Suche vor diesem Befehl) bezieht sich auf Byte-Offsets
@@ -784,9 +1956,14 @@ static void perform_replace_all(void) {
     size_t len;
     char *text = editor_copy_all(ed, &len);
     g_match_count = collect_all_matches(text, len, g_match_starts, g_match_ends, BTN_MAX_SEARCH_MATCHES);
+    g_match_edit_seq = ed->edit_seq;
     free(text);
 
-    snprintf(g_search_status, sizeof(g_search_status), btn_tr(BTN_STR_FIND_REPLACED_FMT), count);
+    if (g_search_all_tabs && g_doc_count > 1) {
+        snprintf(g_search_status, sizeof(g_search_status), btn_tr(BTN_STR_FIND_REPLACED_TABS_FMT), (int)count, tabs);
+    } else {
+        snprintf(g_search_status, sizeof(g_search_status), btn_tr(BTN_STR_FIND_REPLACED_FMT), (int)count);
+    }
     sync_window_state();
     sync_scroll_to_cursor();
     btn_app_request_redraw();
@@ -814,7 +1991,7 @@ static void commit_cursor(size_t new_offset, int extend, size_t desired_col) {
  * genau wie editor.c es fuer die (jetzt entfernte) logische Variante tat. */
 static void move_visual_row(int direction, int extend) {
     Editor *ed = &active_doc()->editor;
-    BtnRow *rows;
+    const BtnRow *rows;
     size_t row_count = build_current_rows(&rows);
     size_t cur_row = btn_layout_row_for_offset(rows, row_count, ed->cursor);
 
@@ -832,10 +2009,9 @@ static void move_visual_row(int direction, int extend) {
         new_col = editor_visual_column_in_range(ed, rows[cur_row].start, new_offset);
     } else {
         size_t target_row = (direction < 0) ? cur_row - 1 : cur_row + 1;
-        new_offset = editor_offset_for_column_in_range(ed, rows[target_row].start, rows[target_row].len, col);
+        new_offset = btn_row_offset_for_column(ed, rows, row_count, target_row, col);
         new_col = col;
     }
-    btn_layout_free(rows);
     commit_cursor(new_offset, extend, new_col);
 }
 
@@ -845,43 +2021,182 @@ static void move_visual_row(int direction, int extend) {
  * waehlt zwischen den beiden Row-Grenzen. */
 static void move_row_edge(int to_end, int extend) {
     Editor *ed = &active_doc()->editor;
-    BtnRow *rows;
+    const BtnRow *rows;
     size_t row_count = build_current_rows(&rows);
     size_t cur_row = btn_layout_row_for_offset(rows, row_count, ed->cursor);
-    size_t new_offset = to_end ? rows[cur_row].start + rows[cur_row].len : rows[cur_row].start;
-    btn_layout_free(rows);
+    /* Ende: btn_row_offset_for_column() bleibt bei einer umgebrochenen Zeile
+     * vor dem letzten Zeichen der Row - sonst landete der Cursor am Anfang
+     * der FOLGENDEN Row, ein zweites Ende sprang eine weitere Row weiter und
+     * Pos1 schien nichts zu tun. */
+    size_t new_offset = to_end ? btn_row_offset_for_column(ed, rows, row_count, cur_row, (size_t)-1)
+                               : rows[cur_row].start;
     commit_cursor(new_offset, extend, (size_t)-1);
 }
 
-static char *read_file_contents(const char *path, size_t *out_len) {
+/* Obergrenze fuer zu oeffnende Dateien. Der Inhalt liegt danach mehrfach im
+ * Speicher (Lesepuffer waehrend des Ladens, Gap-Buffer, Kopien fuer Suche
+ * und Sichern, Row-Layout) - bei einer 2-TB-Sparse-Datei oder einem
+ * Laufwerks-Image scheiterte vorher malloc() und fread() schrieb nach NULL. */
+#define BTN_MAX_FILE_MB 1024
+#define BTN_MAX_FILE_SIZE ((off_t)BTN_MAX_FILE_MB * 1024 * 1024)
+
+typedef enum {
+    BTN_READ_OK = 0,
+    BTN_READ_FAILED,    /* nicht lesbar, keine regulaere Datei, kein Speicher */
+    BTN_READ_TOO_LARGE  /* groesser als BTN_MAX_FILE_SIZE */
+} BtnReadResult;
+
+/* Liest die ganze Datei (NUL-terminiert, *out_len ohne das NUL). NULL bei
+ * jedem Fehler, *out_result sagt welcher. out_stamp (darf NULL sein): Stand
+ * der Datei VOR dem Lesen - schreibt ein anderes Programm waehrenddessen,
+ * weicht die Platte danach davon ab und die Aenderung wird erkannt. */
+static char *read_file_contents(const char *path, size_t *out_len, BtnReadResult *out_result, BtnFileStamp *out_stamp) {
+    *out_result = BTN_READ_FAILED;
+    /* Erst per stat() pruefen: fopen() auf eine Named Pipe (FIFO) blockiert,
+     * bis jemand hineinschreibt - die App hinge. */
+    struct stat pre;
+    if (stat(path, &pre) != 0 || !S_ISREG(pre.st_mode)) {
+        return NULL;
+    }
     FILE *f = fopen(path, "rb");
     if (!f) {
         return NULL;
     }
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    if (size < 0) {
+    /* fstat statt fseek/ftell: liefert die Groesse als off_t und erkennt
+     * Verzeichnisse (fopen() auf ein Verzeichnis klappt, fread() liefert
+     * dann 0 Bytes - das wurde als leere Datei geoeffnet). */
+    struct stat st;
+    if (fstat(fileno(f), &st) != 0 || !S_ISREG(st.st_mode)) {
         fclose(f);
         return NULL;
     }
-    fseek(f, 0, SEEK_SET);
-
-    char *buf = malloc((size_t)size + 1);
-    size_t read_n = fread(buf, 1, (size_t)size, f);
+    if (st.st_size > BTN_MAX_FILE_SIZE) {
+        fclose(f);
+        *out_result = BTN_READ_TOO_LARGE;
+        return NULL;
+    }
+    if (out_stamp) {
+        btn_file_stamp_from_stat(&st, out_stamp);
+    }
+    size_t size = (size_t)st.st_size;
+    char *buf = malloc(size + 1);
+    if (!buf) {
+        fclose(f);
+        return NULL;
+    }
+    size_t read_n = fread(buf, 1, size, f);
+    int failed = ferror(f);
     fclose(f);
+    if (failed) {
+        free(buf);
+        return NULL;
+    }
     buf[read_n] = '\0';
     *out_len = read_n;
+    *out_result = BTN_READ_OK;
     return buf;
 }
 
-static int write_file_contents(const char *path, const char *data, size_t len) {
-    FILE *f = fopen(path, "wb");
-    if (!f) {
+/* Meldung fuer einen fehlgeschlagenen Lade-/Sichervorgang - vorher ging das
+ * nur nach stderr, das eine GUI-App nie jemand sieht. */
+static void show_file_error(BtnStringId title_fmt, const char *path, const char *info) {
+    char title[512];
+    snprintf(title, sizeof(title), btn_tr(title_fmt), basename_of(path));
+    btn_show_error_alert(title, info);
+}
+
+/* Schreibt einen bereits offenen Stream vollstaendig durch und prueft JEDEN
+ * Schritt: fwrite() puffert bei kleinen Dokumenten nur, der eigentliche
+ * write(2) - und damit ENOSPC/EDQUOT/EIO - passiert erst in fflush()/
+ * fclose(). fsync() sorgt dafuer, dass die Daten vor dem rename() unten
+ * wirklich auf dem Medium sind. Schliesst f in jedem Fall. */
+static int write_stream_checked(FILE *f, const char *data, size_t len) {
+    int ok = fwrite(data, 1, len, f) == len && fflush(f) == 0 && fsync(fileno(f)) == 0;
+    if (fclose(f) != 0) {
+        ok = 0;
+    }
+    return ok;
+}
+
+/* Schreibt atomar: erst in eine Tempdatei im selben Verzeichnis (gleiches
+ * Volume, daher ist rename() auf APFS/HFS+ atomar), dann per rename() ueber
+ * das Original. Das Original bleibt bei JEDEM Fehler unveraendert. Vorher
+ * trunkierte fopen("wb") die Datei sofort auf 0 Byte und der Rueckgabewert
+ * von fclose() wurde ignoriert - bei voller Platte meldete die App
+ * "gesichert" (Punkt weg, kein Nachfragen beim Beenden), auf der Platte lag
+ * eine leere oder halbe Datei. Rueckfall auf checked In-Place-Schreiben nur,
+ * wenn im Zielverzeichnis keine Tempdatei angelegt werden darf (Datei
+ * beschreibbar, Verzeichnis nicht) - dann wenigstens mit korrekter
+ * Fehlermeldung statt falschem Erfolg. */
+static int write_file_atomic(const char *path, const char *data, size_t len) {
+    const char *slash = strrchr(path, '/');
+    size_t dir_len = slash ? (size_t)(slash - path + 1) : 0;
+    const char *base = slash ? slash + 1 : path;
+    size_t tmp_cap = dir_len + 1 + strlen(base) + 8; /* "." + base + ".XXXXXX" + NUL */
+    char *tmp = malloc(tmp_cap);
+    if (!tmp) {
         return 0;
     }
-    size_t written = fwrite(data, 1, len, f);
-    fclose(f);
-    return written == len;
+    snprintf(tmp, tmp_cap, "%.*s.%s.XXXXXX", (int)dir_len, path, base);
+
+    int fd = mkstemp(tmp);
+    if (fd < 0) {
+        free(tmp);
+        FILE *f = fopen(path, "wb");
+        return f ? write_stream_checked(f, data, len) : 0;
+    }
+
+    /* mkstemp() legt 0600 an - Rechte des Originals uebernehmen, sonst
+     * wuerde jedes Sichern z.B. eine gruppenlesbare Datei privat machen.
+     * Bei einer NEUEN Datei (Sichern unter) gilt wie bei fopen("wb") die
+     * umask (ueblich 022 -> 0644), nicht mkstemps 0600. fchmod auf die
+     * eigene Tempdatei kann praktisch nicht scheitern; falls doch, bleibt es
+     * bei 0600 - kein Grund, das Sichern abzubrechen. */
+    struct stat st;
+    mode_t mode;
+    if (stat(path, &st) == 0) {
+        mode = st.st_mode & 07777;
+    } else {
+        mode_t mask = umask(0);
+        umask(mask);
+        mode = 0666 & ~mask;
+    }
+    fchmod(fd, mode);
+
+    FILE *f = fdopen(fd, "wb");
+    if (!f) {
+        close(fd);
+        unlink(tmp);
+        free(tmp);
+        return 0;
+    }
+    int ok = write_stream_checked(f, data, len);
+    if (ok && rename(tmp, path) != 0) {
+        ok = 0;
+    }
+    if (!ok) {
+        unlink(tmp);
+    }
+    free(tmp);
+    return ok;
+}
+
+/* Symlinks aufloesen, bevor atomar geschrieben wird: rename() ersetzt sonst
+ * den Link selbst durch eine normale Datei, und das eigentliche Ziel bliebe
+ * unveraendert (vorher schrieb fopen("wb") durch den Link hindurch). Und
+ * Schreibschutz respektieren: rename() fragt nur das Verzeichnis, nicht die
+ * Rechte der Zieldatei - ohne die access()-Pruefung wuerde eine per
+ * "chmod a-w" geschuetzte Datei stillschweigend ueberschrieben. Neue Dateien
+ * (realpath() schlaegt mit ENOENT fehl) gehen direkt an write_file_atomic(). */
+static int write_file_contents(const char *path, const char *data, size_t len) {
+    char *resolved = realpath(path, NULL);
+    const char *target = resolved ? resolved : path;
+    int ok = 0;
+    if (!resolved || access(target, W_OK) == 0) {
+        ok = write_file_atomic(target, data, len);
+    }
+    free(resolved);
+    return ok;
 }
 
 /* Grobe Heuristik: ein eingebettetes NUL-Byte kommt in echten Textdateien
@@ -892,19 +2207,165 @@ static int write_file_contents(const char *path, const char *data, size_t len) {
  * dortiger Kommentar), sieht eine solche Datei nicht mehr offensichtlich
  * "kaputt" aus, sondern wie plausibler, wenn auch wirrer Text - ohne diese
  * Warnung koennte ein Nutzer sie versehentlich bearbeiten und mit Cmd+S
- * ueberschreiben. Nur die ersten paar KB werden geprueft: reicht als
- * repraesentative Stichprobe und haelt die Pruefung auch bei sehr grossen
- * Dateien schnell. */
-#define BTN_BINARY_SNIFF_LEN 8192
-
+ * ueberschreiben. Geprueft wird die ganze Datei (memchr, auch bei 1 GB nur
+ * Sekundenbruchteile): eine Datei mit harmlosem Anfang und Binaerdaten
+ * dahinter (z.B. ein PDF) wuerde sonst als Text behandelt und ihre
+ * Zeilenenden beim Sichern umgewandelt. */
 static int looks_binary(const char *data, size_t len) {
-    size_t n = len < BTN_BINARY_SNIFF_LEN ? len : BTN_BINARY_SNIFF_LEN;
-    for (size_t i = 0; i < n; i++) {
-        if (data[i] == '\0') {
-            return 1;
+    return memchr(data, '\0', len) != NULL;
+}
+
+/* Waehlt per Menue die Zeilenenden, mit denen d gesichert wird. War der
+ * Puffer bisher roh (gemischte Zeilenenden), wird er jetzt vereinheitlicht -
+ * als ein Undo-Schritt, Cursor und Selektion bleiben an ihrer Textstelle.
+ * Bei einer Binaerdatei tut das nichts (Menue ist dort gesperrt). */
+static void set_doc_line_ending(Document *d, BtnEol eol) {
+    if (d->binary) {
+        return;
+    }
+    Editor *ed = &d->editor;
+    size_t len;
+    char *text = editor_copy_all(ed, &len);
+    if (memchr(text, '\r', len)) {
+        /* Jedes "\r\n" vor einer Position verkuerzt den Text davor um 1. */
+        size_t cur = ed->cursor, anc = ed->anchor, cur_shift = 0, anc_shift = 0;
+        for (size_t i = 0; i + 1 < len; i++) {
+            if (text[i] == '\r' && text[i + 1] == '\n') {
+                cur_shift += i < cur;
+                anc_shift += i < anc;
+            }
+        }
+        size_t new_len = btn_eol_normalize(text, len);
+        editor_begin_undo_group(ed);
+        editor_set_cursor(ed, 0, 0);
+        editor_set_cursor(ed, len, 1);
+        editor_insert_text(ed, text, new_len);
+        editor_end_undo_group(ed);
+        editor_set_cursor(ed, anc - anc_shift, 0);
+        editor_set_cursor(ed, cur - cur_shift, 1);
+    }
+    free(text);
+    d->eol = eol;
+    d->eol_raw = 0;
+}
+
+/* Ablage > Kodierung: mit welcher Kodierung d gesichert wird (der Text
+ * bleibt, wie er ist). Binaerdateien: gesperrt. */
+static void set_doc_encoding(Document *d, BtnEncoding enc) {
+    if (d->binary) {
+        return;
+    }
+    if (!btn_enc_is_utf16(d->enc)) {
+        /* Neu gewaehltes UTF-16: mit BOM, wie ueblich - ausser die Datei ist
+         * schon UTF-16, dann wie gesichert (hin und zurueck aendert nichts) */
+        d->utf16_bom = btn_enc_is_utf16(d->saved_enc) ? d->saved_utf16_bom : 1;
+    }
+    d->enc = enc;
+}
+
+static int reload_doc_as(Document *d, int forced);
+
+/* Ablage > Kodierung > Neu oeffnen als: die Datei mit enc neu lesen (die
+ * Erkennung lag daneben). Ungesicherte Aenderungen gingen verloren -
+ * vorher fragen. Passt enc nicht (kaputtes UTF-16): Meldung, nichts
+ * geaendert. */
+static void reopen_doc_as(Document *d, BtnEncoding enc) {
+    if (!d->path) {
+        return;
+    }
+    char title[512];
+    if (doc_has_edits(d)) {
+        snprintf(title, sizeof(title), btn_tr(BTN_STR_REOPEN_TITLE_FMT), doc_display_name(d), btn_enc_name(enc));
+        if (!btn_show_choice_alert(title, btn_tr(BTN_STR_REOPEN_INFO), btn_tr(BTN_STR_BTN_REOPEN), btn_tr(BTN_STR_BTN_CANCEL),
+                                   1)) {
+            return;
         }
     }
-    return 0;
+    int r = reload_doc_as(d, (int)enc);
+    if (r == 0) {
+        snprintf(title, sizeof(title), btn_tr(BTN_STR_ENC_INVALID_TITLE_FMT), doc_display_name(d), btn_enc_name(enc));
+        btn_show_error_alert(title, btn_tr(BTN_STR_ENC_INVALID_INFO));
+    } else if (r < 0) {
+        d->missing_on_disk = 1; /* wie beim Neuladen: der Text existiert nur noch hier */
+        show_file_error(BTN_STR_OPEN_FAILED_TITLE_FMT, d->path, btn_tr(BTN_STR_OPEN_FAILED_INFO));
+    }
+}
+
+/* Ablage > Kodierung: Sichern als ... bzw. Neu oeffnen als ... - 1 = war
+ * ein solcher Eintrag. */
+static int on_encoding_menu(int tag) {
+    if (tag >= BTN_MENU_ENC_BASE && tag < BTN_MENU_ENC_BASE + BTN_MENU_ENC_COUNT) {
+        set_doc_encoding(active_doc(), (BtnEncoding)(tag - BTN_MENU_ENC_BASE));
+    } else if (tag >= BTN_MENU_REOPEN_ENC_BASE && tag < BTN_MENU_REOPEN_ENC_BASE + BTN_MENU_ENC_COUNT) {
+        reopen_doc_as(active_doc(), (BtnEncoding)(tag - BTN_MENU_REOPEN_ENC_BASE));
+    } else {
+        return 0;
+    }
+    return 1;
+}
+
+/* Fuellt d mit dem Dateiinhalt contents (wird dabei veraendert):
+ * Einheitliche Zeilenenden erkennen und im Puffer auf '\n' bringen; beim
+ * Sichern wird zurueckgewandelt (bytegleich, wenn nichts geaendert wurde).
+ * Gemischte Dateien und Binaerdateien bleiben Byte fuer Byte, wie sie sind -
+ * ein '\r' kann dort Nutzdaten sein. */
+/* Datei-Bytes als Text: Kodierung erkennen (forced < 0) bzw. wie gewaehlt,
+ * nach UTF-8 wandeln. Binaerdateien (NUL im Text) bleiben Byte fuer Byte
+ * (Kodierung UTF-8 = unveraendert), ebenso erkanntes UTF-16, das sich nicht
+ * sauber lesen laesst. Uebernimmt bytes (malloc): bei Erfolg gehoert der
+ * Speicher out->text (bei UTF-8 derselbe Puffer, keine Kopie). Rueckgabe 0
+ * (bytes bleibt beim Aufrufer): kein Speicher, oder forced passt nicht
+ * (kaputtes UTF-16 - so gesichert gingen Zeichen verloren). */
+typedef struct {
+    char *text;
+    size_t len;
+    BtnEncoding enc;
+    int binary;
+    int bom; /* die Datei beginnt mit der BOM von enc */
+} DecodedFile;
+
+static int decode_file_bytes(char *bytes, size_t len, int forced, DecodedFile *out) {
+    BtnEncoding enc = forced >= 0 ? (BtnEncoding)forced : btn_enc_detect(bytes, len);
+    out->bom = btn_enc_bom_len(bytes, len, enc) > 0;
+    char *text = bytes;
+    size_t tlen = len;
+    int lossy = 0;
+    if (enc != BTN_ENC_UTF8) {
+        text = btn_enc_decode(bytes, len, enc, &tlen, &lossy);
+        if (!text || (lossy && forced >= 0)) {
+            free(text);
+            return 0;
+        }
+    }
+    out->binary = lossy || looks_binary(text, tlen);
+    if (out->binary && text != bytes) {
+        /* roh: die Datei selbst, nicht ihre (halbe) Umwandlung */
+        free(text);
+        text = bytes;
+        tlen = len;
+        enc = BTN_ENC_UTF8;
+        out->bom = 0;
+    }
+    if (text != bytes) {
+        free(bytes);
+    }
+    out->text = text;
+    out->len = tlen;
+    out->enc = enc;
+    return 1;
+}
+
+static void load_doc_contents(Document *d, char *contents, size_t len, int binary, BtnEncoding enc, int bom) {
+    int mixed = 0;
+    d->binary = binary;
+    d->enc = enc;
+    d->utf16_bom = bom;
+    d->eol = binary ? BTN_EOL_LF : btn_eol_detect(contents, len, &mixed);
+    d->eol_raw = binary || mixed;
+    if (!d->eol_raw) {
+        len = btn_eol_normalize(contents, len);
+    }
+    editor_set_text(&d->editor, contents, len);
 }
 
 /* Gemeinsame Ladelogik fuer Datei > Oeffnen... und Klicks im "Zuletzt
@@ -914,23 +2375,40 @@ static int looks_binary(const char *data, size_t len) {
  * Tab-Auswahl/-Erzeugung davor). */
 static void open_file_path(Document *d, const char *path) {
     size_t len;
-    char *contents = read_file_contents(path, &len);
+    BtnReadResult result;
+    BtnFileStamp stamp;
+    char *contents = read_file_contents(path, &len, &result, &stamp);
+    DecodedFile df;
+    uint64_t hash = contents ? btn_hash_bytes(BTN_HASH_SEED, contents, len) : 0; /* die Bytes auf der Platte */
+    if (contents && !decode_file_bytes(contents, len, -1, &df)) {
+        free(contents);
+        contents = NULL;
+        result = BTN_READ_FAILED;
+    }
     if (contents) {
-        if (looks_binary(contents, len) && !btn_show_binary_file_warning(basename_of(path))) {
-            free(contents);
+        if (df.binary && !btn_show_binary_file_warning(basename_of(path))) {
+            free(df.text);
             return;
         }
-        editor_set_text(&d->editor, contents, len);
-        free(contents);
+        d->disk_hash = hash;
+        load_doc_contents(d, df.text, df.len, df.binary, df.enc, df.bom);
+        d->read_enc = -1;
+        free(df.text);
         set_doc_path(d, path);
-        d->saved_edit_seq = d->editor.edit_seq;
+        mark_doc_saved(d);
+        d->disk = stamp;
+        d->disk_hash_valid = 1;
         /* d->path statt path: set_doc_path() dupliziert path selbst dann
          * sauber, wenn path zufaellig mit dem *alten* d->path identisch war
          * (und dieser Speicher dabei freigegeben wird) - path waere in dem
          * Fall hier bereits ein haengender Zeiger. */
         add_recent_file(d->path);
+    } else if (result == BTN_READ_TOO_LARGE) {
+        char info[256];
+        snprintf(info, sizeof(info), btn_tr(BTN_STR_FILE_TOO_LARGE_INFO_FMT), BTN_MAX_FILE_MB);
+        show_file_error(BTN_STR_OPEN_FAILED_TITLE_FMT, path, info);
     } else {
-        fprintf(stderr, "BTNEdit: Datei konnte nicht gelesen werden: %s\n", path);
+        show_file_error(BTN_STR_OPEN_FAILED_TITLE_FMT, path, btn_tr(BTN_STR_OPEN_FAILED_INFO));
     }
 }
 
@@ -953,6 +2431,7 @@ static int find_tab_for_path(const char *path) {
  * weiteres Tab aufmacht. Ist die Datei schon in einem anderen Tab offen,
  * wird dorthin gewechselt statt sie ein zweites Mal zu laden. */
 static void open_path_in_tab(const char *path) {
+    ai_cancel(); /* nicht den frisch geladenen Text fragen */
     int existing = find_tab_for_path(path);
     if (existing >= 0) {
         switch_to_tab(existing);
@@ -976,6 +2455,52 @@ static void open_path_in_tab(const char *path) {
     open_file_path(active_doc(), path);
 }
 
+/* Der Stempel der Datei weicht von d->disk ab - hat sich auch der Inhalt
+ * geaendert? Gleiche Groesse und gleiche Pruefsumme wie beim letzten
+ * Laden/Sichern: nein (macOS setzt beim Oeffnen Attribute und aendert damit
+ * die ctime, touch/Backups aendern Zeiten) - dann wird nur der Stempel
+ * nachgefuehrt. Ohne bekannte Pruefsumme zaehlt jede Abweichung. */
+static int disk_content_changed(Document *d, const BtnFileStamp *now) {
+    uint64_t hash;
+    if (!d->disk_hash_valid || !d->disk.valid || now->size != d->disk.size || !btn_file_hash(d->path, &hash) ||
+        hash != d->disk_hash) {
+        return 1;
+    }
+    d->disk = *now;
+    d->missing_on_disk = 0; /* wieder lesbar, derselbe Inhalt */
+    return 0;
+}
+
+/* Pruefsumme der Datei genau im Stand *stamp - aendert sie sich waehrend
+ * des Lesens, gilt sie als unbekannt (0). */
+static int hash_for_stamp(const char *path, const BtnFileStamp *stamp, uint64_t *out) {
+    BtnFileStamp after;
+    return btn_file_hash(path, out) && btn_file_stamp(path, &after) && btn_file_stamp_equal(&after, stamp);
+}
+
+/* Die gewaehlte Kodierung kann ein Zeichen nicht darstellen (Offset bad im
+ * zu sichernden Text): als UTF-8 sichern? 1 = ja. */
+static int confirm_save_as_utf8(Document *d, const char *text, size_t len, size_t bad) {
+    char sample[16];
+    const unsigned char *c = (const unsigned char *)text + bad;
+    size_t n = btn_utf8_char_len(c, len - bad);
+    if (n == 1 && c[0] >= 0x80) {
+        /* kein UTF-8 (roh geladenes Byte, gilt als Latin-1): als Codepunkt -
+         * das Byte selbst machte die ganze Meldung ungueltig */
+        snprintf(sample, sizeof(sample), "U+%04X", c[0]);
+    } else if (n == 2 && c[0] == 0xC2 && c[1] < 0xA0) {
+        snprintf(sample, sizeof(sample), "U+%04X", c[1]); /* unsichtbares Steuerzeichen U+0080..9F */
+    } else {
+        memcpy(sample, c, n);
+        sample[n] = '\0';
+    }
+    char title[512], info[512];
+    snprintf(title, sizeof(title), btn_tr(BTN_STR_ENC_UNREPRESENTABLE_TITLE_FMT), doc_display_name(d),
+             btn_enc_name(d->enc));
+    snprintf(info, sizeof(info), btn_tr(BTN_STR_ENC_UNREPRESENTABLE_INFO_FMT), btn_enc_name(d->enc), sample);
+    return btn_show_choice_alert(title, info, btn_tr(BTN_STR_BTN_SAVE_AS_UTF8), btn_tr(BTN_STR_BTN_CANCEL), 1);
+}
+
 /* force_save_as: immer den Sichern-Dialog zeigen, auch wenn schon ein Pfad
  * bekannt ist. Rueckgabe: 1 = gesichert, 0 = abgebrochen/fehlgeschlagen.
  * Nimmt bewusst ein Document*, nicht implizit den aktiven Tab: confirm_
@@ -993,20 +2518,73 @@ static int perform_save_doc(Document *d, int force_save_as) {
         must_free_path = 1;
     } else {
         path = d->path;
+        /* Hat ein anderes Programm die Datei seit dem letzten Laden/Sichern
+         * geaendert (und niemand hat danach "Meine Version behalten"
+         * gewaehlt), wuerde Sichern das still ueberschreiben. Eine
+         * verschwundene Datei wird einfach neu angelegt. */
+        BtnFileStamp now;
+        if (btn_file_stamp(path, &now) && !btn_file_stamp_equal(&now, &d->disk) && disk_content_changed(d, &now)) {
+            char title[512];
+            snprintf(title, sizeof(title), btn_tr(BTN_STR_SAVE_CONFLICT_TITLE_FMT), doc_display_name(d));
+            if (!btn_show_choice_alert(title, btn_tr(BTN_STR_SAVE_CONFLICT_INFO), btn_tr(BTN_STR_BTN_SAVE_ANYWAY),
+                                       btn_tr(BTN_STR_BTN_CANCEL), 1)) {
+                return 0;
+            }
+        }
     }
 
-    size_t len;
-    char *contents = editor_copy_all(&d->editor, &len);
+    /* Roh (gemischt/binaer) oder LF ohne '\r' im Puffer: unveraendert
+     * schreiben. Sonst direkt aus den beiden Gap-Buffer-Haelften ins
+     * Zielformat - nur eine Kopie des Dokuments im Speicher, wie bei LF. */
+    const char *seg_a, *seg_b;
+    size_t len_a, len_b, len;
+    gb_segments(&d->editor.buffer, &seg_a, &len_a, &seg_b, &len_b);
+    int has_cr = memchr(seg_a, '\r', len_a) || memchr(seg_b, '\r', len_b);
+    char *contents;
+    if (d->eol_raw || (d->eol == BTN_EOL_LF && !has_cr)) {
+        contents = editor_copy_all(&d->editor, &len);
+    } else {
+        contents = btn_eol_encode_segments(seg_a, len_a, seg_b, len_b, d->eol, &len);
+    }
+    /* Zeichenkodierung (Binaerdateien bleiben roh). Kann sie ein Zeichen
+     * nicht darstellen: nachfragen statt es still zu verlieren. */
+    BtnEncoding save_enc = d->enc; /* erst nach erfolgreichem Schreiben uebernommen */
+    if (d->enc != BTN_ENC_UTF8 && !d->binary) {
+        size_t blen, bad;
+        char *bytes = btn_enc_encode(contents, len, d->enc, d->utf16_bom, &blen, &bad);
+        if (bytes) {
+            free(contents);
+            contents = bytes;
+            len = blen;
+        } else if (bad != (size_t)-1 && confirm_save_as_utf8(d, contents, len, bad)) {
+            save_enc = BTN_ENC_UTF8;
+        } else {
+            if (bad == (size_t)-1) {
+                show_file_error(BTN_STR_SAVE_FAILED_TITLE_FMT, path, btn_tr(BTN_STR_SAVE_FAILED_INFO));
+            }
+            free(contents);
+            if (must_free_path) {
+                free(path);
+            }
+            return 0;
+        }
+    }
     int ok = write_file_contents(path, contents, len);
+    uint64_t hash = ok ? btn_hash_bytes(BTN_HASH_SEED, contents, len) : 0;
     free(contents);
 
     if (ok) {
+        d->enc = save_enc;
         set_doc_path(d, path);
-        d->saved_edit_seq = d->editor.edit_seq;
+        mark_doc_saved(d);
+        btn_file_stamp(d->path, &d->disk);
+        d->disk_hash = hash;
+        d->disk_hash_valid = 1;
+        discard_recovery(d);
         /* d->path statt path: siehe Begruendung in open_file_path(). */
         add_recent_file(d->path);
     } else {
-        fprintf(stderr, "BTNEdit: Datei konnte nicht geschrieben werden: %s\n", path);
+        show_file_error(BTN_STR_SAVE_FAILED_TITLE_FMT, path, btn_tr(BTN_STR_SAVE_FAILED_INFO));
     }
 
     if (must_free_path) {
@@ -1037,7 +2615,7 @@ static int confirm_discard_doc(Document *d) {
      * naechsten should_close()-Aufruf (z.B. windowShouldClose: gefolgt von
      * applicationShouldTerminate: in derselben Schliessen-Kette) ueberraschend
      * ein zweites Mal erscheinen. */
-    d->saved_edit_seq = d->editor.edit_seq;
+    mark_doc_saved(d);
     return 1;
 }
 
@@ -1096,6 +2674,33 @@ static void close_tab(int idx) {
     btn_app_request_redraw();
 }
 
+/* Kann d's Kodierung den Text fassen? Sonst fragen ("Als UTF-8 sichern"
+ * stellt auf UTF-8 um). 0 = abgebrochen. */
+static int ensure_encodable(Document *d) {
+    if (d->enc == BTN_ENC_UTF8 || d->binary) {
+        return 1;
+    }
+    size_t len, blen, bad;
+    char *text = editor_copy_all(&d->editor, &len);
+    char *bytes = btn_enc_encode(text, len, d->enc, d->utf16_bom, &blen, &bad);
+    int ok = bytes != NULL || bad == (size_t)-1; /* ohne Speicher: das Sichern meldet es */
+    if (!ok && confirm_save_as_utf8(d, text, len, bad)) {
+        d->enc = BTN_ENC_UTF8;
+        ok = 1;
+    }
+    free(bytes);
+    free(text);
+    return ok;
+}
+
+/* Abgebrochenes Schliessen: Tabs ab from (noch nicht gesichert) bekommen
+ * ihre Kodierung von vorher zurueck. */
+static void restore_encodings(const BtnEncoding *before, int from) {
+    for (int i = from; i < g_doc_count; i++) {
+        g_docs[i].enc = before[i];
+    }
+}
+
 /* Wird vom Shim sowohl beim Klick auf den roten Schliessen-Knopf als auch
  * bei Cmd+Q/"Beende" aufgerufen (windowShouldClose:/applicationShouldTerminate:)
  * - zentral hier statt separat pro Aufrufer, damit keiner dieser beiden
@@ -1111,8 +2716,16 @@ static void close_tab(int idx) {
  * Vorgang abbricht - der bereits geschriebene Tab 0 liesse sich dann nicht
  * mehr zurueckholen. */
 static int should_close(void) {
+    /* Cmd+Q / Schliessen-Knopf: eine laufende Eingabe zaehlt als Aenderung. */
+    commit_marked();
     int original_active = g_active_doc;
     int choices[MAX_TABS]; /* -1 = sauber, sonst der Alert-Rueckgabewert */
+    /* "Als UTF-8 sichern" gilt nur fuer dieses Sichern: wird abgebrochen
+     * (oder schlaegt es fehl), behalten ungesicherte Tabs ihre Kodierung */
+    BtnEncoding enc_before[MAX_TABS];
+    for (int i = 0; i < g_doc_count; i++) {
+        enc_before[i] = g_docs[i].enc;
+    }
 
     for (int i = 0; i < g_doc_count; i++) {
         if (!doc_is_dirty(&g_docs[i])) {
@@ -1127,7 +2740,11 @@ static int should_close(void) {
             btn_app_request_redraw();
         }
         int choice = btn_show_unsaved_changes_alert(doc_display_name(&g_docs[i]));
-        if (choice == 0) {
+        /* Sichern: jetzt (Tab sichtbar) klaeren, ob die Kodierung den Text
+         * fassen kann - nicht erst beim Schreiben unten, wenn schon andere
+         * Tabs gesichert sind und der Tab nicht mehr zu sehen ist */
+        if (choice == 0 || (choice == 1 && !ensure_encodable(&g_docs[i]))) {
+            restore_encodings(enc_before, 0);
             switch_to_tab(original_active);
             return 0;
         }
@@ -1136,30 +2753,984 @@ static int should_close(void) {
     switch_to_tab(original_active);
 
     for (int i = 0; i < g_doc_count; i++) {
-        if (choices[i] == 1) {
-            if (!perform_save_doc(&g_docs[i], 0)) {
-                return 0;
-            }
-        } else if (choices[i] == 2) {
-            g_docs[i].saved_edit_seq = g_docs[i].editor.edit_seq;
+        if (choices[i] == 1 && !perform_save_doc(&g_docs[i], 0)) {
+            restore_encodings(enc_before, i);
+            sync_window_state();
+            return 0;
         }
     }
+    /* "Nicht sichern"-Tabs erst als sauber markieren, wenn ALLE Speichern-
+     * Aktionen durch sind: bricht der Nutzer ein spaeteres Sichern ab (return
+     * 0 oben, das Fenster bleibt offen), darf ein frueherer Tab nicht schon
+     * seinen Punkt verloren haben - beim naechsten Schliessen ginge er sonst
+     * ohne jede Nachfrage verloren. */
+    for (int i = 0; i < g_doc_count; i++) {
+        if (choices[i] == 2) {
+            mark_doc_saved(&g_docs[i]);
+        }
+        /* Alles gesichert oder bewusst verworfen - beim naechsten Start soll
+         * nichts zur Wiederherstellung angeboten werden. */
+        discard_recovery(&g_docs[i]);
+    }
     return 1;
+}
+
+/* ---- Schutz der Arbeit: Aenderungen von aussen, Wiederherstellung ---- */
+
+/* Laedt d ohne Rueckfrage neu von der Platte (die Binaer-Warnung entfaellt:
+ * die Datei war schon offen). Cursor und Selektion bleiben an ihrer Stelle,
+ * soweit der neue Text reicht. Nicht lesbar (zu gross, keine Rechte): der
+ * Text bleibt, der Tab gilt als ungesichert, und der ALTE Stand bleibt
+ * gemerkt - Sichern fragt dann nach, statt die neuere Datei still zu
+ * ueberschreiben, und die naechste Pruefung versucht es erneut.
+ * forced: Kodierung (-1: erkennen, RELOAD_KEEP_CHOSEN: die per "Neu oeffnen
+ * als" gewaehlte, solange die Erkennung noch dasselbe meint). Rueckgabe 1 =
+ * geladen, 0 = passt nicht zu forced (Dokument unveraendert), -1 = nicht
+ * lesbar. */
+#define RELOAD_KEEP_CHOSEN (-2)
+static int reload_doc_as(Document *d, int forced) {
+    size_t len;
+    BtnReadResult result;
+    BtnFileStamp stamp;
+    char *contents = read_file_contents(d->path, &len, &result, &stamp);
+    if (!contents) {
+        return -1;
+    }
+    uint64_t hash = btn_hash_bytes(BTN_HASH_SEED, contents, len); /* die Bytes auf der Platte */
+    BtnEncoding detected = btn_enc_detect(contents, len);
+    if (forced == RELOAD_KEEP_CHOSEN) {
+        forced = d->read_enc >= 0 && detected == d->read_detected ? d->read_enc : -1;
+    }
+    DecodedFile df;
+    if (!decode_file_bytes(contents, len, forced, &df)) {
+        free(contents);
+        return 0;
+    }
+    /* gewaehlt und wirklich so gelesen (nicht roh als Binaerdatei) */
+    d->read_enc = forced >= 0 && df.enc == (BtnEncoding)forced ? forced : -1;
+    d->read_detected = detected;
+    size_t cursor = d->editor.cursor, anchor = d->editor.anchor;
+    d->disk_hash = hash;
+    load_doc_contents(d, df.text, df.len, df.binary, df.enc, df.bom);
+    free(df.text);
+    editor_set_cursor(&d->editor, editor_utf8_seq_start(&d->editor, anchor), 0);
+    editor_set_cursor(&d->editor, editor_utf8_seq_start(&d->editor, cursor), 1);
+    mark_doc_saved(d);
+    d->disk = stamp;
+    d->disk_hash_valid = 1;
+    discard_recovery(d);
+    return 1;
+}
+
+/* Neu laden (geaendert von aussen): mit der gewaehlten Kodierung, falls
+ * eine gewaehlt wurde und die Datei noch dazu passt, sonst erkannt. */
+static void reload_doc(Document *d) {
+    int r = reload_doc_as(d, RELOAD_KEEP_CHOSEN);
+    if (r == 0) {
+        r = reload_doc_as(d, -1);
+    }
+    if (r < 0) {
+        d->missing_on_disk = 1;
+    }
+}
+
+/* Vergleicht Tab idx mit seiner Datei. Ohne eigene Aenderungen wird still
+ * neu geladen; mit eigenen fragt ask = 1 (Tab wird vorher sichtbar), ask = 0
+ * (Timer, der Nutzer tippt vielleicht gerade) laesst es fuer die naechste
+ * Aktivierung bzw. das Sichern liegen. Rueckgabe 1 = etwas hat sich
+ * geaendert (neu zeichnen). */
+static int check_doc_on_disk(int idx, int ask) {
+    Document *d = &g_docs[idx];
+    if (!d->path) {
+        return 0;
+    }
+    BtnFileStamp now;
+    btn_file_stamp(d->path, &now);
+    if (btn_file_stamp_equal(&now, &d->disk)) {
+        return 0;
+    }
+    if (!now.valid) {
+        /* Geloescht oder verschoben: der Text existiert nur noch hier.
+         * Taucht die Datei wieder auf, ist das wieder eine Aenderung. */
+        d->disk = now;
+        d->disk_hash_valid = 0;
+        d->missing_on_disk = 1;
+        return 1;
+    }
+    /* Schon als Aenderung erkannt (Timer, eigene Aenderungen, noch nicht
+     * gefragt): nicht bei jedem Tick die ganze Datei neu lesen */
+    int known = d->changed.valid && btn_file_stamp_equal(&now, &d->changed);
+    if (!known && !disk_content_changed(d, &now)) {
+        return 0; /* nur Metadaten/Zeiten: kein Neuladen, keine Frage */
+    }
+    d->changed = now;
+    if (!doc_has_edits(d)) {
+        reload_doc(d);
+        return 1;
+    }
+    if (!ask) {
+        return 0;
+    }
+    if (idx != g_active_doc) {
+        switch_to_tab(idx);
+        btn_app_request_redraw();
+    }
+    /* Die Pruefsumme des Stands, nach dem gefragt wird - VOR dem Dialog:
+     * aendert ein Programm die Datei, waehrend er offen ist, fragt die
+     * naechste Pruefung erneut, statt die neue Fassung still zu uebernehmen. */
+    uint64_t now_hash;
+    int now_hash_ok = hash_for_stamp(d->path, &now, &now_hash);
+    char title[512];
+    snprintf(title, sizeof(title), btn_tr(BTN_STR_FILE_CHANGED_TITLE_FMT), doc_display_name(d));
+    /* Kein Escape: der einzige Weg, die eigenen Aenderungen zu verwerfen,
+     * ist ein bewusster Klick auf "Neu laden". */
+    if (btn_show_choice_alert(title, btn_tr(BTN_STR_FILE_CHANGED_INFO), btn_tr(BTN_STR_BTN_KEEP_MINE),
+                              btn_tr(BTN_STR_BTN_RELOAD), 0)) {
+        /* Behalten: erst die naechste Aenderung fragt wieder, Sichern
+         * ueberschreibt ohne weitere Rueckfrage. */
+        d->disk = now;
+        d->disk_hash = now_hash;
+        d->disk_hash_valid = now_hash_ok;
+        d->missing_on_disk = 0;
+    } else {
+        reload_doc(d);
+    }
+    return 1;
+}
+
+/* Schreibt fuer jedes ungesicherte Dokument seinen Stand in die
+ * Wiederherstellungsdatei - nur wenn er sich seit dem letzten Mal geaendert
+ * hat und genug Zeit vergangen ist (die erste Sicherung sofort). Gesicherte
+ * Dokumente verlieren ihre Datei. now: monotonic_seconds(). */
+static void autosave_recovery(long now) {
+    if (!g_recovery_dir) {
+        return;
+    }
+    for (int i = 0; i < g_doc_count; i++) {
+        Document *d = &g_docs[i];
+        if (!doc_is_dirty(d)) {
+            discard_recovery(d);
+            continue;
+        }
+        if (d->recovery_file && d->recovery_seq == d->editor.edit_seq && d->recovery_eol == d->eol &&
+            d->recovery_eol_raw == d->eol_raw && d->recovery_enc == d->enc) {
+            continue;
+        }
+        long wait = BTN_RECOVERY_INTERVAL + (long)(editor_length(&d->editor) / BTN_RECOVERY_BYTES_PER_SECOND);
+        if (d->recovery_file && now >= d->recovery_time && now - d->recovery_time < wait) {
+            continue;
+        }
+        if (!btn_recovery_ensure_dir(g_recovery_dir)) {
+            return;
+        }
+        char *file = d->recovery_file ? d->recovery_file
+                                       : btn_recovery_file_name(g_recovery_dir, g_recovery_run, d->recovery_id);
+        if (!file) {
+            continue;
+        }
+        const char *a, *b;
+        size_t alen, blen;
+        gb_segments(&d->editor.buffer, &a, &alen, &b, &blen);
+        if (btn_recovery_write(file, d->path, (int)d->eol, d->eol_raw, d->binary, (int)d->enc, d->utf16_bom, &d->disk, a,
+                               alen, b, blen)) {
+            d->recovery_file = file;
+            d->recovery_seq = d->editor.edit_seq;
+            d->recovery_eol = d->eol;
+            d->recovery_eol_raw = d->eol_raw;
+            d->recovery_enc = d->enc;
+            d->recovery_time = now;
+        } else if (file != d->recovery_file) {
+            free(file);
+        }
+    }
+}
+
+/* Timer (alle BTN_RECOVERY_INTERVAL Sekunden): unveraenderte Tabs folgen
+ * ihrer Datei auf der Platte (z.B. ein Log), und ungesicherte Dokumente
+ * werden fuer die Wiederherstellung gesichert. Den aktiven Tab nicht
+ * anfassen, solange mit der Maus markiert oder per Eingabemethode getippt
+ * wird. */
+static void on_timer(void) {
+    int changed = 0;
+    int busy = g_drag != BTN_DRAG_NONE || g_marked.len > 0;
+    long now = monotonic_seconds();
+    for (int i = 0; i < g_doc_count; i++) {
+        Document *d = &g_docs[i];
+        /* Grosse Dateien (wachsendes Log) seltener - ein Neuladen liest sie
+         * ganz. */
+        long wait = BTN_RECOVERY_INTERVAL + (long)(editor_length(&d->editor) / BTN_RECOVERY_BYTES_PER_SECOND);
+        if ((busy && i == g_active_doc) || (now >= d->disk_check_time && now - d->disk_check_time < wait)) {
+            continue;
+        }
+        d->disk_check_time = now;
+        changed |= check_doc_on_disk(i, 0);
+    }
+    autosave_recovery(now);
+    if (changed) {
+        sync_window_state();
+        clamp_scroll();
+        btn_app_request_redraw();
+    }
+}
+
+/* App kommt in den Vordergrund - typischer Moment, nachdem in einem anderen
+ * Programm (Editor, git) Dateien geaendert wurden: alle Tabs pruefen, bei
+ * eigenen Aenderungen nachfragen. */
+static int g_checking_disk = 0;
+static Editor *g_print_editor; /* unten definiert: laufender Druck */
+
+static void on_activate(void) {
+    /* Nicht mitten in einer eigenen Rueckfrage oder waehrend des Druckens
+     * (dessen Layout zeigt auf den aktuellen Text). */
+    if (g_checking_disk || g_print_editor) {
+        return;
+    }
+    g_checking_disk = 1;
+    commit_marked();
+    int original_active = g_active_doc;
+    int changed = 0, asked = 0;
+    for (int i = 0; i < g_doc_count; i++) {
+        int before = g_active_doc;
+        changed |= check_doc_on_disk(i, 1);
+        asked |= g_active_doc != before;
+    }
+    if (asked) {
+        switch_to_tab(original_active);
+    }
+    if (changed) {
+        sync_window_state();
+        sync_scroll_to_cursor();
+        btn_app_request_redraw();
+    }
+    g_checking_disk = 0;
+}
+
+/* Ein wiederhergestelltes Dokument in einen Tab: in den Tab derselben Datei,
+ * falls sie beim Start schon geoeffnet wurde, sonst in den leeren ersten
+ * oder einen neuen. Es bleibt ungesichert, bis der Nutzer sichert.
+ * Rueckgabe: Tab-Index + 1, 0 = kein Tab mehr frei. */
+static int restore_into_tab(BtnRecovered *r) {
+    int idx = r->path ? find_tab_for_path(r->path) : -1;
+    /* Nur einen unveraenderten Tab derselben Datei ersetzen - ein schon
+     * wiederhergestellter (zwei Sicherungen derselben Datei) bleibt. */
+    if (idx >= 0 && !doc_is_dirty(&g_docs[idx])) {
+        switch_to_tab(idx);
+    } else if (doc_is_blank(active_doc())) {
+        close_find_bar();
+    } else {
+        idx = add_tab();
+        if (idx < 0) {
+            return 0;
+        }
+        switch_to_tab(idx);
+    }
+    idx = g_active_doc;
+    Document *d = active_doc();
+    editor_set_text(&d->editor, r->text, r->len);
+    d->eol = (BtnEol)r->eol;
+    d->eol_raw = r->raw;
+    d->binary = r->binary;
+    d->enc = (BtnEncoding)r->enc;
+    d->utf16_bom = r->utf16_bom;
+    d->read_enc = -1;
+    set_doc_path(d, r->path);
+    mark_doc_saved(d);
+    /* Kein edit_seq ist je (size_t)-1: der Tab bleibt ungesichert, auch
+     * wenn der Nutzer alles widerruft - der Text entspricht nicht der Datei. */
+    d->saved_edit_seq = (size_t)-1;
+    /* Der Stand, auf den sich die Aenderungen beziehen: hat sich die Datei
+     * seitdem geaendert (git pull nach dem Absturz), fragt Sichern nach. */
+    d->disk = r->disk;
+    d->disk_hash_valid = 0; /* Inhalt dieses Stands unbekannt: jede Abweichung zaehlt */
+    return idx + 1;
+}
+
+/* Beim Start: Wiederherstellungsdateien eines abgestuerzten Laufs anbieten.
+ * Eine alte Datei verschwindet erst, wenn ihr wiederhergestellter Tab seine
+ * eigene Sicherung geschrieben hat (sonst - Platte voll - bleibt sie fuer
+ * den naechsten Start); eine unlesbare Datei wird zu "*.damaged" umbenannt
+ * (nicht geloescht, nicht erneut angeboten). Escape waehlt nichts: Verwerfen
+ * ist endgueltig. */
+static void restore_recovered_documents(void) {
+    if (!g_recovery_dir) {
+        return;
+    }
+    char **files;
+    size_t count = btn_recovery_find_orphans(g_recovery_dir, g_recovery_run, &files);
+    if (count == 0) {
+        /* Sperrdateien frueherer, normal beendeter Laeufe - sonst sammelte
+         * sich bei jedem Start eine leere Datei an. */
+        btn_recovery_cleanup_locks(g_recovery_dir, g_recovery_run);
+        return;
+    }
+    char info[512];
+    snprintf(info, sizeof(info), btn_tr(BTN_STR_RECOVERY_INFO_FMT), (int)count);
+    int restore = btn_show_choice_alert(btn_tr(BTN_STR_RECOVERY_TITLE), info, btn_tr(BTN_STR_BTN_RESTORE),
+                                        btn_tr(BTN_STR_BTN_DISCARD), 0);
+    int *restored = calloc(count, sizeof(int));
+    for (size_t i = 0; i < count && restore; i++) {
+        BtnRecovered r;
+        if (!btn_recovery_read(files[i], &r)) {
+            size_t n = strlen(files[i]) + sizeof(".damaged");
+            char *damaged = malloc(n);
+            if (damaged) {
+                snprintf(damaged, n, "%s.damaged", files[i]);
+                rename(files[i], damaged);
+                free(damaged);
+            }
+            continue;
+        }
+        if (restored) {
+            restored[i] = restore_into_tab(&r);
+        }
+        btn_recovery_free(&r);
+    }
+    autosave_recovery(monotonic_seconds());
+    for (size_t i = 0; i < count; i++) {
+        if (!restore || (restored && restored[i] && g_docs[restored[i] - 1].recovery_file)) {
+            unlink(files[i]);
+        }
+    }
+    free(restored);
+    btn_recovery_free_list(files, count);
+    btn_recovery_cleanup_locks(g_recovery_dir, g_recovery_run);
+}
+
+static void on_launch(void) {
+    restore_recovered_documents();
+    sync_window_state();
+    sync_scroll_to_cursor();
+    btn_app_request_redraw();
+}
+
+/* ---- KI-Vervollstaendigung (ai.h) ----
+ * Nach einer Tipp-Pause im Dokument fragt BTNEdit den eingestellten Server
+ * (Ollama/llama-server) nach einer Fortsetzung der Zeile; sie erscheint als
+ * grauer Geistertext hinter dem Cursor. Tab uebernimmt, Escape verwirft,
+ * Weitertippen des vorgeschlagenen Textes behaelt den Rest; er gilt nur fuer
+ * genau den Text- und Cursorstand, fuer den er kam (Cursor weg und wieder
+ * zurueck zeigt ihn wieder, jede Aenderung verwirft ihn). edit_seq ist ueber
+ * alle Editoren eindeutig - er identifiziert Dokument UND Inhaltsstand. */
+static BtnAiConfig g_ai;
+static unsigned long g_ai_request = 0;   /* laufende Anfrage, 0 = keine */
+static size_t g_ai_request_seq, g_ai_request_cursor;
+static size_t g_ai_last_seq = (size_t)-1; /* Inhaltsstand der letzten Anfrage */
+static int g_ai_request_text = 0;          /* als Fortsetzung (nur Text davor) */
+static int g_ai_request_prose = 0;         /* Fliesstext-Datei: ein Satz reicht */
+static char g_ai_request_model[128];
+static struct {
+    char *text; /* NUL-terminiert */
+    size_t len;
+    size_t seq, cursor; /* gilt nur fuer genau diesen Stand */
+} g_ghost;
+
+/* ~/.btnedit_ai - wie ~/.btnedit_prefs eine eigene kleine Datei. */
+static char *ai_config_path(void) {
+    const char *home = getenv("HOME");
+    if (!home) {
+        return NULL;
+    }
+    size_t len = strlen(home) + strlen("/.btnedit_ai") + 1;
+    char *path = malloc(len);
+    if (path) {
+        snprintf(path, len, "%s/.btnedit_ai", home);
+    }
+    return path;
+}
+
+/* Liest ~/.btnedit_ai (Rueckgabe: Dateiinhalt fuer den Aufrufer oder NULL). */
+static char *load_ai_config_text(size_t *len) {
+    btn_ai_config_defaults(&g_ai);
+    char *path = ai_config_path();
+    BtnReadResult result;
+    char *text = path ? read_file_contents(path, len, &result, NULL) : NULL;
+    if (text) {
+        btn_ai_config_parse(&g_ai, text, *len);
+    }
+    free(path);
+    btn_app_set_ai_menu(g_ai.enabled);
+    return text;
+}
+
+static void load_ai_config(void) {
+    size_t len;
+    free(load_ai_config_text(&len));
+}
+
+/* Menue: ein-/ausschalten. Die Datei wird dabei neu gelesen (Aenderungen
+ * an Server/Modell gelten ab jetzt) und nur die enabled-Zeile geaendert -
+ * Kommentare und eigene Eintraege bleiben; ohne Datei wird sie mit allen
+ * Standardwerten angelegt. */
+static void toggle_ai_config(void) {
+    size_t len;
+    char *old = load_ai_config_text(&len);
+    g_ai.enabled = !g_ai.enabled;
+    char *text = old ? btn_ai_config_set_enabled(old, len, g_ai.enabled) : btn_ai_config_format(&g_ai);
+    char *path = ai_config_path();
+    if (path && text) {
+        write_file_contents(path, text, strlen(text));
+    }
+    free(path);
+    free(text);
+    free(old);
+    btn_app_set_ai_menu(g_ai.enabled);
+}
+
+static void ghost_clear(void) {
+    free(g_ghost.text);
+    g_ghost.text = NULL;
+    g_ghost.len = 0;
+}
+
+/* Steht der Vorschlag noch? Nur fuer genau den Stand, fuer den er kam. */
+static int ghost_visible(void) {
+    if (!g_ghost.len || g_focus != BTN_FOCUS_DOCUMENT || g_marked.len) {
+        return 0;
+    }
+    Editor *ed = &active_doc()->editor;
+    return ed->edit_seq == g_ghost.seq && ed->cursor == g_ghost.cursor && !editor_has_selection(ed);
+}
+
+/* BTNEDIT_AI_DEBUG=1 beim Start aus dem Terminal: Anfragen und Antworten
+ * nach stderr (Fehlersuche ohne Dialoge). */
+static void ai_debug(const char *what, const char *data, size_t len) {
+    if (getenv("BTNEDIT_AI_DEBUG")) {
+        fprintf(stderr, "BTNEdit KI: %s %.*s\n", what, (int)(len > 300 ? 300 : len), data ? data : "");
+    }
+}
+
+/* Modelle, die laut Ollama kein Fill-in-the-Middle koennen ("does not
+ * support insert", meist allgemeine Chat-Modelle): fuer sie auch bei Code
+ * nur den Text vor dem Cursor schicken. Gilt bis zum Beenden. */
+#define AI_NO_FIM_MAX 8
+static char g_ai_no_fim[AI_NO_FIM_MAX][128];
+static int g_ai_no_fim_count = 0;
+
+static int ai_model_lacks_fim(const char *model) {
+    for (int i = 0; i < g_ai_no_fim_count && i < AI_NO_FIM_MAX; i++) {
+        if (strcmp(g_ai_no_fim[i], model) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void ai_note_no_fim(const char *model) {
+    if (!ai_model_lacks_fim(model)) {
+        snprintf(g_ai_no_fim[g_ai_no_fim_count % AI_NO_FIM_MAX], sizeof(g_ai_no_fim[0]), "%s", model);
+        g_ai_no_fim_count++;
+    }
+}
+
+/* Fuer das aktive Dokument: Fliesstext oder Code (*prose), welches Modell,
+ * und Rueckgabe 1 = als reine Fortsetzung fragen (Fliesstext oder ein
+ * Modell ohne Fill-in-the-Middle). */
+static int ai_mode_for(const Document *d, const char **model, int *prose) {
+    *prose = btn_ai_path_is_text(d->path);
+    *model = *prose ? btn_ai_text_model(&g_ai) : g_ai.model;
+    return *prose || (g_ai.api == BTN_AI_API_OLLAMA && ai_model_lacks_fim(*model));
+}
+
+static void ai_on_idle(void);
+
+static void ai_on_response(unsigned long id, int status, const char *body, size_t len) {
+    char st[32];
+    snprintf(st, sizeof(st), "Antwort HTTP %d:", status);
+    ai_debug(st, body, len);
+    if (id != g_ai_request) {
+        return; /* veraltet */
+    }
+    g_ai_request = 0;
+    if (status == 400 && !g_ai_request_text && g_ai.api == BTN_AI_API_OLLAMA && btn_ai_is_no_insert_error(body, len)) {
+        ai_note_no_fim(g_ai_request_model);
+        g_ai_last_seq = (size_t)-1;
+        ai_on_idle(); /* gleich noch einmal, jetzt als reine Fortsetzung */
+        return;
+    }
+    Editor *ed = &active_doc()->editor;
+    if (status != 200 || !body || ed->edit_seq != g_ai_request_seq || ed->cursor != g_ai_request_cursor ||
+        editor_has_selection(ed) || g_focus != BTN_FOCUS_DOCUMENT || g_marked.len) {
+        return;
+    }
+    char *s;
+    size_t n;
+    if (!btn_ai_parse_response(g_ai.api, body, len, &s, &n)) {
+        return;
+    }
+    size_t rest_len = editor_length(ed) - ed->cursor;
+    rest_len = rest_len < 256 ? rest_len : 256;
+    char *rest = gb_copy_range(&ed->buffer, ed->cursor, rest_len);
+    n = btn_ai_clean_suggestion(s, n, rest, rest_len);
+    free(rest);
+    if (g_ai_request_prose) {
+        n = btn_ai_cut_sentence(s, n); /* ein Satz auf einmal reicht */
+    }
+    if (n == 0) {
+        free(s);
+        return;
+    }
+    ghost_clear();
+    g_ghost.text = s;
+    g_ghost.len = n;
+    g_ghost.seq = ed->edit_seq;
+    g_ghost.cursor = ed->cursor;
+    btn_app_request_redraw();
+}
+
+/* Tipp-Pause vorbei: fragen, wenn es hier etwas zu vervollstaendigen gibt
+ * - im Dokument, ohne Selektion/Eingabe, der Text hat sich seit der letzten
+ * Anfrage geaendert, und rechts vom Cursor steht nur Leerraum oder
+ * Schliessendes. Kontext: bis BTN_AI_PREFIX_BYTES davor, BTN_AI_SUFFIX_BYTES
+ * danach, auf Zeichengrenzen. */
+static void ai_on_idle(void) {
+    Document *d = active_doc();
+    Editor *ed = &d->editor;
+    if (!g_ai.enabled || g_ai_request || g_focus != BTN_FOCUS_DOCUMENT || g_marked.len || d->binary ||
+        editor_has_selection(ed) || ed->edit_seq == g_ai_last_seq || ghost_visible()) {
+        return;
+    }
+    size_t cur = ed->cursor, len = editor_length(ed);
+    size_t end = len - cur > BTN_AI_SUFFIX_BYTES ? cur + BTN_AI_SUFFIX_BYTES : len;
+    if (end < len) {
+        end = editor_utf8_seq_start(ed, end);
+    }
+    char *suffix = gb_copy_range(&ed->buffer, cur, end - cur);
+    if (!btn_ai_rest_allows_request(suffix, end - cur)) {
+        free(suffix);
+        return;
+    }
+    size_t start = cur > BTN_AI_PREFIX_BYTES ? cur - BTN_AI_PREFIX_BYTES : 0;
+    while (start < cur && ((unsigned char)gb_char_at(&ed->buffer, start) & 0xC0) == 0x80) {
+        start++;
+    }
+    char *prefix = gb_copy_range(&ed->buffer, start, cur - start);
+    const char *model;
+    int prose;
+    int text = ai_mode_for(d, &model, &prose);
+    size_t body_len;
+    char *body = text ? btn_ai_request_body_text(&g_ai, model, prefix, cur - start, &body_len)
+                      : btn_ai_request_body(&g_ai, prefix, cur - start, suffix, end - cur, &body_len);
+    char *url = btn_ai_endpoint(&g_ai, text);
+    /* 60 s: die erste Anfrage laedt das Modell erst in den Speicher */
+    ai_debug(url, body, body_len);
+    g_ai_request = btn_http_post_json(url, body, body_len, 60.0, ai_on_response);
+    g_ai_request_text = text;
+    g_ai_request_prose = prose;
+    snprintf(g_ai_request_model, sizeof(g_ai_request_model), "%s", model);
+    g_ai_request_seq = ed->edit_seq;
+    g_ai_request_cursor = cur;
+    g_ai_last_seq = ed->edit_seq;
+    free(url);
+    free(body);
+    free(prefix);
+    free(suffix);
+}
+
+/* Laufende Anfrage abbrechen - ohne Antwort gilt der Text nicht als
+ * "schon gefragt", die naechste Pause fragt erneut. */
+static void ai_cancel_request(void) {
+    if (g_ai_request) {
+        btn_http_cancel(g_ai_request);
+        g_ai_request = 0;
+        g_ai_last_seq = (size_t)-1;
+    }
+}
+
+/* Tab-Wechsel, Oeffnen, Ausschalten: keine Pause mehr messen, nichts fragen. */
+static void ai_cancel(void) {
+    ai_cancel_request();
+    btn_app_restart_idle_timer(-1, NULL);
+}
+
+/* Jede Taste im Dokument: laufende Anfrage abbrechen, Pause neu messen. */
+static void ai_note_typing(void) {
+    if (!g_ai.enabled) {
+        return;
+    }
+    ai_cancel_request();
+    btn_app_restart_idle_timer(g_ai.delay_ms / 1000.0, ai_on_idle);
+}
+
+/* ---- Bearbeiten > KI-Verbindung testen ----
+ * Eine feste kleine Anfrage an den eingetragenen Server (Datei frisch
+ * gelesen), das Ergebnis als Meldung: erreichbar, Modell vorhanden, was es
+ * vorschlaegt - sonst meldet die Vervollstaendigung Fehler bewusst nie. Ist
+ * fuer Fliesstext ein eigenes Modell gewaehlt, folgt eine zweite Anfrage
+ * an dieses; die Meldung nennt dann beide. */
+static unsigned long g_ai_test_request = 0;
+static int g_ai_test_stage = 0; /* 0 = Code-Modell, 1 = Fliesstext-Modell */
+static int g_ai_test_text = 0;  /* laufende Testanfrage als Fortsetzung */
+/* Beim Start des Tests festgehalten - ein Modellwechsel waehrenddessen
+ * aendert weder, wen der Test fragt, noch wem ein Fehler zugeschrieben wird. */
+static char g_ai_test_models[2][128];
+static int g_ai_test_two = 0;   /* eigenes Fliesstext-Modell: zweite Stufe */
+static char g_ai_test_info[4096];
+
+static const char *ai_test_model(void) {
+    return g_ai_test_models[g_ai_test_stage];
+}
+
+static int ai_test_has_text_stage(void) {
+    return g_ai_test_two;
+}
+
+/* Ergebnis einer Stufe anhaengen (bei zwei Stufen mit Abschnittsnamen). */
+static void ai_test_add_line(const char *line) {
+    size_t l = strlen(g_ai_test_info);
+    if (ai_test_has_text_stage()) {
+        snprintf(g_ai_test_info + l, sizeof(g_ai_test_info) - l, "%s%s: %s", l ? "\n\n" : "",
+                 btn_tr(g_ai_test_stage ? BTN_STR_AI_MODEL_FOR_TEXT : BTN_STR_AI_MODEL_FOR_CODE), line);
+    } else {
+        snprintf(g_ai_test_info + l, sizeof(g_ai_test_info) - l, "%s", line);
+    }
+}
+
+static void ai_test_finish(void) {
+    if (!g_ai.enabled) {
+        size_t l = strlen(g_ai_test_info);
+        snprintf(g_ai_test_info + l, sizeof(g_ai_test_info) - l, "%s", btn_tr(BTN_STR_AI_TEST_OFF_NOTE));
+    }
+    btn_show_error_alert(btn_tr(BTN_STR_AI_TEST_TITLE), g_ai_test_info);
+}
+
+static void ai_send_test_request(void);
+
+static void ai_on_test_response(unsigned long id, int status, const char *body, size_t len) {
+    if (id != g_ai_test_request) {
+        return;
+    }
+    g_ai_test_request = 0;
+    const char *model = ai_test_model();
+    if (status == 400 && !g_ai_test_text && g_ai.api == BTN_AI_API_OLLAMA && btn_ai_is_no_insert_error(body, len)) {
+        ai_note_no_fim(model);
+        ai_send_test_request(); /* noch einmal als reine Fortsetzung */
+        return;
+    }
+    char info[1024];
+    char *s = NULL, *err = NULL;
+    size_t n = 0, en = 0;
+    if (status == 200 && btn_ai_parse_response(g_ai.api, body, len, &s, &n)) {
+        char raw[160];
+        snprintf(raw, sizeof(raw), "%.*s", (int)(n < 150 ? n : 150), s);
+        for (char *p = raw; *p; p++) {
+            if ((unsigned char)*p < 0x20) {
+                *p = ' '; /* Zeilenenden der Rohantwort lesbar */
+            }
+        }
+        n = btn_ai_clean_suggestion(s, n, "", 0);
+        const char *shown = g_ai.api == BTN_AI_API_LLAMA ? "llama-server" : model;
+        if (n > 0) {
+            snprintf(info, sizeof(info), btn_tr(BTN_STR_AI_TEST_OK_FMT), shown, s);
+        } else {
+            snprintf(info, sizeof(info), btn_tr(BTN_STR_AI_TEST_EMPTY_FMT), shown, raw);
+        }
+        if (g_ai_test_text && g_ai_test_stage == 0) {
+            size_t l = strlen(info);
+            snprintf(info + l, sizeof(info) - l, "%s", btn_tr(BTN_STR_AI_TEST_NO_FIM));
+        }
+    } else if (status == 0) {
+        char *url = btn_ai_endpoint(&g_ai, g_ai_test_text);
+        snprintf(info, sizeof(info), btn_tr(BTN_STR_AI_TEST_UNREACHABLE_FMT), url);
+        free(url);
+    } else {
+        if (body && btn_ai_json_get_string(body, len, "error", &err, &en)) {
+            snprintf(info, sizeof(info), btn_tr(BTN_STR_AI_TEST_HTTP_FMT), status, err);
+        } else {
+            char excerpt[200];
+            snprintf(excerpt, sizeof(excerpt), "%.*s", body ? (int)(len < 180 ? len : 180) : 0, body ? body : "");
+            snprintf(info, sizeof(info), btn_tr(BTN_STR_AI_TEST_HTTP_FMT), status, excerpt);
+        }
+    }
+    free(s);
+    free(err);
+    ai_test_add_line(info);
+    if (g_ai_test_stage == 0 && status != 0 && ai_test_has_text_stage()) {
+        g_ai_test_stage = 1;
+        ai_send_test_request();
+        return;
+    }
+    ai_test_finish();
+}
+
+/* Testanfrage der aktuellen Stufe: Code als Fill-in-the-Middle (ohne FIM
+ * als Fortsetzung), Fliesstext immer als Fortsetzung. */
+static void ai_send_test_request(void) {
+    static const char code[] = "def add(a, b):\n    return ";
+    static const char prose[] = "The weather today is";
+    const char *model = ai_test_model();
+    g_ai_test_text = g_ai_test_stage == 1 || (g_ai.api == BTN_AI_API_OLLAMA && ai_model_lacks_fim(model));
+    size_t body_len;
+    const char *prompt = g_ai_test_stage == 1 ? prose : code;
+    char *body = g_ai_test_text ? btn_ai_request_body_text(&g_ai, model, prompt, strlen(prompt), &body_len)
+                                : btn_ai_request_body(&g_ai, code, sizeof(code) - 1, "\n", 1, &body_len);
+    char *url = btn_ai_endpoint(&g_ai, g_ai_test_text);
+    btn_http_cancel(g_ai_test_request);
+    ai_debug(url, body, body_len);
+    g_ai_test_request = btn_http_post_json(url, body, body_len, 90.0, ai_on_test_response);
+    if (!g_ai_test_request) {
+        char info[512];
+        snprintf(info, sizeof(info), btn_tr(BTN_STR_AI_TEST_UNREACHABLE_FMT), url);
+        ai_test_add_line(info);
+        ai_test_finish();
+    }
+    free(url);
+    free(body);
+}
+
+/* Der Test (nach der Modellliste, siehe unten): von vorn, mit Stufe 0. */
+static void ai_send_test(void) {
+    g_ai_test_stage = 0;
+    g_ai_test_info[0] = '\0';
+    snprintf(g_ai_test_models[0], sizeof(g_ai_test_models[0]), "%s", g_ai.model);
+    snprintf(g_ai_test_models[1], sizeof(g_ai_test_models[1]), "%s", btn_ai_text_model(&g_ai));
+    g_ai_test_two = g_ai.api == BTN_AI_API_OLLAMA && g_ai.text_model[0] && strcmp(g_ai.text_model, g_ai.model) != 0;
+    ai_send_test_request();
+}
+
+/* ---- Bearbeiten > KI-Modell ----
+ * BTNEdit fragt den Server nach den installierten Modellen (Ollama: GET
+ * /api/tags, llama-server: /health - dort gibt es nur das beim Start
+ * geladene). Kein Dokumenttext geht dabei raus. Fehlt das eingestellte
+ * Modell, wird das kleinste Code-Modell genommen und in ~/.btnedit_ai
+ * gemerkt. */
+static BtnAiModel *g_ai_models = NULL;
+static size_t g_ai_model_count = 0;
+static unsigned long g_ai_models_request = 0;
+static int g_ai_models_notify = 0; /* Probleme als Meldung (Einschalten, Aktualisieren) */
+static int g_ai_test_after = 0;    /* danach die Testanfrage schicken */
+static char g_ai_status[300] = "";
+
+static void ai_update_model_menu(void) {
+    const char *names[BTN_MAX_AI_MODELS];
+    int n = g_ai_model_count < BTN_MAX_AI_MODELS ? (int)g_ai_model_count : BTN_MAX_AI_MODELS;
+    static char labels[BTN_MAX_AI_MODELS][160];
+    for (int i = 0; i < n; i++) {
+        names[i] = g_ai_models[i].name;
+        if (g_ai_models[i].remote) { /* Text ginge an ollama.com: sichtbar machen */
+            snprintf(labels[i], sizeof(labels[i]), "%s (Cloud)", g_ai_models[i].name);
+            names[i] = labels[i];
+        }
+    }
+    int sel = -1, text_sel = -1; /* text_sel: -1 = "wie Code", -2 = keins */
+    if (g_ai.api == BTN_AI_API_OLLAMA) {
+        sel = btn_ai_find_model(g_ai_models, g_ai_model_count, g_ai.model);
+        if (g_ai.text_model[0]) {
+            int t = btn_ai_find_model(g_ai_models, g_ai_model_count, g_ai.text_model);
+            text_sel = t >= 0 ? t : -2;
+        }
+    }
+    btn_app_set_ai_model_menu(g_ai_status[0] ? g_ai_status : btn_tr(BTN_STR_AI_STATUS_UNKNOWN), names, n, sel,
+                              text_sel);
+}
+
+/* key=value in ~/.btnedit_ai setzen, der Rest der Datei bleibt; ohne Datei
+ * wird sie mit der aktuellen Einstellung angelegt. */
+static void ai_write_config_value(const char *key, const char *value) {
+    char *path = ai_config_path();
+    if (!path) {
+        return;
+    }
+    size_t len;
+    BtnReadResult result;
+    char *old = read_file_contents(path, &len, &result, NULL);
+    char *text = old ? btn_ai_config_set_value(old, len, key, value) : btn_ai_config_format(&g_ai);
+    if (text) {
+        write_file_contents(path, text, strlen(text));
+    }
+    free(text);
+    free(old);
+    free(path);
+}
+
+/* Modell fuer Code (text = 0) bzw. Fliesstext (text = 1, "" = wie Code)
+ * einstellen und in ~/.btnedit_ai merken. */
+static void ai_choose_model(int text, const char *name) {
+    char *dst = text ? g_ai.text_model : g_ai.model;
+    if (strlen(name) >= sizeof(g_ai.model) || strcmp(name, dst) == 0) {
+        return;
+    }
+    snprintf(dst, sizeof(g_ai.model), "%s", name);
+    ai_write_config_value(text ? "text_model" : "model", dst);
+    ai_cancel();
+    ghost_clear();
+    g_ai_last_seq = (size_t)-1; /* mit dem neuen Modell neu fragen */
+    btn_app_request_redraw();   /* ein alter Vorschlag verschwindet */
+}
+
+static void ai_on_models(unsigned long id, int status, const char *body, size_t len) {
+    if (id != g_ai_models_request) {
+        return;
+    }
+    g_ai_models_request = 0;
+    int notify = g_ai_models_notify, test = g_ai_test_after;
+    g_ai_models_notify = g_ai_test_after = 0;
+    char info[1024];
+    btn_ai_models_free(g_ai_models, g_ai_model_count);
+    g_ai_models = NULL;
+    g_ai_model_count = 0;
+    int llama = g_ai.api == BTN_AI_API_LLAMA;
+    /* llama-server antwortet auf /health mit 503, solange es das Modell laedt:
+     * erreichbar, die Testanfrage zeigt dann seine eigene Meldung. */
+    if (llama && status != 0 && status != 200) {
+        snprintf(g_ai_status, sizeof(g_ai_status), btn_tr(BTN_STR_AI_STATUS_LLAMA_HTTP_FMT), status);
+    } else if (status != 200) {
+        snprintf(g_ai_status, sizeof(g_ai_status), btn_tr(BTN_STR_AI_STATUS_UNREACHABLE_FMT), g_ai.url);
+        ai_update_model_menu();
+        if (notify || test) {
+            char *url = btn_ai_endpoint(&g_ai, 0);
+            snprintf(info, sizeof(info), btn_tr(BTN_STR_AI_TEST_UNREACHABLE_FMT), url);
+            free(url);
+            btn_show_error_alert(btn_tr(BTN_STR_AI_TEST_TITLE), info);
+        }
+        return;
+    } else if (llama) {
+        snprintf(g_ai_status, sizeof(g_ai_status), "%s", btn_tr(BTN_STR_AI_STATUS_LLAMA));
+    } else {
+        g_ai_model_count = btn_ai_parse_models(body, len, &g_ai_models);
+        if (g_ai_model_count == 0) {
+            snprintf(g_ai_status, sizeof(g_ai_status), "%s", btn_tr(BTN_STR_AI_STATUS_NONE));
+        } else {
+            snprintf(g_ai_status, sizeof(g_ai_status), btn_tr(BTN_STR_AI_STATUS_COUNT_FMT), (int)g_ai_model_count);
+        }
+        /* Fliesstext-Modell nicht (mehr) installiert: wie Code */
+        if (g_ai_model_count > 0 && g_ai.text_model[0] &&
+            btn_ai_find_model(g_ai_models, g_ai_model_count, g_ai.text_model) < 0) {
+            ai_choose_model(1, "");
+        }
+        if (btn_ai_find_model(g_ai_models, g_ai_model_count, g_ai.model) < 0) {
+            int pick = btn_ai_pick_model(g_ai_models, g_ai_model_count);
+            if (pick >= 0) {
+                ai_choose_model(0, g_ai_models[pick].name);
+            } else if (notify || test) {
+                btn_show_error_alert(btn_tr(BTN_STR_AI_TEST_TITLE), btn_tr(BTN_STR_AI_NO_CODER));
+                test = 0; /* ohne passendes Modell kaeme nur "not found" */
+            }
+        }
+    }
+    ai_update_model_menu();
+    if (test) {
+        ai_send_test();
+    }
+}
+
+/* Modellliste neu holen; notify: Probleme als Meldung zeigen. */
+static void ai_refresh_models(int notify) {
+    btn_http_cancel(g_ai_models_request);
+    g_ai_models_notify = notify;
+    size_t n = strlen(g_ai.url) + 16;
+    char *url = malloc(n);
+    if (!url) {
+        return;
+    }
+    snprintf(url, n, "%s%s", g_ai.url, g_ai.api == BTN_AI_API_LLAMA ? "/health" : "/api/tags");
+    snprintf(g_ai_status, sizeof(g_ai_status), "%s", btn_tr(BTN_STR_AI_STATUS_CHECKING));
+    ai_update_model_menu();
+    g_ai_models_request = btn_http_get(url, 10.0, ai_on_models);
+    free(url);
+    if (!g_ai_models_request) {
+        ai_on_models(0, 0, NULL, 0); /* ungueltige Adresse: wie nicht erreichbar */
+    }
+}
+
+/* Bearbeiten > KI-Modell > Verbindung testen: Datei neu lesen, Modellliste
+ * holen (dabei ggf. ein vorhandenes Code-Modell waehlen), dann eine
+ * Testanfrage mit genau diesem Modell. */
+static void ai_test_connection(void) {
+    load_ai_config(); /* Aenderungen an der Datei gelten */
+    g_ai_test_after = 1;
+    ai_refresh_models(0);
+}
+
+/* Klick auf ein Modell (Code oder Fliesstext) bzw. "Wie Code"; 1 = war
+ * ein solcher Eintrag. */
+static int ai_on_model_menu(int tag) {
+    if (tag == BTN_MENU_AI_TEXT_SAME) {
+        ai_choose_model(1, "");
+    } else if (tag >= BTN_MENU_AI_MODEL_BASE && tag < BTN_MENU_AI_TEXT_MODEL_BASE + BTN_MAX_AI_MODELS) {
+        int text = tag >= BTN_MENU_AI_TEXT_MODEL_BASE;
+        size_t index = (size_t)(tag - (text ? BTN_MENU_AI_TEXT_MODEL_BASE : BTN_MENU_AI_MODEL_BASE));
+        if (index < g_ai_model_count) {
+            ai_choose_model(text, g_ai_models[index].name);
+        }
+    } else {
+        return 0;
+    }
+    ai_update_model_menu();
+    return 1;
+}
+
+/* Bearbeiten > KI-Vervollstaendigung */
+static void ai_toggle_from_menu(void) {
+    toggle_ai_config(); /* legt ~/.btnedit_ai beim ersten Mal an */
+    if (g_ai.enabled) {
+        ai_refresh_models(1); /* Server da? Modell vorhanden? */
+        return;
+    }
+    ai_cancel();
+    ghost_clear();
+    btn_app_request_redraw();
+    /* Eine noch offene Pruefung gehoerte zur alten Einstellung: sie soll kein
+     * Modell mehr umstellen und nichts melden. */
+    btn_http_cancel(g_ai_models_request);
+    g_ai_models_request = 0;
+    g_ai_models_notify = g_ai_test_after = 0;
+}
+
+/* Tab: Vorschlag uebernehmen - als eigener Undo-Schritt (die Gruppe wird
+ * weder mit dem Tippen davor noch danach zusammengefasst). */
+static void ai_accept(Editor *ed) {
+    char *text = g_ghost.text;
+    size_t n = g_ghost.len;
+    g_ghost.text = NULL;
+    g_ghost.len = 0;
+    editor_begin_undo_group(ed);
+    editor_insert_text(ed, text, n);
+    editor_end_undo_group(ed);
+    free(text);
+}
+
+/* Nach getipptem Text: war es genau der Anfang des Vorschlags, bleibt der
+ * Rest stehen; sonst ist er weg. c0/l0: Cursor und Laenge davor. */
+static void ai_keep_ghost_after_typing(Editor *ed, size_t c0, size_t l0) {
+    size_t n = ed->cursor > c0 ? ed->cursor - c0 : 0;
+    if (n > 0 && n < g_ghost.len && editor_length(ed) == l0 + n && !editor_has_selection(ed)) {
+        char *typed = gb_copy_range(&ed->buffer, c0, n);
+        int same = memcmp(typed, g_ghost.text, n) == 0;
+        free(typed);
+        if (same) {
+            memmove(g_ghost.text, g_ghost.text + n, g_ghost.len - n + 1);
+            g_ghost.len -= n;
+            g_ghost.seq = ed->edit_seq;
+            g_ghost.cursor = ed->cursor;
+            return;
+        }
+    }
+    ghost_clear();
 }
 
 static void on_draw(CGContextRef ctx, CGRect bounds) {
     g_bounds = bounds;
 
+    /* Bei jedem Redraw frisch abgefragt (kein Notification-Mechanismus
+     * noetig, siehe btn_render_set_dark_mode()-Kommentar in render.h) -
+     * MUSS vor jedem render.c-Zeichenaufruf unten stehen, sonst zeichnen
+     * Tableiste/Suchleiste/Frame mit dem alten Modus. */
+    btn_render_set_dark_mode(btn_app_is_dark_mode());
+
     const char *labels[MAX_TABS];
-    char label_bufs[MAX_TABS][300];
     for (int i = 0; i < g_doc_count; i++) {
         Document *d = &g_docs[i];
-        if (doc_is_dirty(d)) {
-            snprintf(label_bufs[i], sizeof(label_bufs[i]), "• %s", doc_display_name(d));
-        } else {
-            snprintf(label_bufs[i], sizeof(label_bufs[i]), "%s", doc_display_name(d));
+        int dirty = doc_is_dirty(d);
+        if (!d->label_cache_valid || d->label_cache_was_dirty != dirty) {
+            if (dirty) {
+                snprintf(d->label_cache, sizeof(d->label_cache), "• %s", doc_display_name(d));
+            } else {
+                snprintf(d->label_cache, sizeof(d->label_cache), "%s", doc_display_name(d));
+            }
+            d->label_cache_valid = 1;
+            d->label_cache_was_dirty = dirty;
         }
-        labels[i] = label_bufs[i];
+        labels[i] = d->label_cache;
     }
     btn_render_tab_bar(ctx, bounds, labels, g_doc_count, g_active_doc);
 
@@ -1168,7 +3739,8 @@ static void on_draw(CGContextRef ctx, CGRect bounds) {
         btn_render_find_bar(ctx, bounds, btn_tr(BTN_STR_FIND_SEARCH_LABEL), &g_search_editor,
                              btn_tr(BTN_STR_FIND_REPLACE_LABEL), &g_replace_editor,
                              btn_tr(BTN_STR_REPLACE_ALL_BUTTON),
-                             g_search_regex, focus_field, g_search_status);
+                             g_search_regex, g_search_case_sensitive, g_search_whole_word, g_search_all_tabs,
+                             focus_field, g_search_status);
     }
 
     Document *active = active_doc();
@@ -1176,10 +3748,40 @@ static void on_draw(CGContextRef ctx, CGRect bounds) {
      * close_find_bar()/switch_to_tab(), die sie beim Schliessen bzw.
      * Tabwechsel leeren) und bezieht sich dann garantiert auf genau dieses
      * aktive Dokument (Suche laeuft immer auf active_doc(), siehe
-     * perform_live_search()/perform_find()). */
-    btn_render_frame(ctx, content_bounds(), &active->editor, active->scroll_row,
+     * perform_live_search()/perform_find()). Klick ins Dokument entzieht
+     * der Suchleiste aber nur den Fokus, schliesst sie NICHT (siehe
+     * on_mouse()) - tippt der Nutzer danach direkt im Dokument weiter, ohne
+     * die Suchleiste erneut zu beruehren, veraltet g_match_starts/g_match_ends
+     * gegenueber den jetzt verschobenen Byte-Offsets. g_match_edit_seq
+     * (siehe dortiger Kommentar) faengt das ab: weicht es vom aktuellen
+     * edit_seq ab, werden 0 Treffer statt der veralteten Bereiche gezeichnet. */
+    size_t render_match_count = (g_match_edit_seq == active->editor.edit_seq) ? g_match_count : 0;
+    char eol_label[96] = ""; /* Binaerdatei: weder Kodierung noch Zeilenenden anzeigen */
+    if (!active->binary) {
+        char eol_part[64];
+        snprintf(eol_part, sizeof(eol_part), active->eol_raw ? btn_tr(BTN_STR_EOL_MIXED_FMT) : "%s",
+                 btn_eol_name(active->eol));
+        snprintf(eol_label, sizeof(eol_label), "%s \xC2\xB7 %s", btn_enc_name(active->enc), eol_part);
+    }
+    btn_render_set_footer_eol(eol_label);
+    btn_render_set_scrollbar_active(g_drag == BTN_DRAG_SCROLLBAR ? BTN_SCROLLBAR_VERTICAL
+                                    : g_drag == BTN_DRAG_HSCROLLBAR ? BTN_SCROLLBAR_HORIZONTAL : 0);
+    btn_render_set_ghost_text(ghost_visible() ? g_ghost.text : NULL, g_ghost.len);
+    /* Hier statt bei jeder Layout-Aenderung (Fenstergroesse, Suchleiste):
+     * der Shim setzt die Flaechen nur neu, wenn sie sich geaendert haben. */
+    CGRect cursor_rects[3], knob;
+    const BtnRow *rows;
+    size_t row_count = build_current_rows(&rows);
+    int has_knob = btn_scrollbar_knob(content_bounds(), row_count, active_doc()->scroll_row, &knob);
+    int cursor_rect_count = btn_text_cursor_rects(bounds, content_bounds(), g_find_bar_visible, has_knob, cursor_rects);
+    btn_app_set_text_cursor_rects(cursor_rects, cursor_rect_count);
+    btn_render_set_marked_text(g_marked.text, g_marked.len, g_marked.sel_start,
+                               g_focus == BTN_FOCUS_SEARCH    ? BTN_MARKED_SEARCH
+                               : g_focus == BTN_FOCUS_REPLACE ? BTN_MARKED_REPLACE
+                                                              : BTN_MARKED_DOCUMENT);
+    btn_render_frame(ctx, content_bounds(), &active->editor, active->scroll_row, active->scroll_col,
                       btn_highlight_lang_for_path(active->path),
-                      g_match_starts, g_match_ends, g_match_count);
+                      g_match_starts, g_match_ends, render_match_count);
 }
 
 /* Klick irgendwo in der Tableiste (y schon vom Aufrufer geprueft): trifft
@@ -1211,16 +3813,14 @@ static void handle_tab_bar_click(double x) {
 }
 
 /* Klick irgendwo in der Suchen-Leiste (y schon vom Aufrufer geprueft):
- * trifft entweder den ".*"-Regex-Umschalter oder eines der beiden Felder
- * (setzt den Fokus dorthin) - dieselben x-Positionen wie
+ * trifft entweder einen der drei Umschalter (".*"/"Aa"/"\b") oder eines der
+ * beiden Felder (setzt den Fokus dorthin) - dieselben x-Positionen wie
  * btn_render_find_bar()'s Zeichnung in render.c, aus denselben render.h-
  * Konstanten berechnet. */
 static void handle_find_bar_click(double x) {
-    double search_field_x = BTN_FIND_BAR_PADDING + BTN_FIND_LABEL_WIDTH;
-    double regex_x = search_field_x + BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING;
-    double replace_label_x = regex_x + BTN_FIND_REGEX_WIDTH + BTN_FIND_BAR_PADDING * 2.0;
-    double replace_field_x = replace_label_x + BTN_FIND_LABEL_WIDTH;
-    double replace_all_x = replace_field_x + BTN_FIND_FIELD_WIDTH + BTN_FIND_BAR_PADDING;
+    BtnFindBarGeometry g = btn_find_bar_geometry();
+    double search_field_x = g.search_field_x, regex_x = g.regex_x, case_x = g.case_x, word_x = g.word_x;
+    double replace_field_x = g.replace_field_x, replace_all_x = g.replace_all_x;
 
     if (x >= regex_x && x < regex_x + BTN_FIND_REGEX_WIDTH) {
         g_search_regex = !g_search_regex;
@@ -1228,6 +3828,15 @@ static void handle_find_bar_click(double x) {
          * Live-Hervorhebung/der Trefferzaehler muessen dieselbe neue
          * Interpretation zeigen, nicht erst beim naechsten Tastendruck. */
         perform_live_search();
+    } else if (x >= case_x && x < case_x + BTN_FIND_REGEX_WIDTH) {
+        g_search_case_sensitive = !g_search_case_sensitive;
+        perform_live_search();
+    } else if (x >= word_x && x < word_x + BTN_FIND_REGEX_WIDTH) {
+        g_search_whole_word = !g_search_whole_word;
+        perform_live_search();
+    } else if (x >= g.all_tabs_x && x < g.all_tabs_x + BTN_FIND_REGEX_WIDTH) {
+        g_search_all_tabs = !g_search_all_tabs;
+        perform_live_search(); /* Status mit bzw. ohne Summe ueber alle Tabs */
     } else if (x >= search_field_x && x < regex_x) {
         g_focus = BTN_FOCUS_SEARCH;
     } else if (x >= replace_all_x && x < replace_all_x + BTN_FIND_REPLACE_ALL_WIDTH) {
@@ -1304,6 +3913,7 @@ static void handle_find_bar_key(const char *characters, unsigned short keycode, 
         return;
     }
     if (c == '\t') {
+        commit_marked(); /* Eingabe gehoert zum bisherigen Feld */
         g_focus = (g_focus == BTN_FOCUS_SEARCH) ? BTN_FOCUS_REPLACE : BTN_FOCUS_SEARCH;
         btn_app_request_redraw();
         return;
@@ -1341,10 +3951,39 @@ static void handle_find_bar_key(const char *characters, unsigned short keycode, 
     }
 }
 
+/* Getippter bzw. von einer Eingabemethode festgeschriebener Text im
+ * Dokument. editor_handle_bracket_key() deckt Auto-Vervollstaendigen/
+ * Typdurchlauf fuer Klammern UND Anfuehrungszeichen ab (siehe editor.c) -
+ * aber nur fuer genau ein Zeichen: eine Eingabemethode kann mehrere auf
+ * einmal liefern ("(abc"), dann wurde vorher nur die Klammer eingefuegt. */
+/* Einrueck-Regeln der Sprache des aktiven Dokuments (Dateiendung). */
+static int active_indent_rules(void) {
+    return btn_highlight_indent_rules(btn_highlight_lang_for_path(active_doc()->path));
+}
+
+static void insert_typed_chars(Editor *ed, const char *chars) {
+    size_t n = strlen(chars);
+    if (n == 1 && editor_type_closing_bracket(ed, chars[0], active_indent_rules())) {
+        return; /* '}' auf einer leeren Zeile: an die oeffnende Klammer ausgerichtet */
+    }
+    if (n != 1 || !editor_handle_bracket_key(ed, chars[0])) {
+        editor_insert_text(ed, chars, n);
+    }
+}
+
+static void perform_line_command(int tag);
+
 static void on_key(const char *characters, unsigned short keycode, unsigned long modifierFlags) {
     int shift = (modifierFlags & BTN_MOD_SHIFT) != 0;
     int option = (modifierFlags & BTN_MOD_OPTION) != 0;
     int command = (modifierFlags & BTN_MOD_COMMAND) != 0;
+
+    /* Escape verwirft zuerst einen KI-Vorschlag. */
+    if (characters && (unsigned char)characters[0] == 0x1B && ghost_visible()) {
+        ghost_clear();
+        btn_app_request_redraw();
+        return;
+    }
 
     /* Escape schliesst eine sichtbare Suchen-Leiste immer, auch wenn der
      * Fokus (z.B. durch einen Klick ins Dokument) inzwischen wieder auf dem
@@ -1355,12 +3994,40 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
         return;
     }
 
+    /* Ctrl+Tab / Ctrl+Shift+Tab: Tab wechseln - auch aus der Suchleiste. */
+    if (keycode == KEYCODE_TAB && (modifierFlags & BTN_MOD_CONTROL)) {
+        cycle_tab(shift ? -1 : 1);
+        btn_app_request_redraw();
+        return;
+    }
+
     if (g_focus != BTN_FOCUS_DOCUMENT) {
         handle_find_bar_key(characters, keycode, shift, option, command);
         return;
     }
 
     Editor *ed = &active_doc()->editor;
+    ai_note_typing();
+
+    /* Tab mit KI-Vorschlag: uebernehmen */
+    if (keycode == KEYCODE_TAB && !shift && !option && !command && ghost_visible()) {
+        ai_accept(ed);
+        sync_window_state();
+        sync_scroll_to_cursor();
+        btn_app_request_redraw();
+        return;
+    }
+
+    /* Wahl+Cmd+Pfeil hoch/runter: Zeilen verschieben - zweites Kuerzel
+     * neben Wahl+Cmd+[ / ], das auf Tastaturen ohne eigene [-Taste
+     * (deutsch: Wahl+5) schlecht zu greifen ist. */
+    if (command && option && !shift && (keycode == KEYCODE_UP || keycode == KEYCODE_DOWN)) {
+        perform_line_command(keycode == KEYCODE_UP ? BTN_MENU_MOVE_LINES_UP : BTN_MENU_MOVE_LINES_DOWN);
+        sync_window_state();
+        sync_scroll_to_cursor();
+        btn_app_request_redraw();
+        return;
+    }
 
     switch (keycode) {
         case KEYCODE_LEFT:
@@ -1416,7 +4083,9 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
             btn_app_request_redraw();
             return;
         case KEYCODE_TAB:
-            editor_insert_text(ed, "\t", 1);
+            /* Tab: Tab-Zeichen bzw. mehrere Zeilen einruecken; Shift+Tab:
+             * ausruecken (siehe editor_tab_key()). */
+            editor_tab_key(ed, shift);
             sync_window_state();
             sync_scroll_to_cursor();
             btn_app_request_redraw();
@@ -1435,21 +4104,24 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
     }
 
     unsigned char c = (unsigned char)characters[0];
+    int had_ghost = ghost_visible();
+    size_t c0 = ed->cursor, l0 = editor_length(ed);
     if (c == '\r') {
-        editor_insert_text(ed, "\n", 1);
+        /* Einrueckung der Zeile, nach '{' eine mehr. Gemischte Zeilenenden
+         * (bytegenau gesichert): in einer ueberwiegend CRLF-Datei auch CRLF,
+         * sonst wuerde sie mit jedem Return gemischter */
+        Document *d = active_doc();
+        int crlf = g_focus == BTN_FOCUS_DOCUMENT && d->eol_raw && d->eol == BTN_EOL_CRLF;
+        editor_insert_newline_eol(ed, active_indent_rules(), crlf ? "\r\n" : "\n");
     } else if (c == 0x7F) {
         editor_delete_backward(ed);
     } else if (c >= 0x20) {
-        /* editor_handle_bracket_key() deckt Auto-Vervollstaendigen/
-         * Typdurchlauf fuer Klammern UND Anfuehrungszeichen ab (siehe
-         * editor.c) - fuer alles andere normal einfuegen. Beide sind ASCII,
-         * characters ist bei einem solchen Byte also garantiert genau
-         * dieses eine Zeichen. */
-        if (!editor_handle_bracket_key(ed, (char)c)) {
-            editor_insert_text(ed, characters, strlen(characters));
-        }
+        insert_typed_chars(ed, characters);
     } else {
         return;
+    }
+    if (had_ghost) {
+        ai_keep_ghost_after_typing(ed, c0, l0);
     }
 
     sync_window_state();
@@ -1457,8 +4129,183 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
     btn_app_request_redraw();
 }
 
+/* ---- Eingabemethoden (NSTextInputClient, siehe shim.h/textinput.h) ----
+ * Fertiger Text geht durch on_key() wie ein getipptes Zeichen - Klammer-
+ * Automatik, Suchfelder, Live-Suche und Undo verhalten sich also gleich.
+ * Bereiche kommen als UTF-16-Einheiten relativ zu btn_ti_origin(). */
+
+/* Nach einer Aenderung im fokussierten Editor, die nicht ueber on_key()
+ * lief: Live-Suche bzw. Fensterzustand nachziehen. */
+static void after_focused_edit(void) {
+    if (g_focus == BTN_FOCUS_SEARCH) {
+        perform_live_search();
+        return;
+    }
+    if (g_focus == BTN_FOCUS_REPLACE) {
+        g_search_status[0] = '\0';
+    } else {
+        sync_window_state();
+        ai_note_typing();
+    }
+    sync_scroll_to_cursor();
+    btn_app_request_redraw();
+}
+
+/* Waehlt den ursprungsrelativen Bereich (loc, len) im fokussierten Editor
+ * aus, falls gueltig. */
+static void select_ti_range(long loc, long len) {
+    Editor *ed = focused_editor();
+    size_t start, end;
+    if (loc >= 0 && len >= 0 && btn_ti_range_to_bytes(ed, (size_t)loc, (size_t)len, &start, &end)) {
+        editor_set_cursor(ed, start, 0);
+        editor_set_cursor(ed, end, 1);
+    }
+}
+
+/* Eingabe ueber eine Selektion: Gruppe vom Loeschen (ti_set_marked_text)
+ * bis zum Festschreiben bzw. Abbrechen. */
+static Editor *g_marked_undo_ed = NULL;
+
+static void end_marked_undo_group(void) {
+    if (g_marked_undo_ed) {
+        editor_end_undo_group(g_marked_undo_ed);
+        g_marked_undo_ed = NULL;
+    }
+}
+
+static void ti_insert_text(const char *utf8, long repl_loc, long repl_len) {
+    int had_marked = g_marked.len > 0;
+    btn_marked_clear(&g_marked);
+    /* Mit vorlaeufigem Text ersetzt der neue genau diesen (der nicht im
+     * Puffer steht); sonst z.B. das Zeichen vor dem Cursor (Akzent-Menue). */
+    if (!had_marked) {
+        select_ti_range(repl_loc, repl_len);
+    }
+    if (strcmp(utf8, "\r") == 0 || strcmp(utf8, "\n") == 0) {
+        on_key("\r", KEYCODE_TEXT, 0); /* Diktat "neue Zeile": wie Return */
+    } else if ((unsigned char)utf8[0] >= 0x20) {
+        on_key(utf8, KEYCODE_TEXT, 0);
+    } else if (utf8[0] != '\0') {
+        /* Beginnt mit einem Steuerzeichen ("\t...", "\nabc"): on_key() sieht
+         * nur das erste Byte und wuerde alles verwerfen - direkt einfuegen. */
+        editor_insert_text(focused_editor(), utf8, strlen(utf8));
+        after_focused_edit();
+    } else {
+        btn_app_request_redraw();
+    }
+    end_marked_undo_group();
+}
+
+static void ti_set_marked_text(const char *utf8, long sel_loc, long sel_len, long repl_loc, long repl_len) {
+    size_t len = strlen(utf8);
+    if (g_marked.len == 0 && len > 0) {
+        /* Eine neue Eingabe ersetzt die Selektion - wie in jedem Textfeld.
+         * Loeschen und spaeteres Festschreiben: ein Undo-Schritt. */
+        select_ti_range(repl_loc, repl_len);
+        Editor *ed = focused_editor();
+        if (editor_has_selection(ed)) {
+            if (!g_marked_undo_ed) {
+                editor_begin_undo_group(ed);
+                g_marked_undo_ed = ed;
+            }
+            editor_delete_selection(ed);
+            after_focused_edit();
+        }
+    }
+    if (len == 0) {
+        btn_marked_clear(&g_marked);
+        end_marked_undo_group(); /* Eingabe abgebrochen */
+    } else {
+        size_t units = btn_ti_utf16_len(utf8, len);
+        size_t loc = sel_loc < 0 ? units : (size_t)sel_loc;
+        btn_marked_set(&g_marked, utf8, len, loc, sel_len < 0 ? 0 : (size_t)sel_len);
+    }
+    sync_scroll_to_cursor();
+    btn_app_request_redraw();
+}
+
+static void ti_unmark_text(void) {
+    if (g_marked.len == 0) {
+        return;
+    }
+    char *text = btn_dup_cstring(g_marked.text);
+    ti_insert_text(text, -1, 0); /* leert g_marked */
+    free(text);
+}
+
+/* Schreibt einen laufenden vorlaeufigen Text fest (vor Tab-Wechsel, Klick,
+ * Menuebefehl ...) und sagt der Eingabemethode, dass er erledigt ist. */
+static void commit_marked(void) {
+    if (g_marked.len > 0) {
+        ti_unmark_text();
+        btn_text_input_discard();
+    }
+}
+
+static void ti_query(long *sel_loc, long *sel_len, long *marked_loc, long *marked_len) {
+    size_t loc, len;
+    btn_ti_selection(focused_editor(), &loc, &len);
+    if (g_marked.len > 0) {
+        *marked_loc = (long)loc;
+        *marked_len = (long)btn_ti_utf16_len(g_marked.text, g_marked.len);
+        *sel_loc = (long)(loc + btn_ti_utf16_len(g_marked.text, g_marked.sel_start));
+        *sel_len = (long)btn_ti_utf16_len(g_marked.text + g_marked.sel_start, g_marked.sel_end - g_marked.sel_start);
+    } else {
+        *marked_loc = -1;
+        *marked_len = 0;
+        *sel_loc = (long)loc;
+        *sel_len = (long)len;
+    }
+}
+
+static uint16_t *ti_substring(long loc, long len, long *actual_loc, size_t *n) {
+    if (loc < 0 || len < 0) {
+        return NULL;
+    }
+    size_t actual = 0;
+    uint16_t *u16 = btn_ti_substring_with_marked(focused_editor(), &g_marked, (size_t)loc, (size_t)len, &actual, n);
+    *actual_loc = (long)actual;
+    return u16;
+}
+
+/* Rechteck der ursprungsrelativen Position loc (-1 = Cursor): im
+ * vorlaeufigen Text um dessen gesetzte Breite bis dahin verschoben, davor
+ * bzw. dahinter an der entsprechenden Pufferstelle (Akzent-Menue ueber dem
+ * Zeichen, das es ersetzt). */
+static CGRect ti_caret_rect(long loc) {
+    Editor *ed = focused_editor();
+    size_t pos = editor_selection_start(ed);
+    double dx = 0.0;
+    if (loc >= 0) {
+        size_t caret, sel_len;
+        btn_ti_selection(ed, &caret, &sel_len);
+        size_t mu = g_marked.len ? btn_ti_utf16_len(g_marked.text, g_marked.len) : 0;
+        size_t start, end;
+        if (g_marked.len && (size_t)loc >= caret && (size_t)loc <= caret + mu) {
+            dx = btn_render_text_width(g_marked.text, btn_ti_utf16_to_bytes(g_marked.text, g_marked.len, (size_t)loc - caret),
+                                       g_focus == BTN_FOCUS_DOCUMENT);
+        } else if ((size_t)loc < caret || !g_marked.len) {
+            if (btn_ti_range_to_bytes(ed, (size_t)loc, 0, &start, &end)) {
+                pos = start;
+            }
+        } else if (btn_ti_range_to_bytes(ed, (size_t)loc - mu, 0, &start, &end)) {
+            pos = start; /* hinter dem vorlaeufigen Text */
+        }
+    }
+    CGRect r;
+    if (g_focus == BTN_FOCUS_DOCUMENT) {
+        Document *d = active_doc();
+        r = btn_render_caret_rect(&d->editor, content_bounds(), d->scroll_row, d->scroll_col, pos);
+    } else {
+        r = btn_render_find_caret_rect(g_bounds, ed, g_focus == BTN_FOCUS_REPLACE, pos);
+    }
+    r.origin.x += dx;
+    return r;
+}
+
 static void on_resize(CGSize size) {
     g_bounds = CGRectMake(0, 0, size.width, size.height);
+    btn_text_input_invalidate();
     /* sync_scroll_to_cursor() ruft clamp_scroll() intern mit auf - reines
      * Clamping reicht hier nicht: Verkleinern des Fensters kann den Text
      * neu umbrechen und die Cursor-Zeile weit aus dem sichtbaren Bereich
@@ -1468,11 +4315,176 @@ static void on_resize(CGSize size) {
     btn_app_request_redraw();
 }
 
+/* Zeilen pro Autoscroll-Takt, wenn die Maus beim Markieren bei y ueber
+ * (> top) oder unter (< bottom) den sichtbaren Rows steht: negativ = nach
+ * oben, 0 = innerhalb. Je weiter draussen, desto schneller - hoechstens
+ * max_rows (eine Seite). */
+static long autoscroll_steps(double dist, double unit, long max_steps) {
+    long n = 1 + (long)(dist / unit);
+    if (n > max_steps) {
+        n = max_steps;
+    }
+    return n > 0 ? n : 1;
+}
+
+static long autoscroll_rows(double y, double top, double bottom, long max_rows) {
+    if (y > top) {
+        return -autoscroll_steps(y - top, btn_render_line_height(), max_rows);
+    }
+    if (y < bottom) {
+        return autoscroll_steps(bottom - y, btn_render_line_height(), max_rows);
+    }
+    return 0;
+}
+
+/* Dasselbe seitlich (ohne Umbruch): Spalten pro Takt, wenn die Maus links
+ * (< left, negativ) oder rechts (> right) der sichtbaren Spalten steht. */
+static long autoscroll_cols(double x, double left, double right, double char_width, long max_cols) {
+    if (x < left) {
+        return -autoscroll_steps(left - x, char_width, max_cols);
+    }
+    if (x > right) {
+        return autoscroll_steps(x - right, char_width, max_cols);
+    }
+    return 0;
+}
+
+/* Markieren per Ziehen bis (x, y). Steht die Maus ueber der ersten Row
+ * oder auf der Statuszeile, reicht die Selektion bis zur Randzeile, und der
+ * Shim taktet (BTN_MOUSE_AUTOSCROLL), solange es dorthin noch etwas zu
+ * scrollen gibt. Gescrollt wird nur im Takt (tick), damit das Tempo nicht
+ * davon abhaengt, wie oft die Maus bewegt wird. Die angeschnittene Row ueber
+ * der Statuszeile zaehlt zur letzten ganzen - sonst liefe dort beim
+ * Markieren eines Wortes schon der Autoscroll. */
+static void drag_select_to(double x, double y, int tick) {
+    Document *doc = active_doc();
+    CGRect cb = content_bounds();
+    const BtnRow *rows;
+    long row_count = (long)build_current_rows(&rows);
+    double top, bottom;
+    btn_text_rows_extent(cb, &top, &bottom);
+    long step = autoscroll_rows(y, top, btn_text_bottom(), visible_line_capacity());
+    long hstep = 0;
+    double left = 0.0, right = 0.0, char_width = btn_render_char_width();
+    long cols = btn_visible_col_capacity(btn_layout_text_width(cb));
+    if (!g_wrap) {
+        btn_text_cols_extent(cb, &left, &right);
+        hstep = autoscroll_cols(x, left, right, char_width, cols);
+    }
+    if ((step != 0 || hstep != 0) && tick) {
+        doc->scroll_row += step;
+        doc->scroll_col += hstep;
+        clamp_scroll_to_row_count(row_count);
+    }
+    long max_scroll = row_count - visible_line_capacity();
+    long max_col = btn_hscroll_max(cb, btn_layout_max_cols(&doc->editor, btn_layout_text_width(cb)));
+    int more_rows = step < 0 ? doc->scroll_row > 0 : step > 0 && doc->scroll_row < max_scroll;
+    int more_cols = hstep < 0 ? doc->scroll_col > 0 : hstep > 0 && doc->scroll_col < max_col;
+    btn_app_set_autoscroll(more_rows || more_cols);
+    if (y > top) {
+        y = top - btn_render_line_height() / 2.0;
+    } else if (y < bottom) {
+        y = bottom + btn_render_line_height() / 2.0;
+    }
+    /* Rechts nur bis zur letzten sichtbaren Spalte - sonst holte
+     * sync_scroll_to_cursor() den Cursor schon bei jeder Mausbewegung ins
+     * Bild, am Takt vorbei (links klemmt btn_hit_test() selbst auf Spalte 0). */
+    if (hstep > 0) {
+        x = left + (double)(cols - 1) * char_width;
+    }
+    editor_set_cursor(&doc->editor, btn_hit_test(&doc->editor, cb, x, y, doc->scroll_row, doc->scroll_col), 1);
+}
+
+/* Klick in den Scrollbalken-Streifen: auf den Knopf = ziehen, darueber/
+ * darunter = eine Seite blaettern. Rueckgabe 0 = nicht behandelt (kein
+ * Knopf, weil alles ins Fenster passt, oder Klick ausserhalb des Streifens)
+ * - dann ist es ein normaler Klick in den Text. */
+static int scrollbar_mouse_down(double x, double y) {
+    CGRect cb = content_bounds();
+    if (x < cb.size.width - BTN_SCROLLBAR_WIDTH || y < BTN_FOOTER_HEIGHT || y >= cb.size.height) {
+        return 0;
+    }
+    Document *d = active_doc();
+    const BtnRow *rows;
+    size_t row_count = build_current_rows(&rows);
+    CGRect knob;
+    if (!btn_scrollbar_knob(cb, row_count, d->scroll_row, &knob)) {
+        return 0;
+    }
+    double knob_top = knob.origin.y + knob.size.height;
+    long page = visible_line_capacity() > 1 ? visible_line_capacity() - 1 : 1;
+    if (y > knob_top) {
+        d->scroll_row -= page;
+    } else if (y < knob.origin.y) {
+        d->scroll_row += page;
+    } else {
+        g_drag = BTN_DRAG_SCROLLBAR;
+        g_drag_knob_offset = knob_top - y;
+    }
+    clamp_scroll_to_row_count((long)row_count);
+    return 1;
+}
+
+static void scrollbar_drag_to(double y) {
+    const BtnRow *rows;
+    size_t row_count = build_current_rows(&rows);
+    Document *d = active_doc();
+    d->scroll_row = btn_scrollbar_row_for_knob_top(content_bounds(), row_count, y + g_drag_knob_offset);
+    clamp_scroll_to_row_count((long)row_count);
+}
+
+/* Seitlicher Scrollbalken (nur ohne Umbruch, eigener Streifen zwischen
+ * Text und Statuszeile): auf den Knopf = ziehen, links/rechts davon = eine
+ * Seite blaettern. 0 = nicht behandelt (kein Knopf oder daneben). */
+static int hscrollbar_mouse_down(double x, double y) {
+    CGRect cb = content_bounds();
+    Document *d = active_doc();
+    long max_cols = btn_layout_max_cols(&d->editor, btn_layout_text_width(cb));
+    CGRect knob;
+    if (!btn_hscrollbar_knob(cb, max_cols, d->scroll_col, &knob)) {
+        return 0;
+    }
+    double left, right;
+    btn_text_cols_extent(cb, &left, &right);
+    if (x < left || x >= cb.size.width - BTN_SCROLLBAR_WIDTH || y < BTN_FOOTER_HEIGHT || y >= btn_text_bottom()) {
+        return 0;
+    }
+    long cols = btn_visible_col_capacity(btn_layout_text_width(cb));
+    long page = cols > 1 ? cols - 1 : 1;
+    if (x < knob.origin.x) {
+        d->scroll_col -= page;
+    } else if (x >= knob.origin.x + knob.size.width) {
+        d->scroll_col += page;
+    } else {
+        g_drag = BTN_DRAG_HSCROLLBAR;
+        g_drag_knob_offset = knob.origin.x - x;
+    }
+    clamp_hscroll();
+    return 1;
+}
+
+static void hscrollbar_drag_to(double x) {
+    CGRect cb = content_bounds();
+    Document *d = active_doc();
+    long max_cols = btn_layout_max_cols(&d->editor, btn_layout_text_width(cb));
+    d->scroll_col = btn_hscrollbar_col_for_knob_left(cb, max_cols, x + g_drag_knob_offset);
+    clamp_hscroll();
+}
+
 static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, unsigned long modifierFlags) {
     int shift = (modifierFlags & BTN_MOD_SHIFT) != 0;
 
     switch (phase) {
         case BTN_MOUSE_DOWN: {
+            stop_mouse_drag();
+            if (scrollbar_mouse_down(x, y) || hscrollbar_mouse_down(x, y)) {
+                /* Scrollen bewegt den Cursor nicht (kein sync_scroll_to_cursor())
+                 * und laesst eine laufende Eingabe offen - wie das Mausrad. */
+                btn_text_input_invalidate();
+                btn_app_request_redraw();
+                return;
+            }
+            commit_marked(); /* Klick beendet eine laufende Eingabe (wie in NSTextView) */
             if (y >= g_bounds.size.height - BTN_TAB_BAR_HEIGHT) {
                 handle_tab_bar_click(x);
                 btn_app_request_redraw();
@@ -1483,7 +4495,7 @@ static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, 
                 btn_app_request_redraw();
                 return;
             }
-            if (y < BTN_FOOTER_HEIGHT) {
+            if (y < btn_text_bottom()) { /* Statuszeile, Scrollbalken-Streifen ohne Knopf */
                 return;
             }
             /* Klick im Dokument entzieht der Suchen-Leiste den Fokus (die
@@ -1492,44 +4504,84 @@ static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, 
              * de-fokussiert. */
             g_focus = BTN_FOCUS_DOCUMENT;
             Document *doc = active_doc();
-            size_t offset = btn_hit_test(&doc->editor, content_bounds(), x, y, doc->scroll_row);
+            size_t offset = btn_hit_test(&doc->editor, content_bounds(), x, y, doc->scroll_row, doc->scroll_col);
             if (clickCount >= 3) {
                 editor_select_line_at(&doc->editor, offset);
-                g_dragging = 0;
             } else if (clickCount == 2) {
                 editor_select_word_at(&doc->editor, offset);
-                g_dragging = 0;
             } else {
                 editor_set_cursor(&doc->editor, offset, shift);
-                g_dragging = 1;
+                g_drag = BTN_DRAG_TEXT;
             }
             break;
         }
         case BTN_MOUSE_DRAGGED:
-            if (g_dragging) {
-                Document *doc = active_doc();
-                size_t offset = btn_hit_test(&doc->editor, content_bounds(), x, y, doc->scroll_row);
-                editor_set_cursor(&doc->editor, offset, 1);
+        case BTN_MOUSE_AUTOSCROLL:
+            if (g_drag == BTN_DRAG_SCROLLBAR || g_drag == BTN_DRAG_HSCROLLBAR) {
+                if (phase == BTN_MOUSE_DRAGGED) {
+                    if (g_drag == BTN_DRAG_SCROLLBAR) {
+                        scrollbar_drag_to(y);
+                    } else {
+                        hscrollbar_drag_to(x);
+                    }
+                    btn_text_input_invalidate();
+                    btn_app_request_redraw();
+                }
+                return;
+            }
+            if (g_drag != BTN_DRAG_TEXT) {
+                return;
+            }
+            drag_select_to(x, y, phase == BTN_MOUSE_AUTOSCROLL);
+            break;
+        case BTN_MOUSE_UP: {
+            BtnDrag was = g_drag;
+            stop_mouse_drag();
+            if (was != BTN_DRAG_TEXT) {
+                btn_app_request_redraw(); /* Knopf wieder in Normalfarbe */
+                return;
             }
             break;
-        case BTN_MOUSE_UP:
-            g_dragging = 0;
-            break;
+        }
     }
 
     sync_scroll_to_cursor();
     btn_app_request_redraw();
 }
 
-static void on_scroll(double delta_y) {
+/* Mausrad/Trackpad: senkrecht in Zeilen, ohne Umbruch auch seitlich in
+ * Spalten (Shift+Mausrad liefert macOS schon als delta_x). Nur die
+ * staerkere Richtung zaehlt - sonst wanderte das Bild beim senkrechten
+ * Wischen auf dem Trackpad seitlich mit. Ein Mausrad mit Rasten meldet
+ * Zeilen statt Punkte (!precise): eine Raste = eine Zeile bzw. Spalte -
+ * vorher brauchte es dafuer rund 18 Rasten. */
+static void on_scroll(double delta_x, double delta_y, int precise) {
+    btn_text_input_invalidate(); /* Kandidatenfenster folgt dem Cursor */
+    if (!precise) {
+        delta_x *= btn_render_char_width();
+        delta_y *= btn_render_line_height();
+    }
+    if (fabs(delta_x) < fabs(delta_y)) {
+        delta_x = 0.0;
+    } else {
+        delta_y = 0.0;
+    }
     Document *doc = active_doc();
     doc->scroll_accum += delta_y;
-    long lines = (long)(doc->scroll_accum / BTN_LINE_HEIGHT);
-    if (lines == 0) {
+    long lines = (long)(doc->scroll_accum / btn_render_line_height());
+    doc->scroll_accum -= (double)lines * btn_render_line_height();
+    long cols = 0;
+    if (!g_wrap) {
+        double char_width = btn_render_char_width();
+        doc->hscroll_accum += delta_x;
+        cols = (long)(doc->hscroll_accum / char_width);
+        doc->hscroll_accum -= (double)cols * char_width;
+    }
+    if (lines == 0 && cols == 0) {
         return;
     }
-    doc->scroll_accum -= (double)lines * BTN_LINE_HEIGHT;
     doc->scroll_row -= lines;
+    doc->scroll_col -= cols;
     clamp_scroll();
     btn_app_request_redraw();
 }
@@ -1615,6 +4667,22 @@ static void perform_print(void) {
     g_print_row_count = 0;
 }
 
+/* Zeigt den "Gehe zu Zeile..."-Dialog (Systemdialog, siehe shim.h) und
+ * springt bei Bestaetigung an den Anfang der eingegebenen (1-basierten)
+ * Zeile - editor_line_bounds() liefert denselben Zeilenanfang, den auch
+ * render.c fuers Zeichnen einer logischen Zeile nutzt. */
+static void perform_goto_line(void) {
+    Editor *ed = &active_doc()->editor;
+    long max_line = (long)editor_line_count(ed);
+    long line;
+    if (!btn_show_goto_line_dialog(max_line, &line)) {
+        return;
+    }
+    size_t start, len;
+    editor_line_bounds(ed, (size_t)(line - 1), &start, &len);
+    editor_set_cursor(ed, start, 0);
+}
+
 /* "Oeffnen mit"/Doppelklick auf eine registrierte Dateiendung/Drag&Drop
  * aufs Dock-Icon (siehe btn_app_set_open_file_callback() in shim.h) - nutzt
  * dieselbe Tab-Auswahl/Lade-Logik wie Datei > Oeffnen..., damit eine schon
@@ -1627,9 +4695,77 @@ static void on_open_file(const char *path) {
     btn_app_request_redraw();
 }
 
+/* Zeilen-Befehle (Bearbeiten-Menue) wirken aufs Dokument - die Suchfelder
+ * sind einzeilig. Kommentar umschalten braucht eine Sprache mit
+ * Zeilenkommentar (Dateiendung), sonst Signalton. */
+static void perform_line_command(int tag) {
+    Document *d = active_doc();
+    if (g_focus != BTN_FOCUS_DOCUMENT) {
+        btn_beep();
+        return;
+    }
+    switch (tag) {
+        case BTN_MENU_TOGGLE_COMMENT: {
+            const char *prefix = btn_highlight_line_comment(btn_highlight_lang_for_path(d->path));
+            if (!prefix) {
+                btn_beep();
+                return;
+            }
+            editor_toggle_line_comment(&d->editor, prefix);
+            break;
+        }
+        case BTN_MENU_DUPLICATE_LINES:
+            editor_duplicate_lines(&d->editor);
+            break;
+        case BTN_MENU_MOVE_LINES_UP:
+        case BTN_MENU_MOVE_LINES_DOWN:
+            editor_move_lines(&d->editor, tag == BTN_MENU_MOVE_LINES_DOWN);
+            break;
+        default:
+            break;
+    }
+}
+
+/* Darstellung > Zeilenumbruch: in jedem Tab bleibt dieselbe Zeile oben
+ * (scroll_row zaehlt Rows, die sich dabei verschieben), seitlich geht es
+ * wieder links los; der Cursor des aktiven Tabs bleibt im Bild. */
+static void toggle_wrap(void) {
+    double width = btn_layout_text_width(content_bounds());
+    size_t top_line[MAX_TABS];
+    for (int i = 0; i < g_doc_count; i++) {
+        size_t n;
+        const BtnRow *rows = btn_layout_get(&g_docs[i].editor, width, &n);
+        size_t r = g_docs[i].scroll_row > 0 ? (size_t)g_docs[i].scroll_row : 0;
+        top_line[i] = n ? rows[r < n ? r : n - 1].logical_line : 0;
+    }
+    apply_wrap(!g_wrap);
+    width = btn_layout_text_width(content_bounds()); /* Streifen unten aendert nur die Hoehe */
+    for (int i = 0; i < g_doc_count; i++) {
+        size_t n;
+        const BtnRow *rows = btn_layout_get(&g_docs[i].editor, width, &n);
+        g_docs[i].scroll_row = (long)btn_layout_row_of_line(rows, n, top_line[i]);
+        g_docs[i].scroll_col = 0;
+        g_docs[i].hscroll_accum = 0.0;
+    }
+    sync_scroll_to_cursor();
+    save_prefs();
+}
+
 static void on_menu(int tag) {
     char *clip;
 
+    /* Sichern, Kopieren usw. sollen den Text sehen, der gerade getippt wird. */
+    commit_marked();
+
+    if (ai_on_model_menu(tag)) {
+        return;
+    }
+    if (on_encoding_menu(tag)) {
+        sync_window_state();
+        sync_scroll_to_cursor();
+        btn_app_request_redraw();
+        return;
+    }
     if (tag >= BTN_MENU_RECENT_BASE) {
         int index = tag - BTN_MENU_RECENT_BASE;
         if (index < g_recent_count) {
@@ -1650,6 +4786,46 @@ static void on_menu(int tag) {
     switch (tag) {
         case BTN_MENU_NEW:
             new_tab_or_reuse_blank();
+            break;
+        case BTN_MENU_FIND_NEXT:
+        case BTN_MENU_FIND_PREVIOUS:
+            find_next_from_menu(tag == BTN_MENU_FIND_NEXT);
+            break;
+        case BTN_MENU_USE_SELECTION_FOR_FIND:
+            use_selection_for_find();
+            break;
+        case BTN_MENU_TOGGLE_COMMENT:
+        case BTN_MENU_DUPLICATE_LINES:
+        case BTN_MENU_MOVE_LINES_UP:
+        case BTN_MENU_MOVE_LINES_DOWN:
+            perform_line_command(tag);
+            break;
+        case BTN_MENU_AI_COMPLETION:
+            ai_toggle_from_menu();
+            break;
+        case BTN_MENU_AI_TEST:
+            ai_test_connection();
+            break;
+        case BTN_MENU_AI_MODELS_REFRESH:
+            load_ai_config();
+            ai_refresh_models(1);
+            break;
+        case BTN_MENU_WRAP:
+            toggle_wrap();
+            break;
+        case BTN_MENU_SHOW_INVISIBLES:
+            apply_show_invisibles(!g_show_invisibles);
+            save_prefs();
+            break;
+        case BTN_MENU_NEXT_TAB:
+        case BTN_MENU_PREVIOUS_TAB:
+            cycle_tab(tag == BTN_MENU_NEXT_TAB ? 1 : -1);
+            break;
+        case BTN_MENU_EOL_LF:
+        case BTN_MENU_EOL_CRLF:
+        case BTN_MENU_EOL_CR:
+            /* Gilt beim naechsten Sichern; bis dahin ungesichert (Punkt). */
+            set_doc_line_ending(active_doc(), (BtnEol)(tag - BTN_MENU_EOL_LF));
             break;
         case BTN_MENU_OPEN: {
             char *path = btn_show_open_panel();
@@ -1674,21 +4850,39 @@ static void on_menu(int tag) {
         case BTN_MENU_REDO:
             editor_redo(focused_editor());
             break;
-        case BTN_MENU_CUT:
-            clip = editor_get_selection_text(focused_editor());
-            btn_pasteboard_set_string(clip);
+        case BTN_MENU_CUT: {
+            Editor *fed = focused_editor();
+            /* Byte-Laenge aus den Selektionsgrenzen, nicht strlen(): die
+             * Selektion darf NUL-Bytes enthalten (Binaerdatei per "Trotzdem
+             * oeffnen"). Geloescht wird nur, wenn die Zwischenablage den Text
+             * wirklich uebernommen hat - sonst waere er nirgends mehr. */
+            size_t clip_len = editor_selection_end(fed) - editor_selection_start(fed);
+            clip = editor_get_selection_text(fed);
+            int copied = btn_pasteboard_set_string(clip, clip_len);
             free(clip);
-            editor_delete_selection(focused_editor());
+            if (copied) {
+                editor_delete_selection(fed);
+            }
             break;
-        case BTN_MENU_COPY:
-            clip = editor_get_selection_text(focused_editor());
-            btn_pasteboard_set_string(clip);
+        }
+        case BTN_MENU_COPY: {
+            Editor *fed = focused_editor();
+            size_t clip_len = editor_selection_end(fed) - editor_selection_start(fed);
+            clip = editor_get_selection_text(fed);
+            btn_pasteboard_set_string(clip, clip_len);
             free(clip);
             break;
+        }
         case BTN_MENU_PASTE: {
             size_t clip_len;
             clip = btn_pasteboard_copy_string(&clip_len);
-            /* Kein manuelles Saeubern von '\n'/'\r'/'\t' mehr noetig hier -
+            /* Text aus einer Windows-App kommt mit "\r\n" - im Dokument steht
+             * nur '\n' (das Format setzt erst das Sichern), ausser der Puffer
+             * ist roh (gemischt/binaer, siehe Document). */
+            if (clip && focused_editor() == &active_doc()->editor && !active_doc()->eol_raw) {
+                clip_len = btn_eol_normalize(clip, clip_len);
+            }
+            /* Kein manuelles Saeubern von '\n'/'\r' fuer die Suchfelder noetig -
              * editor_insert_text() macht das jetzt zentral fuer jeden
              * einzeiligen Editor (siehe editor_set_single_line() in main(),
              * editor.h/.c), egal ueber welchen Weg Text eingefuegt wird.
@@ -1707,11 +4901,26 @@ static void on_menu(int tag) {
         case BTN_MENU_FIND:
             open_find_bar();
             break;
+        case BTN_MENU_GOTO_LINE:
+            perform_goto_line();
+            break;
         case BTN_MENU_PRINT:
             perform_print();
             break;
         case BTN_MENU_HELP:
             btn_show_help_alert();
+            break;
+        case BTN_MENU_ZOOM_IN:
+            btn_render_zoom_in();
+            save_prefs();
+            break;
+        case BTN_MENU_ZOOM_OUT:
+            btn_render_zoom_out();
+            save_prefs();
+            break;
+        case BTN_MENU_ZOOM_RESET:
+            btn_render_zoom_reset();
+            save_prefs();
             break;
         default:
             break;
@@ -1722,10 +4931,14 @@ static void on_menu(int tag) {
      * der Leiste per Cmd+F (BTN_MENU_FIND, siehe open_find_bar() oben):
      * fuer eine vorausgefuellte Selektion muss der Trefferzaehler/die
      * Live-Hervorhebung sofort stimmen, nicht erst nach dem naechsten
-     * Tastendruck. Fuer Befehle, die den Suchtext gar nicht aendern (z.B.
-     * Kopieren, Alles auswaehlen), ist der erneute Aufruf ein guenstiger,
-     * folgenloser No-Op. */
-    if (g_focus == BTN_FOCUS_SEARCH) {
+     * Tastendruck. Bewusst auf genau diese Tags eingegrenzt (statt bei
+     * JEDEM Befehl zu feuern, solange das Suchfeld fokussiert ist) - ein
+     * voller Dokument-Kopie+Regex-Scan (siehe perform_live_search()) als
+     * Nebeneffekt von z.B. Zoomen oder Drucken waere bei grossen Dokumenten
+     * spuerbar und mit diesen Befehlen inhaltlich nicht verwandt. */
+    if (g_focus == BTN_FOCUS_SEARCH &&
+        (tag == BTN_MENU_FIND || tag == BTN_MENU_UNDO || tag == BTN_MENU_REDO ||
+         tag == BTN_MENU_CUT || tag == BTN_MENU_PASTE)) {
         perform_live_search();
     }
     sync_window_state();
@@ -1745,6 +4958,7 @@ int main(void) {
      * Sprachumschalter im Menue) - muss vor btn_app_build_menu() gesetzt
      * sein, das die Menuetitel bereits in der aktiven Sprache aufbaut. */
     btn_strings_set_language(btn_app_detect_system_language());
+    btn_render_set_footer_formats(btn_tr(BTN_STR_FOOTER_POS_FMT), btn_tr(BTN_STR_FOOTER_STATS_FMT));
     btn_app_set_draw_callback(on_draw);
     btn_app_set_key_callback(on_key);
     btn_app_set_resize_callback(on_resize);
@@ -1753,9 +4967,31 @@ int main(void) {
     btn_app_set_menu_callback(on_menu);
     btn_app_set_should_close_callback(should_close);
     btn_app_set_open_file_callback(on_open_file);
+    btn_app_set_launch_callback(on_launch);
+    btn_app_set_activate_callback(on_activate);
+    g_recovery_dir = btn_recovery_dir();
+    g_recovery_run = g_recovery_dir ? btn_recovery_begin_run(g_recovery_dir) : NULL;
+    if (!g_recovery_run) {
+        free(g_recovery_dir);
+        g_recovery_dir = NULL; /* ohne Sperre keine Wiederherstellung */
+    }
+    btn_app_start_repeating_timer(BTN_RECOVERY_INTERVAL, on_timer);
+    static const BtnTextInputCallbacks text_input = {
+        ti_insert_text, ti_set_marked_text, ti_unmark_text, ti_query, ti_substring, ti_caret_rect,
+    };
+    btn_app_set_text_input_callbacks(&text_input);
     btn_app_build_menu();
+    sync_window_state(); /* Haekchen in Ablage > Zeilenenden fuer den ersten Tab */
     load_recent_files();
     recent_files_refresh_menu();
+    /* Muss vor btn_app_run() stehen, damit der allererste Redraw schon mit
+     * der zuletzt eingestellten Schriftgroesse zeichnet, statt kurz bei
+     * BTN_DEFAULT_FONT_SIZE aufzublitzen. */
+    load_prefs();
+    load_ai_config();
+    if (g_ai.enabled) {
+        ai_refresh_models(0); /* still: stellt nur ein fehlendes Modell um */
+    }
     btn_app_run();
 
     for (int i = 0; i < g_doc_count; i++) {

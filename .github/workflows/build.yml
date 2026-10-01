@@ -1,0 +1,79 @@
+name: Build und Tests
+
+# Branches laufen ueber ihren Pull Request, main ueber den Push - so gibt es
+# pro Commit nur einen Lauf (macOS-Minuten zaehlen zehnfach). Ohne Pull
+# Request: "Run workflow" in GitHub (workflow_dispatch).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Ein neuer Push auf denselben Branch bricht den laufenden Durchgang ab.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS - App bauen, starten, testen
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          clang --version
+          xcrun --show-sdk-path
+          xcrun --show-sdk-version
+
+      - name: App bauen (Warnungen sind Fehler)
+        run: make EXTRA_CFLAGS=-Werror
+
+      - name: App-Bundle pruefen
+        run: |
+          test -x build/BTNEdit.app/Contents/MacOS/BTNEdit
+          test -f build/BTNEdit.app/Contents/Resources/AppIcon.icns
+          plutil -lint build/BTNEdit.app/Contents/Info.plist
+          file build/BTNEdit.app/Contents/MacOS/BTNEdit
+
+      - name: Start-Smoke-Test (App laeuft nach 5 s noch)
+        run: |
+          build/BTNEdit.app/Contents/MacOS/BTNEdit &
+          pid=$!
+          sleep 5
+          if ! kill -0 "$pid" 2>/dev/null; then
+            wait "$pid"; echo "BTNEdit ist beim Start beendet worden (Exit $?)"; exit 1
+          fi
+          kill "$pid"
+
+      - name: Tests (clang, ASan/UBSan, Apples Regex-Engine)
+        run: make test
+
+      - name: Eingabemethoden-Test (echte View aus shim.m)
+        run: make EXTRA_CFLAGS=-Werror test-objc
+
+      - name: Test-Logs bei Fehler
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-macos
+          path: build/tests/*.log
+
+  linux:
+    name: Linux - Tests (gcc, glibc-Regex)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tests
+        run: make test TEST_CC=gcc
+
+      - name: Test-Logs bei Fehler
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-linux
+          path: build/tests/*.log

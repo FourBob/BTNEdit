@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""Erzeugt die *_extracted.h-Header fuer die Tests aus dem AKTUELLEN Quelltext.
+
+main.c, render.c und shim.m brauchen macOS-Frameworks und lassen sich nicht
+ohne Weiteres in einen Test linken. Ihre reinen C-Teile (Regex-Suche,
+Sichern, Layout, ...) werden deshalb verbatim herausgeschnitten und von den
+Tests eingebunden. Weil das bei jedem Testlauf neu passiert, testet ein Test
+immer den Code, der im Repo steht - keine veralteten Kopien.
+
+Aufruf: gen_headers.py <src-Verzeichnis> <Ausgabe-Verzeichnis>
+
+Spezifikationen pro Header:
+  name        Funktionsdefinition, die in Spalte 0 beginnt, bis zur ersten
+              Zeile, die nur "}" enthaelt
+  #NAME       einzeiliges #define
+  struct:NAME "static struct { ... } NAME;"-Block
+  typedef:NAME "typedef struct/enum { ... } NAME;"-Block
+"""
+import os
+import re
+import sys
+
+HEADERS = {
+    "regex_extracted.h": ("main.c", [
+        "#BTN_MAX_REGEX_GROUPS", "#BTN_MAX_EXPANDED_REPLACEMENT_LEN",
+        "regexec_flags_for", "regex_search_from", "regex_next_scan",
+        "regex_escape_literal", "regex_translate_tab_escapes", "compile_search_regex",
+        "find_match", "find_last_match", "collect_all_matches", "collect_all_matches_unbounded",
+        "replacement_has_backreferences", "replacement_needs_expansion", "expand_replacement"]),
+    "save_extracted.h": ("main.c", ["write_stream_checked", "write_file_atomic", "write_file_contents"]),
+    "close_extracted.h": ("main.c", ["restore_encodings", "should_close"]),
+    "fileio_extracted.h": ("main.c", ["#BTN_MAX_FILE_MB", "#BTN_MAX_FILE_SIZE",
+                                      "read_file_contents", "load_recent_files"]),
+    "expensive_extracted.h": ("main.c", ["#BTN_LIVE_REGEX_MAX_COPIES",
+                                         "regex_too_expensive_for_live_search"]),
+    "replsel_extracted.h": ("main.c", ["replace_selection"]),
+    "search_tabs_extracted.h": ("main.c", [
+        "#BTN_MAX_SEARCH_MATCHES", "#BTN_LIVE_SEARCH_MAX_DOC_LEN", "pick_current_match", "pick_match_for_navigation",
+        "next_tab_index", "set_match_count_status", "tab_counts_check_key",
+        "doc_match_count", "searchable_other_tab", "append_all_tabs_status",
+        "next_tab_with_match", "perform_live_search", "navigate_match", "var:g_empty_hit_ed", "var:g_empty_hit_pos",
+        "perform_find_ex", "perform_find", "selection_is_current_match",
+        "perform_replace_current", "replace_all_in_editor", "perform_replace_all"]),
+    "doc_extracted.h": ("main.c", ["include:encoding.h", "typedef:Document", "doc_has_edits", "doc_is_dirty", "mark_doc_saved"]),
+    "focus_extracted.h": ("main.c", ["typedef:BtnFocus"]),
+    "prefs_extracted.h": ("main.c", [
+        "prefs_file_path", "var:g_show_invisibles", "apply_show_invisibles", "var:g_wrap", "apply_wrap",
+        "save_prefs", "load_prefs"]),
+    "shortcuts_extracted.h": ("main.c", [
+        "take_selection_as_search_text", "find_next_from_menu", "use_selection_for_find", "next_tab_index",
+        "cycle_tab"]),
+    "textinput_glue_extracted.h": ("main.c", [
+        "#KEYCODE_TEXT", "insert_typed_chars", "after_focused_edit", "select_ti_range",
+        "var:g_marked_undo_ed", "end_marked_undo_group", "ti_insert_text", "ti_set_marked_text", "ti_unmark_text", "commit_marked", "ti_query", "ti_substring"]),
+    "eol_glue_extracted.h": ("main.c", [
+        "typedef:BtnReadResult", "#BTN_MAX_FILE_MB", "#BTN_MAX_FILE_SIZE", "basename_of", "looks_binary",
+        "write_stream_checked", "write_file_atomic", "write_file_contents", "read_file_contents",
+        "show_file_error", "set_doc_line_ending", "typedef:DecodedFile", "decode_file_bytes", "load_doc_contents",
+        "discard_recovery", "open_file_path", "disk_content_changed", "confirm_save_as_utf8", "perform_save_doc",
+        "#RELOAD_KEEP_CHOSEN", "reload_doc_as", "reload_doc", "set_doc_encoding", "reopen_doc_as"]),
+    "wrap_state_extracted.h": ("render.c", ["include:limits.h", "var:g_wrap", "#NO_WRAP_COLS", "btn_render_set_wrap"]),
+    "text_bottom_extracted.h": ("render.c", ["include:wrap_state_extracted.h", "#HSCROLL_STRIP_HEIGHT", "btn_text_bottom"]),
+    "render_pure_extracted.h": ("render.c", [
+        "include:wrap_state_extracted.h", "screen_chars_per_row",
+        "rows_push", "layout_build", "struct:g_layout", "btn_layout_get", "btn_layout_max_cols",
+        "btn_layout_row_for_offset", "btn_row_offset_for_column", "first_row_of_line",
+        "line_bounds_from_rows", "row_of_line_start", "btn_layout_row_of_line", "struct:g_cstate", "cstate_reserve",
+        "comment_state_before_line"]),
+    "render_decode_extracted.h": ("render.c", ["decode_row_from_col", "decode_row_for_display"]),
+    "render_helpers_extracted.h": ("render.c", ["utf8_safe_cut", "utf8_prefix_bytes"]),
+    "cap_extracted.h": ("render.c", ["include:text_bottom_extracted.h", "btn_visible_row_capacity"]),
+    "fontsize_extracted.h": ("render.c", [
+        "typedef:FontSet", "var:g_doc_fonts", "var:g_line_height", "line_height_for", "btn_render_set_font_size",
+        "btn_render_line_height"]),
+    "footer_fmt_extracted.h": ("render.c", ["btn_footer_format_ok"]),
+    "mouse_render_extracted.h": ("render.c", [
+        "include:text_bottom_extracted.h",
+        "#GUTTER_WIDTH", "var:g_line_height", "#LINE_HEIGHT", "btn_render_line_height", "#LEFT_PADDING",
+        "#TOP_PADDING", "chars_per_row_for",
+        "btn_layout_text_width", "btn_hit_test", "btn_visible_row_capacity", "btn_text_rows_extent",
+        "btn_text_cols_extent", "btn_visible_col_capacity", "btn_render_char_width",
+        "#SCROLLBAR_INSET", "#SCROLLBAR_KNOB_WIDTH", "typedef:ScrollbarTrack", "scrollbar_track",
+        "btn_scrollbar_knob", "btn_scrollbar_row_for_knob_top",
+        "typedef:HScrollTrack", "btn_hscroll_max", "hscrollbar_track", "btn_hscrollbar_knob",
+        "btn_hscrollbar_col_for_knob_left", "#PRINT_MARGIN", "btn_rows_per_page",
+        "btn_find_bar_geometry", "btn_text_cursor_rects"]),
+    "drag_type_extracted.h": ("main.c", ["typedef:BtnDrag"]),
+    "invisibles_extracted.h": ("render.c", ["build_invisibles_from"]),
+    "linecmd_extracted.h": ("main.c", ["perform_line_command"]),
+    "ai_glue_extracted.h": ("main.c", [
+        "#BTN_MAX_FILE_MB", "#BTN_MAX_FILE_SIZE", "typedef:BtnReadResult", "read_file_contents",
+        "write_stream_checked", "write_file_atomic", "write_file_contents", "ai_config_path", "ai_debug", "load_ai_config_text",
+        "load_ai_config", "toggle_ai_config", "ghost_clear", "ghost_visible", "#AI_NO_FIM_MAX", "ai_model_lacks_fim",
+        "ai_note_no_fim", "ai_mode_for", "ai_on_response", "ai_on_idle",
+        "ai_cancel_request", "ai_cancel", "ai_note_typing", "ai_test_model", "ai_test_has_text_stage",
+        "ai_test_add_line", "ai_test_finish", "ai_on_test_response", "ai_send_test_request", "ai_send_test",
+        "ai_update_model_menu", "ai_write_config_value", "ai_choose_model", "ai_on_models", "ai_refresh_models",
+        "ai_test_connection", "ai_on_model_menu", "ai_toggle_from_menu",
+        "ai_accept", "ai_keep_ghost_after_typing"]),
+    "protect_extracted.h": ("main.c", [
+        "#BTN_RECOVERY_INTERVAL", "#BTN_RECOVERY_BYTES_PER_SECOND", "#BTN_MAX_FILE_MB", "#BTN_MAX_FILE_SIZE",
+        "typedef:BtnReadResult", "monotonic_seconds", "active_doc", "discard_recovery", "basename_of", "doc_display_name", "set_doc_path",
+        "doc_is_blank", "add_tab", "find_tab_for_path", "read_file_contents", "show_file_error",
+        "write_stream_checked", "write_file_atomic", "write_file_contents", "looks_binary", "typedef:DecodedFile",
+        "decode_file_bytes", "load_doc_contents", "open_file_path", "disk_content_changed", "hash_for_stamp",
+        "confirm_save_as_utf8", "perform_save_doc", "#RELOAD_KEEP_CHOSEN", "reload_doc_as", "reload_doc", "check_doc_on_disk", "autosave_recovery", "on_timer",
+        "on_activate", "restore_into_tab", "restore_recovered_documents"]),
+    "mouse_extracted.h": ("main.c", [
+        "content_bounds", "visible_line_capacity", "build_current_rows", "clamp_hscroll",
+        "clamp_scroll_to_row_count", "clamp_scroll", "sync_scroll_to_cursor", "stop_mouse_drag",
+        "autoscroll_steps", "autoscroll_rows", "autoscroll_cols", "drag_select_to", "scrollbar_mouse_down",
+        "scrollbar_drag_to", "hscrollbar_mouse_down", "hscrollbar_drag_to", "on_mouse", "on_scroll", "toggle_wrap"]),
+}
+
+
+def extract(src, spec, path):
+    if spec.startswith("include:"):  # Header, den der erzeugte Text braucht
+        return '#include "' + spec[len("include:"):] + '"'
+    if spec.startswith("var:"):  # einzeilige Variable "static ... NAME = ...;"
+        name = spec[len("var:"):]
+        m = re.search(r"^static [^\n;(]*\b" + re.escape(name) + r"\b[^\n]*;$", src, re.M)
+        if not m:
+            sys.exit(f"{path}: Variable {name} nicht gefunden")
+        return m.group(0)
+    if spec.startswith("#"):
+        m = re.search(r"^#define " + re.escape(spec[1:]) + r"\b.*$", src, re.M)
+        if not m:
+            sys.exit(f"{path}: #define {spec[1:]} nicht gefunden")
+        return m.group(0)
+    if spec.startswith("typedef:"):
+        name = spec[len("typedef:"):]
+        end_marker = "} " + name + ";\n"
+        end = src.find(end_marker)
+        start = src.rfind("\ntypedef ", 0, end) + 1 if end >= 0 else 0
+        if end < 0 or start <= 0:
+            sys.exit(f"{path}: typedef {name} nicht gefunden")
+        return src[start:end + len(end_marker)]
+    if spec.startswith("struct:"):
+        name = spec[len("struct:"):]
+        end_marker = "} " + name + ";\n"
+        end = src.find(end_marker)
+        start = src.rfind("static struct {", 0, end) if end >= 0 else -1
+        if start < 0:
+            sys.exit(f"{path}: struct {name} nicht gefunden")
+        return src[start:end + len(end_marker)]
+    # Funktionsdefinition: Zeile in Spalte 0 mit "name(", die kein Prototyp ist
+    for m in re.finditer(r"^[A-Za-z_][^\n;{}]*\b" + re.escape(spec) + r"\(", src, re.M):
+        start = m.start()
+        body = src.find("{", start)
+        semi = src.find(";", start)
+        if body < 0 or (0 <= semi < body):
+            continue  # Prototyp oder Aufruf
+        end = src.find("\n}\n", start)
+        return src[start:end + 3]
+    sys.exit(f"{path}: Funktion {spec} nicht gefunden")
+
+
+def main():
+    src_dir, out_dir = sys.argv[1], sys.argv[2]
+    os.makedirs(out_dir, exist_ok=True)
+    cache = {}
+    for header, (src_name, specs) in HEADERS.items():
+        path = os.path.join(src_dir, src_name)
+        src = cache.setdefault(path, open(path, encoding="utf-8").read())
+        parts = [extract(src, s, path) for s in specs]
+        guard = "GEN_" + re.sub(r"\W", "_", header).upper()
+        with open(os.path.join(out_dir, header), "w", encoding="utf-8") as f:
+            f.write(f"/* Automatisch erzeugt aus {src_name} von tests/gen_headers.py - nicht bearbeiten. */\n")
+            f.write(f"#ifndef {guard}\n#define {guard}\n")  # mehrfach eingebunden (wrap_state)
+            f.write("\n".join(parts) + "\n#endif\n")
+
+
+if __name__ == "__main__":
+    main()
