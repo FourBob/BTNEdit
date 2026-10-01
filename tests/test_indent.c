@@ -66,6 +66,20 @@ static void test_newline(void) {
     set(&ed, "");
     editor_insert_newline(&ed, 0);
     CHECK(eq(&ed, "\n"), "empty document");
+
+    /* Gemischte Zeilenenden, ueberwiegend CRLF: Return schreibt CRLF */
+    set(&ed, "  ab\r\ncd");
+    sel(&ed, 3, 3);
+    editor_insert_newline_eol(&ed, 0, "\r\n");
+    CHECK(eq(&ed, "  a\r\n  b\r\ncd") && ed.cursor == 7, "CRLF newline keeps the indent");
+    set(&ed, "f() {}\r\n");
+    sel(&ed, 5, 5);
+    editor_insert_newline_eol(&ed, BTN_INDENT_BRACES, "\r\n");
+    CHECK(eq(&ed, "f() {\r\n\t\r\n}\r\n") && ed.cursor == 8, "split braces with CRLF on both breaks");
+    set(&ed, "  \r\nx");
+    sel(&ed, 2, 2);
+    editor_insert_newline_eol(&ed, BTN_INDENT_BRACES, "\r\n");
+    CHECK(eq(&ed, "\r\n  \r\nx"), "blank line before CRLF: whitespace moves down, line stays blank");
     editor_free(&ed);
 
     Editor field;

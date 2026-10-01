@@ -28,7 +28,7 @@ HEADERS = {
         "find_match", "collect_all_matches", "collect_all_matches_unbounded",
         "replacement_has_backreferences", "replacement_needs_expansion", "expand_replacement"]),
     "save_extracted.h": ("main.c", ["write_stream_checked", "write_file_atomic", "write_file_contents"]),
-    "close_extracted.h": ("main.c", ["should_close"]),
+    "close_extracted.h": ("main.c", ["restore_encodings", "should_close"]),
     "fileio_extracted.h": ("main.c", ["#BTN_MAX_FILE_MB", "#BTN_MAX_FILE_SIZE",
                                       "read_file_contents", "load_recent_files"]),
     "expensive_extracted.h": ("main.c", ["#BTN_LIVE_REGEX_MAX_COPIES",

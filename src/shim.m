@@ -9,6 +9,7 @@
 #import <Cocoa/Cocoa.h>
 #include "shim.h"
 #include "encoding.h"
+#include "textinput.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1122,11 +1123,15 @@ int btn_pasteboard_set_string(const char *bytes, size_t len) {
              * bricht am ersten NUL-Byte ab und liefert bei ungueltigem UTF-8
              * nil; dann landete nil in setString: und der Text war nach dem
              * anschliessenden Loeschen (Ausschneiden) nirgends mehr.
-             * ISO-8859-1 bildet jeden Bytewert ab und schlaegt nie fehl -
-             * fuer Latin-1-/Binaerdateien, die render.c bewusst anzeigt. */
+             * Ungueltiges UTF-8: Zeichen fuer Zeichen wie angezeigt (ein
+             * ungueltiges Byte als Latin-1) - die ganze Auswahl als Latin-1
+             * zu lesen machte aus jedem "ö" daneben "Ã¶". */
             s = [[[NSString alloc] initWithBytes:bytes length:len encoding:NSUTF8StringEncoding] autorelease];
             if (!s) {
-                s = [[[NSString alloc] initWithBytes:bytes length:len encoding:NSISOLatin1StringEncoding] autorelease];
+                size_t n;
+                uint16_t *u16 = btn_ti_to_utf16(bytes, len, &n);
+                s = [[[NSString alloc] initWithCharacters:(const unichar *)u16 length:n] autorelease];
+                free(u16);
             }
             if (!s) {
                 return 0;

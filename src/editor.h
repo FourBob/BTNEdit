@@ -243,6 +243,9 @@ void editor_redo(Editor *ed);
  * editor_indent_uses_spaces(): diese Stil-Erkennung (erstes MB der Datei). */
 enum { BTN_INDENT_BRACES = 1, BTN_INDENT_COLON = 2 };
 void editor_insert_newline(Editor *ed, int rules);
+/* Dasselbe mit einem anderen Zeilenende als "\n" ("\r\n" fuer Dateien mit
+ * gemischten Zeilenenden, die bytegenau gesichert werden). */
+void editor_insert_newline_eol(Editor *ed, int rules, const char *newline);
 int editor_type_closing_bracket(Editor *ed, char c, int rules);
 void editor_tab_key(Editor *ed, int outdent);
 int editor_indent_uses_spaces(Editor *ed);

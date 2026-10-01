@@ -31,6 +31,10 @@ size_t btn_ti_utf16_len(const char *s, size_t len);
  * mitten in ein Surrogatpaar, zaehlt das ganze Zeichen mit - nie mitten
  * in einem Zeichen. */
 size_t btn_ti_utf16_to_bytes(const char *s, size_t len, size_t u16);
+/* Ganzer Text als UTF-16 nach der Zeichenregel (fuer die Zwischenablage):
+ * gueltige Zeichen bleiben, nur ein ungueltiges Byte wird zu U+00XX - wie
+ * es gezeichnet wird. Neuer Speicher (*n Einheiten), freigeben mit free(). */
+uint16_t *btn_ti_to_utf16(const char *s, size_t len, size_t *n);
 
 /* Vorlaeufiger Text der Eingabemethode - steht NICHT im Puffer, wird am
  * Cursor darueber gezeichnet, bis die Eingabemethode ihn festschreibt.

@@ -199,7 +199,7 @@ char *btn_enc_encode(const char *u8, size_t len, BtnEncoding enc, int utf16_bom,
     *out_bad = (size_t)-1;
     const unsigned char *u = (const unsigned char *)u8;
     size_t cap;
-    if (enc == BTN_ENC_UTF16LE || enc == BTN_ENC_UTF16BE) {
+    if (btn_enc_is_utf16(enc)) {
         if (len > (SIZE_MAX - 2) / 2) {
             return NULL;
         }
@@ -221,7 +221,7 @@ char *btn_enc_encode(const char *u8, size_t len, BtnEncoding enc, int utf16_bom,
         o += len;
     } else {
         int le = enc == BTN_ENC_UTF16LE;
-        if ((enc == BTN_ENC_UTF16LE || enc == BTN_ENC_UTF16BE) && utf16_bom) {
+        if (btn_enc_is_utf16(enc) && utf16_bom) {
             out[o++] = (char)(le ? 0xFF : 0xFE);
             out[o++] = (char)(le ? 0xFE : 0xFF);
         }

@@ -26,6 +26,10 @@ typedef enum {
     BTN_ENC_COUNT
 } BtnEncoding;
 
+static inline int btn_enc_is_utf16(BtnEncoding enc) {
+    return enc == BTN_ENC_UTF16LE || enc == BTN_ENC_UTF16BE;
+}
+
 /* Kodierung von s[0,len): BOM (UTF-8; UTF-16 LE/BE nur, wenn die Datei auch
  * Null-Bytes enthaelt - sonst ist "ÿþ" am Anfang einer Latin-1-Datei
  * wahrscheinlicher als UTF-16 ganz ohne ASCII und Zeilenenden), sonst

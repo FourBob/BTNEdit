@@ -386,8 +386,21 @@ static void test_encodings(void) {
     set_doc_encoding(&d, BTN_ENC_UTF16BE);
     CHECK(!d.utf16_bom, "LE <-> BE keeps the BOM choice");
     set_doc_encoding(&d, BTN_ENC_LATIN1);
+    set_doc_encoding(&d, BTN_ENC_UTF16LE);
+    CHECK(!d.utf16_bom && !doc_has_edits(&d), "UTF-16 file without BOM: away and back adds no BOM, still saved");
+    d.utf16_bom = 1;
+    CHECK(doc_has_edits(&d), "BOM choice alone counts as a change");
+    d.utf16_bom = 0;
+    doc_done(&d);
+    /* UTF-8-Datei, UTF-16 neu gewaehlt: mit BOM */
+    path_for(p, "plain8.txt");
+    write_bytes(p, "hi", 2);
+    doc_init(&d);
+    open_file_path(&d, p);
     set_doc_encoding(&d, BTN_ENC_UTF16BE);
-    CHECK(d.utf16_bom, "UTF-16 newly picked: with BOM");
+    CHECK(d.utf16_bom && doc_has_edits(&d), "UTF-16 newly picked: with BOM");
+    set_doc_encoding(&d, BTN_ENC_UTF8);
+    CHECK(!doc_has_edits(&d), "back to UTF-8: BOM flag of UTF-16 irrelevant, saved");
     doc_done(&d);
     /* LE-Datei als BE gelesen: U+FFFE bleibt ein Zeichen, bytegleich zurueck */
     path_for(p, "lebe.txt");

@@ -36,6 +36,18 @@ static size_t encode_char(const unsigned char *b, size_t c, uint16_t *out) {
     return 1;
 }
 
+uint16_t *btn_ti_to_utf16(const char *s, size_t len, size_t *n) {
+    uint16_t *out = btn_xmalloc(btn_xmul(len, sizeof(uint16_t)) + sizeof(uint16_t));
+    size_t o = 0, i = 0;
+    while (i < len) {
+        size_t c = btn_utf8_char_len((const unsigned char *)s + i, len - i);
+        o += encode_char((const unsigned char *)s + i, c, out + o);
+        i += c;
+    }
+    *n = o;
+    return out;
+}
+
 size_t btn_ti_utf16_len(const char *s, size_t len) {
     size_t n = 0, i = 0;
     while (i < len) {

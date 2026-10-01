@@ -19,6 +19,7 @@ static void switch_to_tab(int idx) { g_active_doc = idx; }
 static int g_commits = 0;
 static void commit_marked(void) { g_commits++; } /* laufende Eingabe festschreiben */
 static void btn_app_request_redraw(void) {}
+static void sync_window_state(void) {}
 static const char *doc_display_name(Document *d) { (void)d; return "doc"; }
 static int g_discards = 0;
 static void discard_recovery(Document *d) { (void)d; g_discards++; } /* Wiederherstellungsdatei loeschen */
@@ -45,9 +46,14 @@ static int perform_save_doc(Document *d, int force) {
 /* Kodierung kann den Text nicht fassen, Frage abgebrochen (eigener Test:
  * test_eol_glue) */
 static int g_encodable[MAX_TABS];
+static int g_to_utf8[MAX_TABS]; /* Frage mit "Als UTF-8 sichern" beantwortet */
 static int g_encodable_checks = 0;
 static int ensure_encodable(Document *d) {
     g_encodable_checks++;
+    if (g_to_utf8[d - g_docs]) {
+        d->enc = BTN_ENC_UTF8;
+        return 1;
+    }
     return !g_encodable[d - g_docs];
 }
 
@@ -116,6 +122,26 @@ int main(void) {
     check(doc_is_dirty(&g_docs[0]), "S6 line-ending change alone makes the doc dirty");
     g_alert_choice[0] = 2;
     check(should_close() == 1 && !doc_is_dirty(&g_docs[0]), "S6 'Don't Save' marks the line-ending change clean");
+    /* "Als UTF-8 sichern" bei A, dann Abbruch bei B: A behaelt Latin-1 */
+    setup_two_dirty();
+    g_docs[0].eol = g_docs[0].saved_eol = BTN_EOL_LF;
+    g_docs[0].enc = g_docs[0].saved_enc = BTN_ENC_LATIN1;
+    g_to_utf8[0] = 1;
+    g_alert_choice[0] = 1; g_alert_choice[1] = 0;
+    check(should_close() == 0 && g_docs[0].enc == BTN_ENC_LATIN1 && g_save_calls == 0,
+          "S8 cancel after 'save as UTF-8' on another tab: its encoding stays");
+    /* Sichern von B scheitert: A ist gesichert (UTF-8), B behaelt Latin-1 */
+    setup_two_dirty();
+    g_docs[1].enc = g_docs[1].saved_enc = BTN_ENC_LATIN1;
+    g_to_utf8[1] = 1;
+    g_alert_choice[0] = 1; g_alert_choice[1] = 1;
+    g_save_result[0] = 1; g_save_result[1] = 0;
+    check(should_close() == 0 && g_docs[0].enc == BTN_ENC_UTF8 && g_docs[1].enc == BTN_ENC_LATIN1,
+          "S9 failed save: the saved tab keeps UTF-8, the unsaved one its old encoding");
+    g_to_utf8[0] = g_to_utf8[1] = 0;
+    g_docs[0].enc = g_docs[0].saved_enc = g_docs[1].enc = g_docs[1].saved_enc = BTN_ENC_UTF8;
+    g_doc_count = 1; g_active_doc = 0;
+    g_docs[0].eol = BTN_EOL_CRLF; g_docs[0].saved_eol = BTN_EOL_LF;
     g_docs[0].eol_raw = 0; g_docs[0].saved_eol_raw = 1;
     check(doc_is_dirty(&g_docs[0]), "S7 converting a mixed file (raw -> uniform) makes the doc dirty");
 

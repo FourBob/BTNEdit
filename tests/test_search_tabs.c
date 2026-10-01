@@ -183,6 +183,33 @@ int main(void) {
     CHECK(text_is(0, "X bar X") && text_is(2, "a foo") && strcmp(g_search_status, "2 replaced") == 0,
           "off: only the active tab (%s)", g_search_status);
 
+    /* Leere Regex-Treffer: Weitersuchen kommt voran (Zeilenanfaenge 0, 2, 4) */
+    g_search_regex = 1;
+    set_query("^");
+    g_active_doc = 0;
+    set_text(0, "a\nb\nc");
+    editor_set_cursor(&g_docs[0].editor, 0, 0);
+    CHECK(perform_find(1) && sel_is(2, 2), "^: from a line start on to the next one");
+    CHECK(perform_find(1) && sel_is(4, 4), "^: and the next");
+    CHECK(perform_find(1) && sel_is(0, 0), "^: wraps to the first");
+    CHECK(perform_find(0) && sel_is(4, 4), "^ backwards: the last");
+    CHECK(perform_find(0) && sel_is(2, 2), "^ backwards: the previous");
+    set_query("$");
+    editor_set_cursor(&g_docs[0].editor, 0, 0);
+    CHECK(perform_find(1) && sel_is(1, 1) && perform_find(1) && sel_is(3, 3) && perform_find(1) && sel_is(5, 5),
+          "$: every line end in turn");
+    set_query("^$");
+    set_text(0, "\nx");
+    set_text(1, "a\n\nb");
+    editor_set_cursor(&g_docs[0].editor, 0, 0);
+    g_search_all_tabs = 1;
+    g_active_doc = 1;
+    editor_set_cursor(&g_docs[1].editor, 2, 0);
+    perform_find(1);
+    CHECK(g_active_doc == 0 && sel_is(0, 0), "all tabs: the only empty match here moves on to the next tab (tab %d)", g_active_doc);
+    g_search_all_tabs = 0;
+    g_search_regex = 0;
+
     for (int i = 0; i < MAX_TABS; i++) {
         editor_free(&g_docs[i].editor);
     }

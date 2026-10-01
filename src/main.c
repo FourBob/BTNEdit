@@ -74,6 +74,7 @@ typedef struct {
     BtnEncoding enc;
     BtnEncoding saved_enc;
     int utf16_bom;  /* UTF-16: mit BOM sichern (so geoeffnet bzw. neu gewaehlt) */
+    int saved_utf16_bom;
     /* Per "Neu oeffnen als" gewaehlte Lese-Kodierung (-1 = erkennen) und was
      * die Erkennung damals meinte: Neuladen liest wieder so, solange die
      * Erkennung dasselbe meint - schreibt ein Programm die Datei in einer
@@ -280,7 +281,7 @@ static int doc_has_edits(Document *d) {
      * pos unveraendert lassen, obwohl sich der Inhalt geaendert hat (siehe
      * editor.h-Kommentar bei edit_seq). */
     return d->editor.edit_seq != d->saved_edit_seq || d->eol != d->saved_eol || d->eol_raw != d->saved_eol_raw ||
-           d->enc != d->saved_enc;
+           d->enc != d->saved_enc || (btn_enc_is_utf16(d->enc) && d->utf16_bom != d->saved_utf16_bom);
 }
 
 /* Ungesichert: eigene Aenderungen, oder die Datei auf der Platte ist weg. */
@@ -295,6 +296,7 @@ static void mark_doc_saved(Document *d) {
     d->saved_eol = d->eol;
     d->saved_eol_raw = d->eol_raw;
     d->saved_enc = d->enc;
+    d->saved_utf16_bom = d->utf16_bom;
     d->missing_on_disk = 0;
 }
 
@@ -1436,9 +1438,18 @@ static int perform_find(int forward) {
 
     size_t idx;
     int found = pick_match_for_navigation(g_match_starts, g_match_count, from, forward, &idx);
+    /* Leerer Treffer genau am Cursor ("^", "$", "^$"): das ist der eben
+     * gefundene - weiter zum naechsten, sonst bliebe Weitersuchen stehen.
+     * Gibt es nur ihn, zaehlt das als herumgelaufen (alle Tabs: weiter). */
+    int skipped = 0;
+    if (found && forward && !editor_has_selection(ed) && g_match_starts[idx] == from && g_match_ends[idx] == from) {
+        idx = (idx + 1) % g_match_count;
+        skipped = 1;
+    }
     /* Alle Tabs: am Ende dieses Dokuments nicht herumlaufen, sondern in den
      * naechsten (vorigen) Tab mit Treffer, dort auf den ersten (letzten). */
-    int wrapped = found && (forward ? g_match_starts[idx] < from : g_match_starts[idx] >= from);
+    int wrapped = found && (forward ? g_match_starts[idx] < from || (skipped && g_match_starts[idx] == from)
+                                    : g_match_starts[idx] >= from);
     if (g_search_all_tabs && (!found || wrapped)) {
         int tab = next_tab_with_match(forward);
         if (tab >= 0) {
@@ -2148,9 +2159,10 @@ static void set_doc_encoding(Document *d, BtnEncoding enc) {
     if (d->binary) {
         return;
     }
-    int was_utf16 = d->enc == BTN_ENC_UTF16LE || d->enc == BTN_ENC_UTF16BE;
-    if (!was_utf16) {
-        d->utf16_bom = 1; /* neu gewaehltes UTF-16: mit BOM, wie ueblich */
+    if (!btn_enc_is_utf16(d->enc)) {
+        /* Neu gewaehltes UTF-16: mit BOM, wie ueblich - ausser die Datei ist
+         * schon UTF-16, dann wie gesichert (hin und zurueck aendert nichts) */
+        d->utf16_bom = btn_enc_is_utf16(d->saved_enc) ? d->saved_utf16_bom : 1;
     }
     d->enc = enc;
 }
@@ -2585,6 +2597,14 @@ static int ensure_encodable(Document *d) {
     return ok;
 }
 
+/* Abgebrochenes Schliessen: Tabs ab from (noch nicht gesichert) bekommen
+ * ihre Kodierung von vorher zurueck. */
+static void restore_encodings(const BtnEncoding *before, int from) {
+    for (int i = from; i < g_doc_count; i++) {
+        g_docs[i].enc = before[i];
+    }
+}
+
 /* Wird vom Shim sowohl beim Klick auf den roten Schliessen-Knopf als auch
  * bei Cmd+Q/"Beende" aufgerufen (windowShouldClose:/applicationShouldTerminate:)
  * - zentral hier statt separat pro Aufrufer, damit keiner dieser beiden
@@ -2604,6 +2624,12 @@ static int should_close(void) {
     commit_marked();
     int original_active = g_active_doc;
     int choices[MAX_TABS]; /* -1 = sauber, sonst der Alert-Rueckgabewert */
+    /* "Als UTF-8 sichern" gilt nur fuer dieses Sichern: wird abgebrochen
+     * (oder schlaegt es fehl), behalten ungesicherte Tabs ihre Kodierung */
+    BtnEncoding enc_before[MAX_TABS];
+    for (int i = 0; i < g_doc_count; i++) {
+        enc_before[i] = g_docs[i].enc;
+    }
 
     for (int i = 0; i < g_doc_count; i++) {
         if (!doc_is_dirty(&g_docs[i])) {
@@ -2622,6 +2648,7 @@ static int should_close(void) {
          * fassen kann - nicht erst beim Schreiben unten, wenn schon andere
          * Tabs gesichert sind und der Tab nicht mehr zu sehen ist */
         if (choice == 0 || (choice == 1 && !ensure_encodable(&g_docs[i]))) {
+            restore_encodings(enc_before, 0);
             switch_to_tab(original_active);
             return 0;
         }
@@ -2631,6 +2658,8 @@ static int should_close(void) {
 
     for (int i = 0; i < g_doc_count; i++) {
         if (choices[i] == 1 && !perform_save_doc(&g_docs[i], 0)) {
+            restore_encodings(enc_before, i);
+            sync_window_state();
             return 0;
         }
     }
@@ -3982,7 +4011,12 @@ static void on_key(const char *characters, unsigned short keycode, unsigned long
     int had_ghost = ghost_visible();
     size_t c0 = ed->cursor, l0 = editor_length(ed);
     if (c == '\r') {
-        editor_insert_newline(ed, active_indent_rules()); /* Einrueckung der Zeile, nach '{' eine mehr */
+        /* Einrueckung der Zeile, nach '{' eine mehr. Gemischte Zeilenenden
+         * (bytegenau gesichert): in einer ueberwiegend CRLF-Datei auch CRLF,
+         * sonst wuerde sie mit jedem Return gemischter */
+        Document *d = active_doc();
+        int crlf = g_focus == BTN_FOCUS_DOCUMENT && d->eol_raw && d->eol == BTN_EOL_CRLF;
+        editor_insert_newline_eol(ed, active_indent_rules(), crlf ? "\r\n" : "\n");
     } else if (c == 0x7F) {
         editor_delete_backward(ed);
     } else if (c >= 0x20) {

@@ -434,6 +434,17 @@ int main(void) {
               "checkmark moves");
         CHECK([modelMenu numberOfItems] == 2, "no status, no models: only refresh and test");
 
+        /* ---- Zwischenablage: ungueltiges UTF-8 nur dort als Latin-1 ---- */
+        CHECK(btn_pasteboard_set_string("Gr\xC3\xB6\xC3\x9F" "e \x96 x", 11), "set string with a stray byte");
+        NSString *clip = [[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
+        const unichar want_clip[] = { 'G', 'r', 0xF6, 0xDF, 'e', ' ', 0x96, ' ', 'x' };
+        CHECK([clip isEqualToString:[NSString stringWithCharacters:want_clip length:9]],
+              "umlauts survive next to a stray byte (%s)", [clip UTF8String]);
+        size_t clip_len;
+        char *back = btn_pasteboard_copy_string(&clip_len);
+        CHECK(clip_len == 12 && memcmp(back, "Gr\xC3\xB6\xC3\x9F" "e \xC2\x96 x", 12) == 0, "paste back: only the stray byte changes");
+        free(back);
+
         /* ---- Dateien ins Fenster ziehen ---- */
         btn_app_set_open_file_callback(open_cb);
         CHECK([[view registeredDraggedTypes] containsObject:NSPasteboardTypeFileURL], "view accepts dragged file URLs");

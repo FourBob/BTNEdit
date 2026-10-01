@@ -35,6 +35,27 @@ static void expect_bytes(Editor *ed, const char *expected, size_t expected_len, 
 int main(void) {
     Editor ed;
 
+    /* ---- Ueber eine Selektion tippen: ein Undo-Schritt ---- */
+    editor_init(&ed);
+    editor_set_text(&ed, "hello world", 11);
+    editor_set_cursor(&ed, 6, 0);
+    editor_set_cursor(&ed, 11, 1);
+    editor_insert_text(&ed, "X", 1);
+    expect_bytes(&ed, "hello X", 7, "typed over selection");
+    editor_undo(&ed);
+    expect_bytes(&ed, "hello world", 11, "one undo restores the selected text");
+    editor_redo(&ed);
+    expect_bytes(&ed, "hello X", 7, "redo replaces again");
+    editor_set_cursor(&ed, 0, 0);
+    editor_set_cursor(&ed, 5, 1);
+    editor_insert_text(&ed, "A", 1);
+    editor_insert_text(&ed, "B", 1); /* weitergetippt */
+    expect_bytes(&ed, "AB X", 4, "typed on after replacing");
+    editor_undo(&ed);
+    editor_undo(&ed);
+    expect_bytes(&ed, "hello X", 7, "at most two undos back to the original");
+    editor_free(&ed);
+
     /* ---- Fix 2: Pfeil links/rechts zeichenweise ---- */
     editor_init(&ed);
     editor_insert_text(&ed, "a\xC3\xA4" "b", 4);         /* a ä b = 4 Bytes, 3 Zeichen */

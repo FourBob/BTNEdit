@@ -780,7 +780,11 @@ void editor_insert_text(Editor *ed, const char *text, size_t len) {
     if (len == 0) {
         return;
     }
-    if (editor_has_selection(ed)) {
+    /* Ueber eine Selektion getippt/eingefuegt: Loeschen und Einfuegen sind
+     * EIN Undo-Schritt - sonst liess das erste Cmd+Z die Selektion geloescht */
+    int grouped = editor_has_selection(ed);
+    if (grouped) {
+        editor_begin_undo_group(ed);
         editor_delete_selection(ed);
     }
 
@@ -798,6 +802,9 @@ void editor_insert_text(Editor *ed, const char *text, size_t len) {
     ed->desired_col = UNSET_COL;
     mark_content_changed(ed, pos);
     free(sanitized);
+    if (grouped) {
+        editor_end_undo_group(ed);
+    }
 }
 
 /* Ersetzt die aktuelle Selektion durch open_c...close_c mit dem bisherigen
@@ -1230,6 +1237,11 @@ static size_t leading_ws(Editor *ed, size_t line, size_t limit) {
 }
 
 void editor_insert_newline(Editor *ed, int rules) {
+    editor_insert_newline_eol(ed, rules, "\n");
+}
+
+void editor_insert_newline_eol(Editor *ed, int rules, const char *newline) {
+    size_t nl_len = strlen(newline);
     size_t start = editor_selection_start(ed), end = editor_selection_end(ed);
     size_t line = line_start_at(ed, start);
     size_t n = leading_ws(ed, line, start);
@@ -1261,10 +1273,15 @@ void editor_insert_newline(Editor *ed, int rules) {
 
     char unit[BTN_TAB_WIDTH];
     size_t ul = deeper ? indent_unit(ed, unit) : 0;
-    size_t cap = 2 + 2 * n + ul;
+    if (ed->single_line) {
+        newline = "\n"; /* Suchfeld: wie bisher (unten auf ein Zeichen gekuerzt) */
+        nl_len = 1;
+    }
+    size_t cap = 2 * nl_len + 2 * n + ul;
     char *text = btn_xmalloc(cap);
     size_t t = 0;
-    text[t++] = '\n';
+    memcpy(text + t, newline, nl_len);
+    t += nl_len;
     for (size_t i = 0; i < n; i++) {
         text[t++] = gb_char_at(&ed->buffer, line + i);
     }
@@ -1272,7 +1289,8 @@ void editor_insert_newline(Editor *ed, int rules) {
     t += ul;
     size_t cursor_at = t; /* relativ zum Einfuegepunkt */
     if (split) {
-        text[t++] = '\n';
+        memcpy(text + t, newline, nl_len);
+        t += nl_len;
         for (size_t i = 0; i < n; i++) {
             text[t++] = gb_char_at(&ed->buffer, line + i);
         }

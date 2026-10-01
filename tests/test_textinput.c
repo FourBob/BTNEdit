@@ -76,6 +76,15 @@ static void test_units(void) {
     for (size_t u = 0; u < 8; u++) {
         CHECK(btn_ti_utf16_to_bytes(s, len, u) == want[u], "to_bytes(%zu) = %zu want %zu", u, btn_ti_utf16_to_bytes(s, len, u), want[u]);
     }
+    /* Zwischenablage: Zeichen fuer Zeichen, nur das kaputte Byte als Latin-1 */
+    size_t n16;
+    uint16_t *u = btn_ti_to_utf16("Gr\xC3\xB6\xC3\x9F" "e \x96 \xF0\x9F\x98\x80\0x", 16, &n16);
+    uint16_t want16[] = { 'G', 'r', 0xF6, 0xDF, 'e', ' ', 0x96, ' ', 0xD83D, 0xDE00, 0, 'x' };
+    CHECK(n16 == 12 && memcmp(u, want16, sizeof want16) == 0, "to_utf16: valid chars kept, stray byte U+0096, NUL kept (%zu)", n16);
+    free(u);
+    u = btn_ti_to_utf16("", 0, &n16);
+    CHECK(n16 == 0, "to_utf16: empty");
+    free(u);
     BtnMarkedText m = { 0 };
     btn_marked_set(&m, "ni\xE4\xBD\xA0", 5, 2, 1);
     CHECK(m.len == 5 && m.sel_start == 2 && m.sel_end == 5 && m.text[5] == 0, "marked selection in bytes");
