@@ -210,6 +210,20 @@ static void test_glue(void) {
     CHECK(doc_is("ac") && g_doc.cursor == 1, "composition deletes the selection");
     ti_insert_text("\xC3\xA9", -1, 0);
     CHECK(doc_is("a\xC3\xA9" "c"), "and the committed text takes its place");
+    ti_insert_text("y", -1, 0);
+    editor_undo(&g_doc);
+    CHECK(doc_is("a\xC3\xA9" "c"), "typing after the commit is a step of its own (group closed)");
+    editor_undo(&g_doc);
+    CHECK(doc_is("abc"), "one undo brings the selection back");
+    /* abgebrochen: Loeschen allein ist ein Schritt, danach keine offene Gruppe */
+    editor_set_cursor(&g_doc, 1, 0);
+    editor_set_cursor(&g_doc, 2, 1);
+    ti_set_marked_text("k", 1, 0, -1, 0);
+    ti_set_marked_text("", 0, 0, -1, 0);
+    ti_insert_text("x", -1, 0);
+    CHECK(doc_is("axc"), "after a cancelled composition typing goes on");
+    editor_undo(&g_doc);
+    CHECK(doc_is("ac"), "and is its own undo step (no group left open)");
 
     /* Akzent-Menue beim Gedrueckthalten: e tippen, dann e-Akut ersetzt das Zeichen davor */
     reset_doc("q", 1);

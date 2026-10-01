@@ -231,9 +231,10 @@ void btn_render_set_marked_text(const char *utf8, size_t len, size_t caret, int 
  * (bounds = ganzes Fenster). */
 CGRect btn_render_caret_rect(Editor *ed, CGRect bounds, long scroll_row, long scroll_col, size_t offset);
 CGRect btn_render_find_caret_rect(CGRect bounds, Editor *field, int replace_field, size_t offset);
-/* Gesetzte Breite von UTF-8-Text in der Editor-Schrift (vorlaeufiger Text:
- * Position eines Zeichens darin fuer das Kandidatenfenster). */
-double btn_render_text_width(const char *utf8, size_t len);
+/* Gesetzte Breite von UTF-8-Text (vorlaeufiger Text: Position eines
+ * Zeichens darin fuer das Kandidatenfenster) - document = 1: in der
+ * gezoomten Dokument-Schrift, 0: in der Schrift der Suchleiste. */
+double btn_render_text_width(const char *utf8, size_t len, int document);
 
 /* Wie viele Rows bei dieser Inhaltshoehe (ohne Tab-/Suchleiste) VOLL ueber
  * dem Footer sichtbar sind - mit demselben oberen Innenabstand, den

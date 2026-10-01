@@ -206,6 +206,10 @@ int main(void) {
         CHECK(perform_find(1) && sel_is(0, 1), "past the last: around to the first");
         CHECK(strcmp(g_search_status, "Match 1 of 5000+") == 0, "status in the capped list (%s)", g_search_status);
         CHECK(perform_find(0) && sel_is(11998, 11999), "before the first: around to the very last (not #5000)");
+        /* Live-Suche: Anker hinter dem Deckel bleibt dort */
+        g_search_anchor = 11000;
+        perform_live_search();
+        CHECK(sel_is(11000, 11001), "live search past the cap stays at the anchor");
         g_search_all_tabs = 1;
         editor_set_cursor(&g_docs[0].editor, 0, 0);
         set_text(3, "x");
@@ -222,12 +226,23 @@ int main(void) {
         }
         g_active_doc = 0;
         editor_set_text(&g_docs[0].editor, many, 2 * n);
-        free(many);
+        char *many_tail = many;
         g_search_regex = 1;
         set_query("^");
         editor_set_cursor(&g_docs[0].editor, 11000, 0);
+        CHECK(perform_find(1) && sel_is(11000, 11000), "^ beyond the cap: the line start at the cursor");
         CHECK(perform_find(1) && sel_is(11002, 11002), "^ beyond the cap: on to the next line start");
         CHECK(perform_find(1) && sel_is(11004, 11004), "and the next");
+        CHECK(perform_find(0) && sel_is(11002, 11002), "^ beyond the cap backwards: the previous");
+        editor_set_cursor(&g_docs[0].editor, 0, 0);
+        CHECK(perform_find(0) && sel_is(2 * n, 2 * n), "^ capped, before the first: around to the very last (empty last line)");
+        /* $ am Textende (ohne Schluss-Zeilenumbruch): herum, nicht haengen */
+        editor_set_text(&g_docs[0].editor, many_tail, 2 * n - 1);
+        set_query("$");
+        editor_set_cursor(&g_docs[0].editor, 2 * n - 1, 0);
+        CHECK(perform_find(1) && sel_is(2 * n - 1, 2 * n - 1), "$ at the very end");
+        CHECK(perform_find(1) && sel_is(1, 1), "$ at the end, capped: around to the first");
+        free(many_tail);
         g_search_regex = 0;
         set_text(0, "foo bar foo");
         set_text(3, "foo foo foo");
@@ -239,11 +254,24 @@ int main(void) {
     g_active_doc = 0;
     set_text(0, "a\nb\nc");
     editor_set_cursor(&g_docs[0].editor, 0, 0);
-    CHECK(perform_find(1) && sel_is(2, 2), "^: from a line start on to the next one");
+    CHECK(perform_find(1) && sel_is(0, 0), "^: the match at the cursor first");
+    CHECK(perform_find(1) && sel_is(2, 2), "^: from the found one on to the next line start");
     CHECK(perform_find(1) && sel_is(4, 4), "^: and the next");
     CHECK(perform_find(1) && sel_is(0, 0), "^: wraps to the first");
     CHECK(perform_find(0) && sel_is(4, 4), "^ backwards: the last");
     CHECK(perform_find(0) && sel_is(2, 2), "^ backwards: the previous");
+    /* Ersetzen + Weiter: jeder Zeilenanfang genau einmal, der markierte zuerst */
+    editor_set_text(&g_replace_editor, "> ", 2);
+    editor_set_cursor(&g_docs[0].editor, 0, 0);
+    perform_find(1);
+    perform_replace_current();
+    CHECK(text_is(0, "> a\nb\nc") && sel_is(4, 4), "replace + next with ^: the found line start first, then on");
+    perform_replace_current();
+    CHECK(text_is(0, "> a\n> b\nc"), "replace + next: the next line");
+    perform_replace_current();
+    CHECK(text_is(0, "> a\n> b\n> c"), "replace + next with ^: every line once, in order");
+    editor_set_text(&g_replace_editor, "X", 1);
+    set_text(0, "a\nb\nc");
     set_query("$");
     editor_set_cursor(&g_docs[0].editor, 0, 0);
     CHECK(perform_find(1) && sel_is(1, 1) && perform_find(1) && sel_is(3, 3) && perform_find(1) && sel_is(5, 5),
@@ -255,6 +283,7 @@ int main(void) {
     g_search_all_tabs = 1;
     g_active_doc = 1;
     editor_set_cursor(&g_docs[1].editor, 2, 0);
+    CHECK(perform_find(1) && g_active_doc == 1 && sel_is(2, 2), "all tabs: the empty match at the cursor first");
     perform_find(1);
     CHECK(g_active_doc == 0 && sel_is(0, 0), "all tabs: the only empty match here moves on to the next tab (tab %d)", g_active_doc);
     g_search_all_tabs = 0;

@@ -752,7 +752,9 @@ static void draw_gutter(CGContextRef ctx, CGRect bounds, const BtnRow *rows, siz
     CGPoint divider[2] = { { GUTTER_WIDTH, BTN_FOOTER_HEIGHT }, { GUTTER_WIDTH, bounds.size.height } };
     CGContextStrokeLineSegments(ctx, divider, 2);
 
-    FontSet *saved = use_fonts(&g_ui_fonts); /* Zeilennummern in fester Groesse */
+    /* Zeilennummern in fester Groesse - verkleinert nur mit dem Text, sonst
+     * stiessen sie in den niedrigeren Zeilen aneinander */
+    FontSet *saved = use_fonts(g_doc_fonts.size < g_ui_fonts.size ? &g_doc_fonts : &g_ui_fonts);
     CFDictionaryRef attrs = get_gutter_attrs();
     use_fonts(saved);
 
@@ -1160,12 +1162,12 @@ static CTLineRef make_line(const char *utf8, size_t len, CFDictionaryRef attrs, 
     return line;
 }
 
-double btn_render_text_width(const char *utf8, size_t len) {
+double btn_render_text_width(const char *utf8, size_t len, int document) {
     if (len == 0) {
         return 0.0;
     }
-    /* vorlaeufiger Text im Suchfeld: Leisten-Schrift, im Dokument: Zoom */
-    FontSet *saved = use_fonts(g_marked.target == BTN_MARKED_DOCUMENT ? &g_doc_fonts : &g_ui_fonts);
+    /* im Dokument: Zoom, im Suchfeld: Leisten-Schrift */
+    FontSet *saved = use_fonts(document ? &g_doc_fonts : &g_ui_fonts);
     CFDictionaryRef attrs = get_text_attrs();
     use_fonts(saved);
     CTLineRef line = make_line(utf8, len, attrs, NULL);

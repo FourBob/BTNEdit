@@ -968,6 +968,29 @@ static int find_match(const char *text, size_t text_len, size_t from, int forwar
     return found;
 }
 
+/* Letzter Treffer, der vor before beginnt ((size_t)-1: der letzte ueberhaupt),
+ * beim Scannen ab scan - scan muss ein Treffer-Anfang aus dem Scan ab 0 sein
+ * (oder 0), damit dieselben, nicht ueberlappenden Treffer herauskommen. */
+static int find_last_match(const char *text, size_t len, size_t scan, size_t before, size_t *ms, size_t *me) {
+    regex_t re;
+    if (editor_length(&g_search_editor) == 0 || !compile_search_regex(&re)) {
+        return 0;
+    }
+    int found = 0;
+    while (scan <= len) {
+        size_t s0, e0;
+        if (!regex_search_from(&re, text, len, scan, regexec_flags_for(text, scan), &s0, &e0) || s0 >= before) {
+            break;
+        }
+        found = 1;
+        *ms = s0;
+        *me = e0;
+        scan = regex_next_scan(text, len, s0, e0);
+    }
+    regfree(&re);
+    return found;
+}
+
 /* Sammelt ALLE (nicht ueberlappenden, von links nach rechts gefundenen)
  * Treffer der aktuellen Suchanfrage in text[0,text_len) - dieselbe
  * Vorwaerts-Scan-Schleife wie der Rueckwaerts-Zweig von find_match() oben,
@@ -1397,11 +1420,21 @@ static void perform_live_search(void) {
     g_match_count = collect_all_matches(text, len, g_match_starts, g_match_ends, BTN_MAX_SEARCH_MATCHES);
     g_match_edit_seq = ed->edit_seq;
 
-    size_t idx;
-    if (pick_current_match(g_match_starts, g_match_count, g_search_anchor, &idx)) {
-        editor_set_cursor(ed, g_match_starts[idx], 0);
-        editor_set_cursor(ed, g_match_ends[idx], 1);
-        set_match_count_status(g_match_starts[idx]);
+    size_t idx, ms = 0, me = 0;
+    int found = pick_current_match(g_match_starts, g_match_count, g_search_anchor, &idx);
+    if (found) {
+        ms = g_match_starts[idx];
+        me = g_match_ends[idx];
+    }
+    /* Gekappte Liste, Anker hinter ihrem letzten Treffer: direkt suchen statt
+     * an den Anfang zu springen */
+    if (found && g_match_count == BTN_MAX_SEARCH_MATCHES && g_search_anchor > g_match_starts[g_match_count - 1]) {
+        found = find_match(text, len, g_search_anchor, 1, 1, &ms, &me);
+    }
+    if (found) {
+        editor_set_cursor(ed, ms, 0);
+        editor_set_cursor(ed, me, 1);
+        set_match_count_status(ms);
         sync_scroll_to_cursor();
     } else {
         snprintf(g_search_status, sizeof(g_search_status), "%s", btn_tr(BTN_STR_FIND_NOT_FOUND));
@@ -1434,11 +1467,28 @@ static int navigate_match(const char *text, size_t len, size_t from, int forward
             *ms = g_match_starts[idx];
             *me = g_match_ends[idx];
         }
-    } else {
-        found = find_match(text, len, from, forward, 1, ms, me);
+    } else if (forward) {
+        found = find_match(text, len, from, 1, 1, ms, me);
         if (found && skip_empty && *ms == from && *me == from) {
-            find_match(text, len, regex_next_scan(text, len, from, from), 1, 1, ms, me);
+            size_t next = regex_next_scan(text, len, from, from);
+            find_match(text, len, next > len ? 0 : next, 1, 1, ms, me); /* hinter dem Ende: von vorn */
             skipped = 1;
+        }
+    } else {
+        /* Rueckwaerts ab dem letzten Listeneintrag statt ab dem Textanfang
+         * (der ist ein gueltiger Scan-Punkt): sonst ein Vollscan je Druck */
+        size_t last = g_match_starts[g_match_count - 1];
+        if (from <= last) {
+            size_t idx;
+            found = pick_match_for_navigation(g_match_starts, g_match_count, from, 0, &idx);
+            if (found && g_match_starts[idx] < from) {
+                *ms = g_match_starts[idx];
+                *me = g_match_ends[idx];
+            } else { /* vor dem ersten: herum zum allerletzten */
+                found = find_last_match(text, len, last, (size_t)-1, ms, me);
+            }
+        } else {
+            found = find_last_match(text, len, last, from, ms, me);
         }
     }
     *wrapped = found && (forward ? *ms < from || (skipped && *ms == from) : *ms >= from);
@@ -1452,7 +1502,13 @@ static int navigate_match(const char *text, size_t len, size_t from, int forward
  * ein Treffer gefunden wurde - editor_has_selection() waere hierfuer NICHT
  * zuverlaessig, weil ein leerer Regex-Treffer (z.B. "a*" oder "^") cursor==
  * anchor hinterlaesst, obwohl durchaus etwas gefunden wurde. */
-static int perform_find(int forward) {
+/* Zuletzt per Weitersuchen angesprungener leerer Treffer - nur der wird beim
+ * naechsten Mal uebersprungen (Ersetzen + Weiter, Klick dorthin oder eine
+ * Aenderung: nicht). */
+static Editor *g_empty_hit_ed = NULL;
+static size_t g_empty_hit_pos, g_empty_hit_seq;
+
+static int perform_find_ex(int forward, int may_skip_empty) {
     Document *d = active_doc();
     Editor *ed = &d->editor;
     size_t len;
@@ -1470,7 +1526,9 @@ static int perform_find(int forward) {
 
     size_t match_start = 0, match_end = 0;
     int wrapped;
-    int found = navigate_match(text, len, from, forward, !editor_has_selection(ed), &match_start, &match_end, &wrapped);
+    int skip_empty = may_skip_empty && !editor_has_selection(ed) && g_empty_hit_ed == ed && g_empty_hit_pos == from &&
+                     g_empty_hit_seq == ed->edit_seq;
+    int found = navigate_match(text, len, from, forward, skip_empty, &match_start, &match_end, &wrapped);
     free(text);
     /* Alle Tabs: am Ende dieses Dokuments nicht herumlaufen, sondern in den
      * naechsten (vorigen) Tab mit Treffer, dort auf den ersten (letzten). */
@@ -1500,6 +1558,9 @@ static int perform_find(int forward) {
         editor_set_cursor(ed, match_end, 1);
         g_search_anchor = forward ? match_end : match_start;
         set_match_count_status(match_start);
+        g_empty_hit_ed = match_start == match_end ? ed : NULL;
+        g_empty_hit_pos = match_start;
+        g_empty_hit_seq = ed->edit_seq;
     } else {
         snprintf(g_search_status, sizeof(g_search_status), "%s", btn_tr(BTN_STR_FIND_NOT_FOUND));
     }
@@ -1507,6 +1568,10 @@ static int perform_find(int forward) {
     sync_scroll_to_cursor();
     btn_app_request_redraw();
     return found;
+}
+
+static int perform_find(int forward) {
+    return perform_find_ex(forward, 1);
 }
 
 /* Bearbeiten > Weitersuchen / Rueckwaerts suchen (Cmd+G / Shift+Cmd+G) - mit
@@ -1757,7 +1822,9 @@ static void perform_replace_current(void) {
          * zu pruefen - ein gefundener, aber leerer Regex-Treffer (z.B. "a*")
          * hinterlaesst cursor==anchor und wuerde von editor_has_selection()
          * faelschlich als "nichts gefunden" gelesen. */
-        if (!perform_find(1)) {
+        /* Ohne Ueberspringen: ein leerer Treffer am Cursor ("^") ist genau
+         * der, den Weitersuchen eben angesprungen hat - der wird ersetzt */
+        if (!perform_find_ex(1, 0)) {
             return;
         }
         ed = &active_doc()->editor; /* alle Tabs: der Treffer kann in einem anderen Tab liegen */
@@ -4095,6 +4162,17 @@ static void select_ti_range(long loc, long len) {
     }
 }
 
+/* Eingabe ueber eine Selektion: Gruppe vom Loeschen (ti_set_marked_text)
+ * bis zum Festschreiben bzw. Abbrechen. */
+static Editor *g_marked_undo_ed = NULL;
+
+static void end_marked_undo_group(void) {
+    if (g_marked_undo_ed) {
+        editor_end_undo_group(g_marked_undo_ed);
+        g_marked_undo_ed = NULL;
+    }
+}
+
 static void ti_insert_text(const char *utf8, long repl_loc, long repl_len) {
     int had_marked = g_marked.len > 0;
     btn_marked_clear(&g_marked);
@@ -4115,21 +4193,28 @@ static void ti_insert_text(const char *utf8, long repl_loc, long repl_len) {
     } else {
         btn_app_request_redraw();
     }
+    end_marked_undo_group();
 }
 
 static void ti_set_marked_text(const char *utf8, long sel_loc, long sel_len, long repl_loc, long repl_len) {
     size_t len = strlen(utf8);
     if (g_marked.len == 0 && len > 0) {
-        /* Eine neue Eingabe ersetzt die Selektion - wie in jedem Textfeld. */
+        /* Eine neue Eingabe ersetzt die Selektion - wie in jedem Textfeld.
+         * Loeschen und spaeteres Festschreiben: ein Undo-Schritt. */
         select_ti_range(repl_loc, repl_len);
         Editor *ed = focused_editor();
         if (editor_has_selection(ed)) {
+            if (!g_marked_undo_ed) {
+                editor_begin_undo_group(ed);
+                g_marked_undo_ed = ed;
+            }
             editor_delete_selection(ed);
             after_focused_edit();
         }
     }
     if (len == 0) {
         btn_marked_clear(&g_marked);
+        end_marked_undo_group(); /* Eingabe abgebrochen */
     } else {
         size_t units = btn_ti_utf16_len(utf8, len);
         size_t loc = sel_loc < 0 ? units : (size_t)sel_loc;
@@ -4197,7 +4282,8 @@ static CGRect ti_caret_rect(long loc) {
         size_t mu = g_marked.len ? btn_ti_utf16_len(g_marked.text, g_marked.len) : 0;
         size_t start, end;
         if (g_marked.len && (size_t)loc >= caret && (size_t)loc <= caret + mu) {
-            dx = btn_render_text_width(g_marked.text, btn_ti_utf16_to_bytes(g_marked.text, g_marked.len, (size_t)loc - caret));
+            dx = btn_render_text_width(g_marked.text, btn_ti_utf16_to_bytes(g_marked.text, g_marked.len, (size_t)loc - caret),
+                                       g_focus == BTN_FOCUS_DOCUMENT);
         } else if ((size_t)loc < caret || !g_marked.len) {
             if (btn_ti_range_to_bytes(ed, (size_t)loc, 0, &start, &end)) {
                 pos = start;

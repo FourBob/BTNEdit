@@ -25,7 +25,7 @@ HEADERS = {
         "#BTN_MAX_REGEX_GROUPS", "#BTN_MAX_EXPANDED_REPLACEMENT_LEN",
         "regexec_flags_for", "regex_search_from", "regex_next_scan",
         "regex_escape_literal", "regex_translate_tab_escapes", "compile_search_regex",
-        "find_match", "collect_all_matches", "collect_all_matches_unbounded",
+        "find_match", "find_last_match", "collect_all_matches", "collect_all_matches_unbounded",
         "replacement_has_backreferences", "replacement_needs_expansion", "expand_replacement"]),
     "save_extracted.h": ("main.c", ["write_stream_checked", "write_file_atomic", "write_file_contents"]),
     "close_extracted.h": ("main.c", ["restore_encodings", "should_close"]),
@@ -38,7 +38,8 @@ HEADERS = {
         "#BTN_MAX_SEARCH_MATCHES", "#BTN_LIVE_SEARCH_MAX_DOC_LEN", "pick_current_match", "pick_match_for_navigation",
         "next_tab_index", "set_match_count_status", "tab_counts_check_key",
         "doc_match_count", "searchable_other_tab", "append_all_tabs_status",
-        "next_tab_with_match", "perform_live_search", "navigate_match", "perform_find", "selection_is_current_match",
+        "next_tab_with_match", "perform_live_search", "navigate_match", "var:g_empty_hit_ed", "var:g_empty_hit_pos",
+        "perform_find_ex", "perform_find", "selection_is_current_match",
         "perform_replace_current", "replace_all_in_editor", "perform_replace_all"]),
     "doc_extracted.h": ("main.c", ["include:encoding.h", "typedef:Document", "doc_has_edits", "doc_is_dirty", "mark_doc_saved"]),
     "focus_extracted.h": ("main.c", ["typedef:BtnFocus"]),
@@ -50,7 +51,7 @@ HEADERS = {
         "cycle_tab"]),
     "textinput_glue_extracted.h": ("main.c", [
         "#KEYCODE_TEXT", "insert_typed_chars", "after_focused_edit", "select_ti_range",
-        "ti_insert_text", "ti_set_marked_text", "ti_unmark_text", "commit_marked", "ti_query", "ti_substring"]),
+        "var:g_marked_undo_ed", "end_marked_undo_group", "ti_insert_text", "ti_set_marked_text", "ti_unmark_text", "commit_marked", "ti_query", "ti_substring"]),
     "eol_glue_extracted.h": ("main.c", [
         "typedef:BtnReadResult", "#BTN_MAX_FILE_MB", "#BTN_MAX_FILE_SIZE", "basename_of", "looks_binary",
         "write_stream_checked", "write_file_atomic", "write_file_contents", "read_file_contents",

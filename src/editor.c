@@ -234,6 +234,7 @@ static void undo_stack_init(UndoStack *st) {
     st->open_group = 0;
     st->last_group = 0;
     st->group_depth = 0;
+    st->join_group = 0;
 }
 
 static void undo_stack_free(UndoStack *st) {
@@ -338,7 +339,9 @@ static void undo_push_insert(Editor *ed, size_t pos, const char *text, size_t le
         /* Genau EIN Zeichen (auch mehrbytig - "ae" sind 2 Bytes), nicht nur
          * len == 1: sonst begann jeder Umlaut einen neuen Undo-Schritt, und
          * Cmd+Z nahm deutsche Saetze in Bruchstuecken zurueck. */
-        if (last->is_insert && last->group == st->open_group && last->pos + last->len == pos &&
+        int same_group = last->group == st->open_group ||
+                         (st->open_group == 0 && st->join_group != 0 && last->group == st->join_group);
+        if (last->is_insert && same_group && last->pos + last->len == pos &&
             btn_utf8_char_len((const unsigned char *)text, len) == len &&
             text[0] != '\n' && (last->len == 0 || last->text[last->len - 1] != '\n')) {
             if (!record_grow(last, len)) {
@@ -803,7 +806,14 @@ void editor_insert_text(Editor *ed, const char *text, size_t len) {
     mark_content_changed(ed, pos);
     free(sanitized);
     if (grouped) {
+        unsigned long group = ed->undo.open_group;
         editor_end_undo_group(ed);
+        if (ed->undo.group_depth == 0) {
+            /* Weitertippen gehoert noch dazu: ein Cmd+Z holt die Selektion
+             * zurueck, statt erst das Getippte ohne das erste Zeichen */
+            ed->suppress_coalesce = 0;
+            ed->undo.join_group = group;
+        }
     }
 }
 

@@ -50,10 +50,16 @@ int main(void) {
     editor_set_cursor(&ed, 5, 1);
     editor_insert_text(&ed, "A", 1);
     editor_insert_text(&ed, "B", 1); /* weitergetippt */
-    expect_bytes(&ed, "AB X", 4, "typed on after replacing");
+    editor_insert_text(&ed, "\xC3\xA4", 2);
+    expect_bytes(&ed, "AB\xC3\xA4 X", 6, "typed on after replacing");
     editor_undo(&ed);
+    expect_bytes(&ed, "hello X", 7, "one undo: typing over a selection and on");
+    editor_redo(&ed);
+    expect_bytes(&ed, "AB\xC3\xA4 X", 6, "redo brings all of it back");
+    editor_set_cursor(&ed, 6, 0); /* woanders weiter: eigener Schritt */
+    editor_insert_text(&ed, "Z", 1);
     editor_undo(&ed);
-    expect_bytes(&ed, "hello X", 7, "at most two undos back to the original");
+    expect_bytes(&ed, "AB\xC3\xA4 X", 6, "typing elsewhere afterwards is its own step");
     editor_free(&ed);
 
     /* ---- Fix 2: Pfeil links/rechts zeichenweise ---- */

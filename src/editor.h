@@ -34,6 +34,9 @@ typedef struct {
     unsigned long open_group;  /* Gruppe fuer neue Records, 0 = keine offen */
     unsigned long last_group;  /* zuletzt vergebene Gruppen-ID */
     int group_depth;           /* Verschachtelung von begin/end */
+    unsigned long join_group;  /* ueber eine Selektion getippt: weitere Zeichen
+                                  wachsen in diese (geschlossene) Gruppe hinein,
+                                  solange ihr Einfuege-Record der letzte ist */
 } UndoStack;
 
 typedef struct {
