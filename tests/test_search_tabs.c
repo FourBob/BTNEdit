@@ -183,6 +183,56 @@ int main(void) {
     CHECK(text_is(0, "X bar X") && text_is(2, "a foo") && strcmp(g_search_status, "2 replaced") == 0,
           "off: only the active tab (%s)", g_search_status);
 
+    /* Mehr Treffer als die Liste fasst (BTN_MAX_SEARCH_MATCHES): Weitersuchen
+     * erreicht auch die dahinter und springt nicht zurueck */
+    {
+        size_t n = 6000;
+        char *many = malloc(2 * n);
+        for (size_t i = 0; i < n; i++) {
+            many[2 * i] = 'x';
+            many[2 * i + 1] = ' ';
+        }
+        g_search_all_tabs = 0;
+        g_active_doc = 0;
+        editor_set_text(&g_docs[0].editor, many, 2 * n);
+        free(many);
+        set_query("x");
+        editor_set_cursor(&g_docs[0].editor, 11000, 0); /* bei Treffer 5501 */
+        CHECK(perform_find(1) && sel_is(11000, 11001), "beyond the cap: the match at the cursor");
+        CHECK(strcmp(g_search_status, "Match after the first 5000") == 0, "status beyond the cap (%s)", g_search_status);
+        CHECK(perform_find(1) && sel_is(11002, 11003), "beyond the cap: next");
+        CHECK(perform_find(0) && sel_is(11000, 11001), "beyond the cap: previous");
+        editor_set_cursor(&g_docs[0].editor, 2 * n, 0);
+        CHECK(perform_find(1) && sel_is(0, 1), "past the last: around to the first");
+        CHECK(strcmp(g_search_status, "Match 1 of 5000+") == 0, "status in the capped list (%s)", g_search_status);
+        CHECK(perform_find(0) && sel_is(11998, 11999), "before the first: around to the very last (not #5000)");
+        g_search_all_tabs = 1;
+        editor_set_cursor(&g_docs[0].editor, 0, 0);
+        set_text(3, "x");
+        g_active_doc = 3;
+        editor_set_cursor(&g_docs[3].editor, 0, 0);
+        CHECK(perform_find(0), "all tabs backwards into a capped tab");
+        CHECK(g_active_doc == 0 && sel_is(11998, 11999), "lands on its very last match (tab %d)", g_active_doc);
+        g_search_all_tabs = 0;
+        /* leere Treffer hinter dem Deckel: 6000 Zeilen "a", Regex ^ */
+        many = malloc(2 * n);
+        for (size_t i = 0; i < n; i++) {
+            many[2 * i] = 'a';
+            many[2 * i + 1] = '\n';
+        }
+        g_active_doc = 0;
+        editor_set_text(&g_docs[0].editor, many, 2 * n);
+        free(many);
+        g_search_regex = 1;
+        set_query("^");
+        editor_set_cursor(&g_docs[0].editor, 11000, 0);
+        CHECK(perform_find(1) && sel_is(11002, 11002), "^ beyond the cap: on to the next line start");
+        CHECK(perform_find(1) && sel_is(11004, 11004), "and the next");
+        g_search_regex = 0;
+        set_text(0, "foo bar foo");
+        set_text(3, "foo foo foo");
+    }
+
     /* Leere Regex-Treffer: Weitersuchen kommt voran (Zeilenanfaenge 0, 2, 4) */
     g_search_regex = 1;
     set_query("^");

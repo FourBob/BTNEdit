@@ -343,7 +343,7 @@ static long ns_loc(NSRange r) {
 
 - (void)scrollWheel:(NSEvent *)event {
     if (g_scroll_cb) {
-        g_scroll_cb([event scrollingDeltaX], [event scrollingDeltaY]);
+        g_scroll_cb([event scrollingDeltaX], [event scrollingDeltaY], [event hasPreciseScrollingDeltas] ? 1 : 0);
     }
 }
 

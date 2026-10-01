@@ -1114,21 +1114,20 @@ static int next_tab_index(int current, int count, int delta) {
 
 /* Baut den Trefferzaehler-Status ("3 von 12 Treffern") fuer den Treffer bei
  * match_start in der zuletzt via collect_all_matches() befuellten
- * g_match_starts/g_match_count. Falls match_start dort nicht vorkommt (nur
- * im pathologischen Fall eines durch BTN_MAX_SEARCH_MATCHES gekappten
- * Dokuments mit mehr Treffern als die Obergrenze erlaubt), wird 1 gezeigt -
- * kosmetisch ungenau fuer diesen Randfall, aber kein Absturz und kein
- * teurer zweiter Scan nur dafuer. */
+ * g_match_starts/g_match_count. Gekappte Liste: "3 von 5000+", ein Treffer
+ * dahinter "nach den ersten 5000". */
 static void set_match_count_status(size_t match_start) {
-    size_t idx = 0;
+    int capped = g_match_count == BTN_MAX_SEARCH_MATCHES;
     for (size_t i = 0; i < g_match_count; i++) {
         if (g_match_starts[i] == match_start) {
-            idx = i;
-            break;
+            snprintf(g_search_status, sizeof(g_search_status),
+                     btn_tr(capped ? BTN_STR_FIND_COUNT_MANY_FMT : BTN_STR_FIND_COUNT_FMT), (int)(i + 1),
+                     (int)g_match_count);
+            return;
         }
     }
-    snprintf(g_search_status, sizeof(g_search_status), btn_tr(BTN_STR_FIND_COUNT_FMT),
-             (int)(idx + 1), (int)g_match_count);
+    /* hinter dem Deckel der Liste: Nummer unbekannt (kein zweiter Scan) */
+    snprintf(g_search_status, sizeof(g_search_status), btn_tr(BTN_STR_FIND_BEYOND_FMT), (int)g_match_count);
 }
 
 /* ---- Suche ueber alle Tabs ---- */
@@ -1412,6 +1411,40 @@ static void perform_live_search(void) {
     btn_app_request_redraw();
 }
 
+/* Naechster (forward) bzw. voriger Treffer ab from fuer Weitersuchen, mit
+ * Herumlaufen (*wrapped). Aus der Trefferliste g_match_*, solange sie
+ * vollstaendig ist; ist sie gekappt (BTN_MAX_SEARCH_MATCHES), direkt per
+ * Regex ab from - sonst waeren Treffer dahinter unerreichbar und
+ * Weitersuchen spraenge zurueck an den Anfang. skip_empty: ein leerer
+ * Treffer genau bei from ("^", "$", "^$") ist der eben gefundene - weiter
+ * zum naechsten, sonst bliebe Weitersuchen stehen; gibt es nur ihn, zaehlt
+ * das als herumgelaufen (alle Tabs: weiter). */
+static int navigate_match(const char *text, size_t len, size_t from, int forward, int skip_empty, size_t *ms,
+                          size_t *me, int *wrapped) {
+    int found, skipped = 0;
+    skip_empty = skip_empty && forward;
+    if (g_match_count < BTN_MAX_SEARCH_MATCHES) {
+        size_t idx;
+        found = pick_match_for_navigation(g_match_starts, g_match_count, from, forward, &idx);
+        if (found && skip_empty && g_match_starts[idx] == from && g_match_ends[idx] == from) {
+            idx = (idx + 1) % g_match_count;
+            skipped = 1;
+        }
+        if (found) {
+            *ms = g_match_starts[idx];
+            *me = g_match_ends[idx];
+        }
+    } else {
+        found = find_match(text, len, from, forward, 1, ms, me);
+        if (found && skip_empty && *ms == from && *me == from) {
+            find_match(text, len, regex_next_scan(text, len, from, from), 1, 1, ms, me);
+            skipped = 1;
+        }
+    }
+    *wrapped = found && (forward ? *ms < from || (skipped && *ms == from) : *ms >= from);
+    return found;
+}
+
 /* Sucht den naechsten/vorigen Treffer ab der aktuellen Selektion (oder dem
  * Cursor, falls keine besteht) und selektiert ihn - editor_set_cursor()
  * zweimal (erst ohne, dann mit extend) baut die neue Selektion sauber auf,
@@ -1434,22 +1467,13 @@ static int perform_find(int forward) {
      * und der Nutzer sofort Return drueckt, ohne vorher zu tippen). */
     g_match_count = collect_all_matches(text, len, g_match_starts, g_match_ends, BTN_MAX_SEARCH_MATCHES);
     g_match_edit_seq = ed->edit_seq;
-    free(text);
 
-    size_t idx;
-    int found = pick_match_for_navigation(g_match_starts, g_match_count, from, forward, &idx);
-    /* Leerer Treffer genau am Cursor ("^", "$", "^$"): das ist der eben
-     * gefundene - weiter zum naechsten, sonst bliebe Weitersuchen stehen.
-     * Gibt es nur ihn, zaehlt das als herumgelaufen (alle Tabs: weiter). */
-    int skipped = 0;
-    if (found && forward && !editor_has_selection(ed) && g_match_starts[idx] == from && g_match_ends[idx] == from) {
-        idx = (idx + 1) % g_match_count;
-        skipped = 1;
-    }
+    size_t match_start = 0, match_end = 0;
+    int wrapped;
+    int found = navigate_match(text, len, from, forward, !editor_has_selection(ed), &match_start, &match_end, &wrapped);
+    free(text);
     /* Alle Tabs: am Ende dieses Dokuments nicht herumlaufen, sondern in den
      * naechsten (vorigen) Tab mit Treffer, dort auf den ersten (letzten). */
-    int wrapped = found && (forward ? g_match_starts[idx] < from || (skipped && g_match_starts[idx] == from)
-                                    : g_match_starts[idx] >= from);
     if (g_search_all_tabs && (!found || wrapped)) {
         int tab = next_tab_with_match(forward);
         if (tab >= 0) {
@@ -1458,15 +1482,20 @@ static int perform_find(int forward) {
             text = editor_copy_all(ed, &len);
             g_match_count = collect_all_matches(text, len, g_match_starts, g_match_ends, BTN_MAX_SEARCH_MATCHES);
             g_match_edit_seq = ed->edit_seq;
-            free(text);
+            /* dort der erste bzw. letzte (der letzte direkt per Regex: die
+             * Liste kann gekappt sein) */
             found = g_match_count > 0;
-            idx = forward ? 0 : g_match_count - 1;
+            if (found && forward) {
+                match_start = g_match_starts[0];
+                match_end = g_match_ends[0];
+            } else if (found) {
+                found = find_match(text, len, 0, 0, 1, &match_start, &match_end);
+            }
+            free(text);
         }
     }
 
     if (found) {
-        size_t match_start = g_match_starts[idx];
-        size_t match_end = g_match_ends[idx];
         editor_set_cursor(ed, match_start, 0);
         editor_set_cursor(ed, match_end, 1);
         g_search_anchor = forward ? match_end : match_start;
@@ -4437,9 +4466,15 @@ static void on_mouse(btn_mouse_phase phase, double x, double y, int clickCount, 
 /* Mausrad/Trackpad: senkrecht in Zeilen, ohne Umbruch auch seitlich in
  * Spalten (Shift+Mausrad liefert macOS schon als delta_x). Nur die
  * staerkere Richtung zaehlt - sonst wanderte das Bild beim senkrechten
- * Wischen auf dem Trackpad seitlich mit. */
-static void on_scroll(double delta_x, double delta_y) {
+ * Wischen auf dem Trackpad seitlich mit. Ein Mausrad mit Rasten meldet
+ * Zeilen statt Punkte (!precise): eine Raste = eine Zeile bzw. Spalte -
+ * vorher brauchte es dafuer rund 18 Rasten. */
+static void on_scroll(double delta_x, double delta_y, int precise) {
     btn_text_input_invalidate(); /* Kandidatenfenster folgt dem Cursor */
+    if (!precise) {
+        delta_x *= btn_render_char_width();
+        delta_y *= BTN_LINE_HEIGHT;
+    }
     if (fabs(delta_x) < fabs(delta_y)) {
         delta_x = 0.0;
     } else {

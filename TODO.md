@@ -199,8 +199,9 @@ Derzeit keine.
   im Status zeigt die Live-Suche nur, solange die anderen Tabs zusammen
   höchstens 2 MB haben (sonst erst nach Return); das erste Return mit einem
   neuen Suchbegriff kopiert und durchsucht alle Tabs (danach gemerkt, bis
-  sich Begriff oder Tab ändern). Wie im einzelnen Tab zählen und erreicht
-  die Navigation höchstens die ersten 5000 Treffer je Tab. Der Umschalter
+  sich Begriff oder Tab ändern). Wie im einzelnen Tab werden höchstens die
+  ersten 5000 Treffer je Tab gezählt und hervorgehoben ("5000+"); dahinter
+  erreicht Weitersuchen sie per direkter Suche, ohne Nummer. Der Umschalter
   wird nicht über Neustarts gemerkt; Treffer werden nur im aktiven Tab
   hervorgehoben.
 - Suchen-/Ersetzen-Felder scrollen nicht horizontal: sehr langer Text läuft

@@ -91,9 +91,11 @@ typedef void (*btn_key_callback)(const char *characters, unsigned short keycode,
 typedef void (*btn_resize_callback)(CGSize newSize);
 typedef void (*btn_menu_callback)(int tag);
 typedef void (*btn_mouse_callback)(btn_mouse_phase phase, double x, double y, int clickCount, unsigned long modifierFlags);
-/* Deltas in Punkten, positiv = nach oben bzw. nach links scrollen
- * (Trackpad-"natural scrolling" ist bereits vom System eingerechnet). */
-typedef void (*btn_scroll_callback)(double delta_x, double delta_y);
+/* Deltas positiv = nach oben bzw. nach links scrollen (Trackpad-"natural
+ * scrolling" ist bereits vom System eingerechnet). precise = 1: in Punkten
+ * (Trackpad, Magic Mouse); 0: in Zeilen bzw. Spalten (Mausrad mit Rasten,
+ * etwa 1 je Raste). */
+typedef void (*btn_scroll_callback)(double delta_x, double delta_y, int precise);
 /* Rueckgabe: 1 = Fenster schliessen/App beenden erlauben, 0 = abbrechen.
  * Wird sowohl vom roten Schliessen-Knopf (windowShouldClose:) als auch von
  * Cmd+Q/"Beende" (applicationShouldTerminate:) aufgerufen, damit keiner

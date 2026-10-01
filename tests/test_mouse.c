@@ -374,15 +374,15 @@ static void test_nowrap(void) {
     CHECK(g_doc.scroll_col == 0, "negative scroll_col clamps to 0");
 
     /* Mausrad/Trackpad: delta_x in Punkten, positiv = nach links */
-    on_scroll(-8.0 * 3, 0.0);
+    on_scroll(-8.0 * 3, 0.0, 1);
     CHECK(g_doc.scroll_col == 3 && g_doc.scroll_row == 0, "wheel left 3 columns (%ld)", g_doc.scroll_col);
-    on_scroll(-5.0, 0.0);
+    on_scroll(-5.0, 0.0, 1);
     CHECK(g_doc.scroll_col == 3, "less than a column: accumulated");
-    on_scroll(-5.0, 0.0);
+    on_scroll(-5.0, 0.0, 1);
     CHECK(g_doc.scroll_col == 4, "accumulated to a full column (%ld)", g_doc.scroll_col);
-    on_scroll(8.0 * 1000, 0.0);
+    on_scroll(8.0 * 1000, 0.0, 1);
     CHECK(g_doc.scroll_col == 0, "wheel far right: clamps at 0");
-    on_scroll(-8.0 * 100000, 0.0);
+    on_scroll(-8.0 * 100000, 0.0, 1);
     CHECK(g_doc.scroll_col == max_col, "wheel far left: clamps at the maximum (%ld)", g_doc.scroll_col);
     g_doc.scroll_col = 0;
 
@@ -464,7 +464,7 @@ static void test_nowrap(void) {
     /* Mit Umbruch: seitlich nichts */
     btn_render_set_wrap(1);
     g_doc.scroll_col = 0;
-    on_scroll(-800.0, 0.0);
+    on_scroll(-800.0, 0.0, 1);
     CHECK(g_doc.scroll_col == 0, "wrap on: wheel does not scroll sideways");
     g_doc.scroll_col = 7;
     clamp_scroll();
@@ -547,10 +547,10 @@ static void test_nowrap_review(void) {
     g_doc.scroll_col = 0;
     g_doc.scroll_row = 0;
     g_doc.hscroll_accum = 0.0;
-    on_scroll(-7.0, -40.0);
-    on_scroll(-7.0, -40.0);
+    on_scroll(-7.0, -40.0, 1);
+    on_scroll(-7.0, -40.0, 1);
     CHECK(g_doc.scroll_col == 0, "vertical swipe with a little sideways drift: no sideways scrolling");
-    on_scroll(-24.0, -3.0);
+    on_scroll(-24.0, -3.0, 1);
     CHECK(g_doc.scroll_col == 3, "mostly sideways: sideways only (%ld)", g_doc.scroll_col);
 
     /* Umschalten: dieselbe Zeile bleibt oben */
@@ -567,8 +567,18 @@ static void test_nowrap_review(void) {
     g_doc.scroll_row = 5;
     g_doc.scroll_col = 0;
     g_doc.scroll_accum = g_doc.hscroll_accum = 0.0;
-    on_scroll(-80.0, -30.0);
+    on_scroll(-80.0, -30.0, 1);
     CHECK(g_doc.scroll_col == 10 && g_doc.scroll_row == 5, "sideways swipe with vertical drift: rows stay (%ld)", g_doc.scroll_row);
+    /* Mausrad mit Rasten (Zeilen statt Punkte): eine Raste = eine Zeile/Spalte */
+    on_scroll(0.0, -1.0, 0);
+    CHECK(g_doc.scroll_row == 6, "wheel notch down: one row (%ld)", g_doc.scroll_row);
+    on_scroll(0.0, 3.0, 0);
+    CHECK(g_doc.scroll_row == 3, "three notches up: three rows (%ld)", g_doc.scroll_row);
+    on_scroll(-2.0, 0.0, 0);
+    CHECK(g_doc.scroll_col == 12, "shift+wheel two notches: two columns (%ld)", g_doc.scroll_col);
+    on_scroll(0.0, -1.0, 1);
+    CHECK(g_doc.scroll_row == 3, "trackpad: one point is not a row");
+    g_doc.scroll_row = 5;
     /* Markieren nach unten in den Scrollbalken-Streifen: Autoscroll */
     g_doc.scroll_col = 0;
     mouse(BTN_MOUSE_DOWN, col_x(1), row_y(0));

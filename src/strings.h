@@ -54,6 +54,8 @@ typedef enum {
      * BTN_STR_SAVE_PROMPT_TITLE_FMT. Wird sowohl von der Live-Suche beim
      * Tippen als auch von Return-gesteuerter Navigation gezeigt. */
     BTN_STR_FIND_COUNT_FMT,
+    BTN_STR_FIND_COUNT_MANY_FMT, /* gekappte Trefferliste: "Treffer 3 von 5000+" */
+    BTN_STR_FIND_BEYOND_FMT,     /* Treffer hinter dem Deckel */
     BTN_STR_HELP_MENU,
     BTN_STR_HELP_SHORTCUTS,
     BTN_STR_HELP_TITLE,

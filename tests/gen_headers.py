@@ -38,7 +38,7 @@ HEADERS = {
         "#BTN_MAX_SEARCH_MATCHES", "#BTN_LIVE_SEARCH_MAX_DOC_LEN", "pick_current_match", "pick_match_for_navigation",
         "next_tab_index", "set_match_count_status", "tab_counts_check_key",
         "doc_match_count", "searchable_other_tab", "append_all_tabs_status",
-        "next_tab_with_match", "perform_live_search", "perform_find", "selection_is_current_match",
+        "next_tab_with_match", "perform_live_search", "navigate_match", "perform_find", "selection_is_current_match",
         "perform_replace_current", "replace_all_in_editor", "perform_replace_all"]),
     "doc_extracted.h": ("main.c", ["include:encoding.h", "typedef:Document", "doc_has_edits", "doc_is_dirty", "mark_doc_saved"]),
     "focus_extracted.h": ("main.c", ["typedef:BtnFocus"]),
